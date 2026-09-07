@@ -54,6 +54,9 @@ Status: implemented
 
 - **纪律**：宿主升代后必须跑一次本脚本（先 pnpm build 仓库），不能只
   `dsh plugin install`——后者保留 α2 锁定分辨率并重新物化影子拷贝。
+  Windows 本机宿主在仓库 `.local` 时走
+  `scripts/refresh-trading-web-profile.ps1`（junction 到 `.local/node_modules/@deepseek-ai`，
+  与 sh 的 `/opt/homebrew/...` symlink 同语义）。
 - 排错教训：「reading 'prepare'」这类消息先看属性名是字面量还是 Symbol——
   Symbol 键的 undefined 读取报的是 Symbol 描述，据此可区分「实例缺字段」
   与「实例本身缺失」。对照实验（纯血 profile）早做，比静态读码快。

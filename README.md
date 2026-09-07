@@ -108,6 +108,8 @@ dsh --profile trading-web
 
 Open the printed URL: watchlist left, chart center, your agent right. New conversation → pick a market preset → first ask it what it sees.
 
+On Windows, starting from this repo (`.local` host, port 3081, token URL, `prepare` crashes) is documented in [docs/windows-local-dev.md](docs/windows-local-dev.md); double-click `start-trading-web.bat` at the repo root.
+
 ## The architecture at a glance
 
 A layered [Cordis](https://github.com/cordisjs) microkernel ecosystem where markets compose instead of collide:
