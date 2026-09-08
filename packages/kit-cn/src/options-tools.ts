@@ -235,7 +235,8 @@ export function createGetOptionVolAnalyticsTool(options: OptionToolOptions = {})
     description:
       'Multi-month IV surface analytics for a China ETF option underlying: term structure, skew, realized vol (HV), '
       + 'IV percentile, smile, Raw SVI fit, and butterflies, plus underlying daily stats. '
-      + 'akshare serves SSE; SZSE needs source=iquant; synth is deterministic offline. Read-only; not investment advice.',
+      + 'akshare serves SSE; SZSE needs source=iquant (live option books are SHO/SZO, not SH/SZ); '
+      + 'synth is deterministic offline. Read-only; not investment advice.',
     parameters: {
       underlying: {
         type: 'string',

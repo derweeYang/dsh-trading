@@ -1,4 +1,4 @@
-# Remount trading-web profile @deepseek-ai core packages onto the local DSH host tree.
+﻿# Remount trading-web profile @deepseek-ai core packages onto the local DSH host tree.
 # Same purpose as refresh-trading-web-profile.sh: one module instance so
 # TOOL_RUNTIME_SCHEDULER (a module-level Symbol) matches across agent-loop and tools.
 #
@@ -14,7 +14,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $profileRoot = Join-Path $env:USERPROFILE '.dsh\profiles\trading-web'
 if (-not $HostRoot) {
-  $HostRoot = Join-Path $PSScriptRoot '..\.local\node_modules\@deepseek-ai' | Resolve-Path
+  $candidate = Join-Path $PSScriptRoot '..\.local\node_modules\@deepseek-ai'
+  if (-not (Test-Path -LiteralPath $candidate)) {
+    throw "Host package root not found: $candidate. Install @deepseek-ai/dsh@0.1.2-rc.1 into repo .local first."
+  }
+  $HostRoot = (Resolve-Path -LiteralPath $candidate).Path
 }
 
 $corePkgs = @(
@@ -85,7 +89,15 @@ if (Test-Path -LiteralPath $profileAi) {
   }
 }
 
-$packagesRoot = Join-Path $PSScriptRoot '..\packages'
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$repoAi = Join-Path $repoRoot 'node_modules\@deepseek-ai'
+if (Test-Path -LiteralPath $repoAi) {
+  foreach ($shadow in @(Get-ChildItem -LiteralPath $repoAi -Directory -ErrorAction SilentlyContinue)) {
+    Link-HostPackage $shadow $HostRoot $corePkgs
+  }
+}
+
+$packagesRoot = Join-Path $repoRoot 'packages'
 if (Test-Path -LiteralPath $packagesRoot) {
   foreach ($pkgDir in @(Get-ChildItem -LiteralPath $packagesRoot -Directory -ErrorAction SilentlyContinue)) {
     foreach ($rel in @('node_modules\@deepseek-ai', 'lib\node_modules\@deepseek-ai')) {

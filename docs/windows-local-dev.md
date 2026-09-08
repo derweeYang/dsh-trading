@@ -8,8 +8,8 @@
 
 1. 仓库已 `pnpm install` 且 `pnpm build`。
 2. 宿主在仓库 `.local`（`@deepseek-ai/dsh@0.1.2-rc.1`），不要依赖全局 `dsh`。
-3. 双击仓库根目录 `start-trading-web.bat`（或 `start-trading-web.bat 3082` 换端口）。
-4. 等黑窗口出现 `dsh web: http://127.0.0.1:3081/?token=...`，脚本会打开这条地址。窗口不要关。
+3. 双击仓库根目录 `start-trading-web.bat`（或 `start-trading-web.bat 3082` 换端口）。窗口先打一段校对：宿主路径、`:3081` / `:5810` / `:8090` 是否在听、iQuant DLL 是否存在。缺 DLL 或宿主会标 `MISSING`。然后另开窗口起 iQuant 行情（`:5810` 已在听则跳过）。T 板 / IV 仍要另双击 `start-options-gateway.bat`（`:8090`）。
+4. 等黑窗口出现 `dsh web: http://127.0.0.1:3081/?token=...`，脚本会打开这条地址。宿主窗口和行情窗口都不要关。
 
 默认端口 **3081**（本机 3080 常被另一套 `deepseek-harness` 占用）。
 
@@ -44,6 +44,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\refresh-trading-web-
 - **现象**：`npm install -g @deepseek-ai/dsh@0.1.2-rc.1` 失败或被策略拦截。
 - **处理**：宿主装在仓库 `.local`。bat / 刷新脚本都走这条路径。
 
+### 4b. `.local` 被掏空
+
+- **现象**：校对里宿主 `MISSING`，或 `.local` 目录在但没有 `node_modules\.bin\dsh.cmd`。
+- **原因**：对 `worktrees/**` 或含 junction 的树执行 `Remove-Item -Recurse`（PowerShell 5.1 跟随链接删目标）。2026-09-08 清 `refactor-cn-focus` worktree 时发生过。
+- **处理**：不要再递归删。重装宿主后刷新 profile：
+
+```powershell
+npm install --prefix .local --no-fund --no-audit
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\refresh-trading-web-profile.ps1
+.\start-trading-web.bat
+```
+
+卸 worktree 只用 `git worktree remove` + `git worktree prune`。见 [protected-trees note](../.agents/notes/implemented/bug-fix/2026-09-08-windows-worktree-recurse-wipe-local.md)。
+
 ### 5. Cursor 报 `insufficient tool messages following tool_calls`
 
 - **现象**：对话整轮失败，与交易代码无关。
@@ -53,21 +67,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\refresh-trading-web-
 ## 日常命令
 
 ```powershell
-# 启动（默认 3081，会释放旧进程并打开 token URL）
+# 启动（默认 3081，会另开 iQuant :5810、释放旧宿主进程并打开 token URL）
 .\start-trading-web.bat
+
+# 只起重行情 / 只起重宿主
+.\start-iquant-quote.bat
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-trading-web.ps1 -SkipIquant
 
 # 只重挂宿主核心包（工具 prepare 崩溃后）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\refresh-trading-web-profile.ps1
 
-# ETF 期权网关（T 板链/IV 需要；名册 / 到期月不依赖它）
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-options-gateway.ps1
+# ETF 期权分析网关（T 板链/IV 需要；名册 / 到期月不依赖它）
+.\start-options-gateway.bat
 ```
 
 `trading-web` 若仍挂 npm 上的 `@dshtrading/cn@^0.1.4`，本地 `connector-options`
 不会进 profile。只 junction `api` / `cn` 也不够：profile 里会留下 0.1.4 连接器
 实拷，和仓库 0.1.5 各 apply 一次，boot 报
 `service "tradingCnMarketData" has been registered at <Include>`（各市场同症，
-与 issue #81 同族）。把本仓全部 `@dshtrading/*` junction 进 profile（会先停
+与 issue #81 同族）。另一条同文案：六家 CN dataplane 在 `tradingMarketDataRegistry`
+尚未 provide 时走无注册表回退，抢占 Include 根键；dataplane 现已 `inject` 注册表，
+根键占用则跳过。`.dsh-module-fallback` 若仍指向 `packages/*/node_modules/@dshtrading`
+嵌套拷，启动脚本会先 relink。把本仓全部 `@dshtrading/*` junction 进 profile（会先停
 3081，**不**跑 `dsh plugin install`），再把 `cordis` 等宿主核心包挂到 `.local`：
 
 ```powershell

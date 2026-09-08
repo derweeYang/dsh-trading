@@ -2,7 +2,8 @@
 #
 # SSE:akshare option_finance_board(上交所官方接口),快照时间按 Asia/Shanghai 解析。
 # SZSE:akshare 无行情面(quotesSource=szse_static_only)→ 显式 NO_DATA,不编造。
-# iquant:经 dsh-iquant-quote option_chain;本层永远传 source=synth。
+# iquant:经 dsh-iquant-quote option_chain。默认 source=synth;live 时合约市场是
+# SHO/SZO(不是 SH/SZ)。2026-09-08:SH 订 100xxxxx 空;SHO 名单 12416、日 K 通。
 # synth:合成链的末行截面,snapshotAt 为合成窗口末日(证明管线,不证明市场事实)。
 
 from datetime import datetime
@@ -109,7 +110,7 @@ def _chain_iquant(request: dict[str, Any], underlying: str, month: str) -> dict[
     raw = iquant.run_quote(
         "option_chain",
         {
-            "market": iquant.market_of(row),
+            "market": iquant.option_market_of(row),
             "underlying": underlying,
             "expiryMonth": month,
         },

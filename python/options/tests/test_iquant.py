@@ -110,7 +110,7 @@ def test_chain_iquant_serves_sse_and_szse(monkeypatch):
     assert szse["source"] == "iquant"
     assert szse["puts"][0]["code"] == "159915P2609M02450"
     assert all(body["source"] == "synth" for _, body in calls)
-    assert {body["market"] for _, body in calls} == {"SH", "SZ"}
+    assert {body["market"] for _, body in calls} == {"SHO", "SZO"}
 
 
 def test_contracts_iquant_writes_cache(tmp_path, monkeypatch):
@@ -141,7 +141,7 @@ def test_fetch_daily_iquant_maps_history_bars(tmp_path, monkeypatch):
     assert body["source"] == "synth"
     assert body["symbol"] == "510050C2609M02850"
     assert body["period"] == "1d"
-    assert body["market"] == "SH"
+    assert body["market"] == "SHO"
 
 
 def test_underlying_daily_iquant_uses_the_iquant_namespace(tmp_path, monkeypatch):

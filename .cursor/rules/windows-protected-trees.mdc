@@ -1,0 +1,32 @@
+---
+description: Do not recursively delete junctions or protected local trees (.local, packages, profiles).
+alwaysApply: true
+---
+
+# Protected trees (Windows)
+
+2026-09-08：用 `Remove-Item -Recurse` 清 `worktrees/refactor-cn-focus` 时，PowerShell 5.1 **跟着 junction 删了目标**，仓库根 `.local`（钉死的 `@deepseek-ai/dsh@0.1.2-rc.1`）被掏空，`start-trading-web.bat` 找不到宿主。
+
+## Never delete / recurse-wipe
+
+- `.local/` — 本机 DSH 宿主，gitignore，重建成本高
+- `packages/**` 源树（含 junction 指向的 workspace 包）
+- `%USERPROFILE%\.dsh\profiles\trading-web` 整棵 profile（只允许脚本里的定点 junction）
+- 任意 `worktrees/**` 目录用资源管理器式递归删除
+
+## How to remove a worktree / junction
+
+1. `git worktree remove <path>`（必要时 `--force`），然后 `git worktree prune`
+2. 删 **reparse point 本身**：`[System.IO.Directory]::Delete($path)`（只掉链接）
+3. 禁止 `Remove-Item -Recurse` / `rm -rf` 扫可能含 junction 的树
+4. 删分支：worktree 卸掉后再 `git branch -d`
+
+恢复宿主（仅当 `.local\node_modules\.bin\dsh.cmd` 消失）：
+
+```powershell
+npm install --prefix .local --no-fund --no-audit
+```
+
+`.local/package.json` 钉 `@deepseek-ai/dsh@0.1.2-rc.1`。不要 `npm install -g`。
+
+详见 [.agents/notes/implemented/bug-fix/2026-09-08-windows-worktree-recurse-wipe-local.md](../../.agents/notes/implemented/bug-fix/2026-09-08-windows-worktree-recurse-wipe-local.md)。

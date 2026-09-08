@@ -11,21 +11,26 @@
  *
  * 接线：市场 bundle 的 cordis.patch.yml insert 本入口行（enabled: true 等行 config
  * 必须 restate——整行替换语义），见 docs/connector-playbook.md §4。
+ * inject 注册表：与 router 同 Include 时先等注册表，避免多家回退抢根市场键。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { MarketDataService } from '@dshtrading/api'
 import { __EXCHANGE__MarketDataService, TRADING_MARKET_DATA_KEY, type Config } from './index.js'
 
-export const inject: string[] = []
+export const inject = ['tradingMarketDataRegistry']
 
 /** 注册表服务的最小消费面（鸭式，不定死接口——连接器对 router 包保持零依赖）。 */
 interface MarketDataRegistryLike {
   register(market: string, provider: string, service: MarketDataService): () => void
 }
 
+function ctxGet(ctx: Context, key: string): unknown {
+  return (ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }).get?.(key, false)
+}
+
 /** 解析注册表服务；老部署（base/router 未升级）返回 undefined → 调用方回退直接 provide。 */
 function resolveMarketDataRegistry(ctx: Context): MarketDataRegistryLike | undefined {
-  const candidate = (ctx as unknown as { get?: (key: string, strict?: boolean) => unknown }).get?.('tradingMarketDataRegistry', false)
+  const candidate = ctxGet(ctx, 'tradingMarketDataRegistry')
   return candidate !== undefined ? (candidate as MarketDataRegistryLike) : undefined
 }
 
@@ -38,6 +43,7 @@ export function apply(ctx: Context, config: Config): void {
   if (!config.enabled) return
   const registry = resolveMarketDataRegistry(ctx)
   if (registry === undefined) {
+    if (ctxGet(ctx, TRADING_MARKET_DATA_KEY) !== undefined) return
     new __EXCHANGE__MarketDataService(ctx)
     return
   }

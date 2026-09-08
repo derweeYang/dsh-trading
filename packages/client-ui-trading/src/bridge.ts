@@ -1026,7 +1026,7 @@ export class TradingBridge {
     return {
       ok: true,
       overview: {
-        source: typed ?? 'akshare',
+        source: typed ?? 'iquant',
         sort,
         asOf: new Date().toISOString(),
         rows: sorted,

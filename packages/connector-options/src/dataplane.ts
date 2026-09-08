@@ -5,7 +5,7 @@ export const inject: string[] = []
 
 /**
  * Host 面数据行：在宿主 ctx 上 provide tradingCnOptions。
- * 不进 tradingMarketDataRegistry——CN 行情 provider（腾讯）没有期权链。
+ * 不进 tradingMarketDataRegistry——期权链走独立服务；CN 主行情是 iQuant。
  */
 export function apply(ctx: Context, config: Config): void {
   if (!config.enabled) return

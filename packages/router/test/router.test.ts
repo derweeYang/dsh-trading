@@ -35,8 +35,8 @@ import type { MarketDataService, NewsAggregator, TradeService } from '@dshtradin
 const ENTRY: ConfigType = { markets: { ...DEFAULT_MARKETS } }
 
 describe('dshtrading schema（用户设置一级）', () => {
-  it('默认值 = 现状零变化（cn=tencent）', () => {
-    expect(activeProviderOf(ENTRY, 'cn')).toBe('tencent')
+  it('默认值 = iQuant 主行情（cn=iquant）', () => {
+    expect(activeProviderOf(ENTRY, 'cn')).toBe('iquant')
   })
 
   it('dict 键开放：新市场（jp）不炸 schema（构造即验证，无 schema 报错）', () => {
@@ -44,17 +44,17 @@ describe('dshtrading schema（用户设置一级）', () => {
     expect(activeProviderOf(cfg, 'jp')).toBe('eastmoney')
   })
 
-  it('provider 候选集 = 全仓词汇（tencent/eastmoney/tushare/akshare/qmt/hithink）', () => {
+  it('provider 候选集 = 全仓词汇（tencent/eastmoney/tushare/akshare/iquant/hithink）', () => {
     expect([...PROVIDER_VOCABULARY].sort()).toEqual([
       'akshare',
       'eastmoney',
       'hithink',
-      'qmt',
+      'iquant',
       'tencent',
       'tushare',
     ].sort())
     expect(PROVIDER_VOCABULARY).toContain('tencent' as Provider)
-    expect(PROVIDER_VOCABULARY).toContain('qmt' as Provider)
+    expect(PROVIDER_VOCABULARY).toContain('iquant' as Provider)
     expect(PROVIDER_VOCABULARY).toContain('hithink' as Provider)
   })
 
@@ -95,22 +95,22 @@ describe('MarketDataRegistryService（tradingMarketDataRegistry，2026-08-30 注
 
   it('注册后按路由解析激活项；重复注册同 (market,provider) 不同实例抛错', () => {
     const { registry } = setup()
-    const tencent = fakeService('tencent')
+    const iquant = fakeService('iquant')
     const eastmoney = fakeService('eastmoney')
-    registry.register('cn', 'tencent', tencent)
+    registry.register('cn', 'iquant', iquant)
     registry.register('cn', 'eastmoney', eastmoney)
-    expect(registry.active('cn')?.service).toBe(tencent) // 默认路由 cn=tencent
-    expect(registry.list('cn').map((e) => e.provider).sort()).toEqual(['eastmoney', 'tencent'])
-    expect(() => registry.register('cn', 'tencent', fakeService('tencent-2'))).toThrow(/duplicate market data registration/)
+    expect(registry.active('cn')?.service).toBe(iquant) // 默认路由 cn=iquant
+    expect(registry.list('cn').map((e) => e.provider).sort()).toEqual(['eastmoney', 'iquant'])
+    expect(() => registry.register('cn', 'iquant', fakeService('iquant-2'))).toThrow(/duplicate market data registration/)
   })
 
   it('热切换语义：setSource 换 provider 后 active() 立即解析到新服务（无 watch 无重启）', () => {
     const { registry, setSource } = setup()
-    const tencent = fakeService('tencent')
+    const iquant = fakeService('iquant')
     const eastmoney = fakeService('eastmoney')
-    registry.register('cn', 'tencent', tencent)
+    registry.register('cn', 'iquant', iquant)
     registry.register('cn', 'eastmoney', eastmoney)
-    expect(registry.active('cn')?.service).toBe(tencent)
+    expect(registry.active('cn')?.service).toBe(iquant)
     setSource({ markets: { ...DEFAULT_MARKETS, cn: { provider: 'eastmoney' } } })
     expect(registry.active('cn')?.service).toBe(eastmoney)
     expect(registry.active('cn')?.provider).toBe('eastmoney')
@@ -118,13 +118,13 @@ describe('MarketDataRegistryService（tradingMarketDataRegistry，2026-08-30 注
 
   it('选中了但未注册 → undefined（不静默降级到别家）；注销函数生效', () => {
     const { registry, setSource } = setup()
-    const tencent = fakeService('tencent')
-    const unregister = registry.register('cn', 'tencent', tencent)
+    const iquant = fakeService('iquant')
+    const unregister = registry.register('cn', 'iquant', iquant)
     setSource({ markets: { ...DEFAULT_MARKETS, cn: { provider: 'eastmoney' } } })
-    expect(registry.active('cn')).toBeUndefined() // eastmoney 未注册，不回落 tencent
+    expect(registry.active('cn')).toBeUndefined() // eastmoney 未注册，不回落 iquant
     unregister()
     setSource({ markets: { ...DEFAULT_MARKETS } })
-    expect(registry.active('cn')).toBeUndefined() // tencent 已注销
+    expect(registry.active('cn')).toBeUndefined() // iquant 已注销
   })
 
   it('router 无该市场路由：恰好一个注册项 → 零配置可用；多个 → undefined', () => {
@@ -158,13 +158,13 @@ describe('TradeRegistryService（tradingTradeRegistry，2026-09-04 补齐 provid
 
   it('按路由解析激活交易服务；重复注册同 (market,provider) 不同实例抛错', () => {
     const { registry } = setup()
-    const tencent = fakeTrade('tencent')
+    const iquant = fakeTrade('iquant')
     const eastmoney = fakeTrade('eastmoney')
-    registry.register('cn', 'tencent', tencent)
+    registry.register('cn', 'iquant', iquant)
     registry.register('cn', 'eastmoney', eastmoney)
-    expect(registry.active('cn')?.service).toBe(tencent)
-    expect(registry.list('cn').map((e) => e.provider).sort()).toEqual(['eastmoney', 'tencent'])
-    expect(() => registry.register('cn', 'tencent', fakeTrade('tencent-2'))).toThrow(/duplicate trade registration/)
+    expect(registry.active('cn')?.service).toBe(iquant)
+    expect(registry.list('cn').map((e) => e.provider).sort()).toEqual(['eastmoney', 'iquant'])
+    expect(() => registry.register('cn', 'iquant', fakeTrade('iquant-2'))).toThrow(/duplicate trade registration/)
   })
 
   it('tradeProvider 显式设置时优先于数据面 provider（数据/交易分离预留语义）', () => {
@@ -216,7 +216,7 @@ describe('apply 的 installSettingsSection 接线', () => {
 describe('MarketRouterService（tradingMarketRouter）', () => {
   it('activeProvider 读源（默认 entry）；setSource 后读新源（settings resolved）', () => {
     const svc = new MarketRouterService(new CordisContext() as never, () => ENTRY)
-    expect(svc.activeProvider('cn')).toBe('tencent')
+    expect(svc.activeProvider('cn')).toBe('iquant')
     const resolved: ConfigType = { markets: { ...DEFAULT_MARKETS, cn: { provider: 'eastmoney' } } }
     svc.setSource(() => resolved)
     expect(svc.activeProvider('cn')).toBe('eastmoney')
@@ -228,16 +228,16 @@ describe('MarketRouterService（tradingMarketRouter）', () => {
     const events: Array<[string | undefined, string | undefined]> = []
     const dispose = svc.watch((next, prev) => events.push([next, prev]))
     svc.notify()
-    // 首次 diff：cn 市场 undefined→默认值（tencent）。
-    expect(events.filter(([next]) => next === 'tencent')).toHaveLength(1)
-    const cnFirst = events.find(([, prev]) => prev === undefined && events[0]?.[0] === 'tencent')
-    expect(cnFirst).toEqual(['tencent', undefined])
+    // 首次 diff：cn 市场 undefined→默认值（iquant）。
+    expect(events.filter(([next]) => next === 'iquant')).toHaveLength(1)
+    const cnFirst = events.find(([, prev]) => prev === undefined && events[0]?.[0] === 'iquant')
+    expect(cnFirst).toEqual(['iquant', undefined])
     events.length = 0
     svc.notify()
     expect(events).toHaveLength(0) // 未变不通知
     source = { markets: { ...DEFAULT_MARKETS, cn: { provider: 'eastmoney' } } }
     svc.notify()
-    expect(events).toContainEqual(['eastmoney', 'tencent'])
+    expect(events).toContainEqual(['eastmoney', 'iquant'])
     dispose()
     source = { markets: { ...DEFAULT_MARKETS, cn: { provider: 'tencent' } } }
     svc.notify()

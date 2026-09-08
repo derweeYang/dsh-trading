@@ -239,7 +239,7 @@ describe('TradingBridge.trade/*（issue #40 交易台：只读 + 强制 dry-run�
   function tradeHost(service: import('@dshtrading/api').TradeService | undefined): BridgeHost {
     return {
       getMarketService: market => market === 'cn' ? fakeService() : undefined,
-      activeProvider: () => 'qmt',
+      activeProvider: () => 'iquant',
       getTradeService: market => market === 'cn' ? service : undefined,
     }
   }

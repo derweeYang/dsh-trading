@@ -97,7 +97,7 @@ market-status HK 指数/交易时段、MarketSidebar 补零 `.HK`、QuoteStage i
 - dry-run 模式：不报 QMT，返回构造回执；paper 撮合由 client 侧 paper-trading-store 扩展（workbuddy 半，契约我出）
 
 ### 3.3 内核能力上桥（python/options + kit-cn）
-- `OptionSource` 加 `'iquant'`（解深市 NO_DATA；python iquant.py 已有，注册表 510050/159915）
+- `OptionSource` 加 `'iquant'`（解深市 NO_DATA；python iquant.py 已有，注册表 510050/159915）。2026-09-08 live：期权市场 token 是 `SHO`/`SZO`，不是 `SH`/`SZ`。
 - 网关 `vol_analytics`、`fetch_underlying_daily`、`price`、`parity_check` 上桥 → kit-cn 新 agent 工具（`cn_get_option_vol_analytics` 等，只读声明）
 - TS/Python 两份静态名册（rest.ts STATIC_ROWS 与 python data/underlyings.json）加同步校验测试
 

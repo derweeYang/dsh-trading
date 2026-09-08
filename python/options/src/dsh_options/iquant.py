@@ -2,11 +2,18 @@
 #
 # SDK 接触只在 iquant-quote。options 只认 stdout JSON,并把 UNSUPPORTED 收成
 # NO_DATA(期权协议没有 UNSUPPORTED 码)。测试替换 call_quote。
+#
+# 市场 token(2026-09-08 live):标的现货 SH/SZ;期权合约必须 SHO/SZO。
+# EXCHANGE_MARKET 现仍映射到 SH/SZ(现货 snapshot / 旧 synth 路径)。
+# live 合约订阅不得复用该表,否则短码会订到股票市场而空。
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import urllib.error
+import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -20,7 +27,9 @@ DAY_MS = 86_400_000
 #: 与 iquant-quote synth 锚点一致,缺省日线窗口从这里起算。
 DEFAULT_BARS_START_MS = 1_704_159_060_000
 DEFAULT_BARS_LIMIT = 2000
+# 标的现货。期权合约 live 须 SHO/SZO,不得复用本表。
 EXCHANGE_MARKET = {"SSE": "SH", "SZSE": "SZ"}
+OPTION_EXCHANGE_MARKET = {"SSE": "SHO", "SZSE": "SZO"}
 
 
 class QuoteReplyError(Exception):
@@ -33,9 +42,17 @@ class QuoteReplyError(Exception):
 
 
 def market_of(row: dict[str, Any]) -> str:
-    """注册表交易所 → iquant-quote 市场 token。"""
+    """注册表交易所 → 标的现货市场 token(SH/SZ)。合约 live 用 option_market_of。"""
     try:
         return EXCHANGE_MARKET[row["exchange"]]
+    except KeyError as err:
+        raise OptionsError("INTERNAL", f"iquant registry exchange {row['exchange']!r}") from err
+
+
+def option_market_of(row: dict[str, Any]) -> str:
+    """注册表交易所 → 期权合约市场 token(SHO/SZO)。"""
+    try:
+        return OPTION_EXCHANGE_MARKET[row["exchange"]]
     except KeyError as err:
         raise OptionsError("INTERNAL", f"iquant registry exchange {row['exchange']!r}") from err
 
@@ -97,9 +114,42 @@ def run_quote(subcommand: str, body: dict[str, Any], request: dict[str, Any] | N
         raise OptionsError("NO_DATA", f"iquant-quote cannot serve this: {err}") from err
 
 
+def _http_quote(subcommand: str, body: dict[str, Any]) -> dict[str, Any]:
+    base = os.environ.get("IQUANT_QUOTE_GATEWAY_URL", "http://127.0.0.1:5810").rstrip("/")
+    payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base}/v1/{subcommand}",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            response = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        raw = err.read().decode("utf-8") if err.fp is not None else ""
+        try:
+            response = json.loads(raw)
+        except json.JSONDecodeError as decode_err:
+            raise OptionsError("NETWORK", f"iquant-quote HTTP {err.code}") from decode_err
+    except OSError as err:
+        raise OptionsError("NETWORK", f"iquant-quote gateway unreachable: {err}") from err
+    if not isinstance(response, dict) or "ok" not in response:
+        raise OptionsError("NO_DATA", "iquant-quote cannot serve this: response is not {ok, ...}")
+    if response.get("ok") is True:
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise OptionsError("INTERNAL", "iquant-quote result is not an object")
+        return result
+    error = response.get("error") or {}
+    raise QuoteReplyError(str(error.get("code") or "INTERNAL"), str(error.get("message") or "iquant-quote failed"))
+
+
 def call_quote(subcommand: str, body: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
-    """默认 spawn ``iquantArgvPrefix + subcommand``;测试替换本函数。"""
+    """有 ``iquantArgvPrefix`` 则 spawn CLI；否则 POST 本地 iquant-quote 网关。"""
     prefix = request.get("iquantArgvPrefix")
+    if prefix is None:
+        return _http_quote(subcommand, body)
     if not isinstance(prefix, list) or not prefix or not all(isinstance(item, str) for item in prefix):
         raise OptionsError("BAD_REQUEST", "iquant source requires iquantArgvPrefix")
     try:

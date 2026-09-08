@@ -13,14 +13,8 @@
 | **同花顺/问财平台 (`hithink`)** | 问财开放数据服务 | `HITHINK_FINANCE_API_KEY` | [fuyao.aicubes.cn](https://fuyao.aicubes.cn/) | REST API，支持估值快照（PE/PB/PS）、早盘集合竞价强弱、涨跌停池连板数据（龙虎榜契约类型已预留，取数规划中）；需配置 Token |
 | **Tushare Pro (`tushare`)** | 商业/量化社区 | `TUSHARE_TOKEN` | [tushare.pro/register](https://tushare.pro/register) | 免费注册送积分，可获取 PE/PB 估值指标与分钟线 |
 | **AkShare (`akshare`)** | 开源量化/宏观数据 | 免密 / `AKSHARE_API_URL` | [akshare.xyz](https://akshare.xyz) | 支持行业板块资金流排行与宏观指标（注：交易所自 2024-08 已停发实时北向资金，北向接口已下线；纯数据源，无交易通道） |
-| **迅投 MiniQMT (`qmt`)** | 券商实盘网关 | `QMT_GATEWAY_URL` (默认 `http://127.0.0.1:5800`)<br>`QMT_ACCOUNT_ID` | 联系开户券商申请 (如国金/华泰/中信/银河) | 需在本机运行券商提供的 MiniQMT 客户端与本地 RPC/HTTP 网关桥（见下方契约说明）；支持真实可用资金查询、股票委托申报与撤单 |
+| **国信 iQuant (`iquant`)** | **CN 默认只行情** | 本地 DLL + 网关 `http://127.0.0.1:5810`（`IQUANT_SDK_ROOT` / `IQUANT_API_DLL` / `IQUANT_QMTQUOTE_DLL` / `IQUANT_QUOTE_CONFIG`）；Windows 双击 `start-iquant-quote.bat` | 本机安装国信 iQuant 策略交易平台 | 现货 `SH`/`SZ`；**期权合约 `SHO`/`SZO`**。无交易。失败不回落腾讯。MiniQMT 已从本仓删除。 |
 
-> **MiniQMT 本地网关桥契约说明**：
-> 由于 MiniQMT 官方仅提供 Python `xtquant` SDK，连接器通过本地 HTTP 桥通信。桥服务需实现以下标准契约：
-> - `GET /api/v1/trade/asset?account_id={id}`: 返回 `{ code: 0, data: { cash, total_asset, frozen_cash, currency } }`
-> - `POST /api/v1/trade/order`: 接收 `{ account_id, stock_code, order_type, order_side, price, order_volume }`，返回 `{ code: 0, data: { order_id } }`
-> - `POST /api/v1/trade/cancel`: 接收 `{ account_id, order_id }`，返回 `{ code: 0 }`
-> - `GET /api/v1/trade/positions?account_id={id}`: 返回 `{ code: 0, data: [{ stock_code, volume, can_use_volume, open_price }] }`
 
 ---
 

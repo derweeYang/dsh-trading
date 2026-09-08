@@ -1,4 +1,4 @@
-# Junction this repo's @dshtrading packages into trading-web.
+﻿# Junction this repo's @dshtrading packages into trading-web.
 # Does not run `dsh plugin install` (that rematerializes @deepseek-ai shadows).
 # Stops the process on -Port first. Restart with start-trading-web.bat afterwards.
 #
@@ -63,6 +63,21 @@ $pkgs = @(Get-ChildItem -LiteralPath $packagesRoot -Directory |
   ForEach-Object { $_.Name })
 if ($pkgs.Count -eq 0) { throw "No workspace packages under $packagesRoot" }
 
+function Test-IsMarketBundle([string]$Dir) {
+  $pj = Join-Path $Dir 'package.json'
+  if (-not (Test-Path -LiteralPath $pj)) { return $false }
+  $raw = [System.IO.File]::ReadAllText($pj).TrimStart([char]0xFEFF)
+  return [bool]($raw -match '"bundle"\s*:\s*\{')
+}
+
+$marketPkgs = @($pkgs | Where-Object { Test-IsMarketBundle (Join-Path $packagesRoot $_) })
+$orderedMarkets = @()
+foreach ($name in @('base', 'cn')) {
+  if ($marketPkgs -contains $name) { $orderedMarkets += $name }
+}
+$orderedMarkets += @($marketPkgs | Where-Object { $_ -notin @('base', 'cn') } | Sort-Object)
+if ($orderedMarkets.Count -eq 0) { throw "No dsh.bundle packages under $packagesRoot" }
+
 Write-Host "== Stop trading-web on port $Port =="
 Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
   ForEach-Object {
@@ -83,26 +98,58 @@ foreach ($pkg in $pkgs) {
   Write-Host "  $pkg ($status)"
 }
 
+Write-Host "== Drop stale @dshtrading junctions =="
+Get-ChildItem -LiteralPath $mainRoot -Force -ErrorAction SilentlyContinue | ForEach-Object {
+  if ($pkgs -contains $_.Name) { return }
+  Write-Host ("  remove {0}" -f $_.Name)
+  Remove-LinkOrDirectory $_.FullName
+}
+
 if (Test-Path (Split-Path -Parent $fallbackRoot)) {
   New-Item -ItemType Directory -Force -Path $fallbackRoot | Out-Null
   Write-Host "== Retarget fallback @dshtrading to the same copies =="
-  $fallbackNames = @(Get-ChildItem -LiteralPath $fallbackRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
-  $names = @($pkgs + $fallbackNames | Select-Object -Unique)
-  foreach ($pkg in $names) {
+  foreach ($pkg in $pkgs) {
     $src = Join-Path $mainRoot $pkg
     if (-not (Test-Path -LiteralPath $src)) { continue }
     $dest = Join-Path $fallbackRoot $pkg
     $status = Set-Junction -Dest $dest -Src $src
     Write-Host "  $pkg ($status)"
   }
+  Get-ChildItem -LiteralPath $fallbackRoot -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($pkgs -contains $_.Name) { return }
+    Write-Host ("  remove fallback {0}" -f $_.Name)
+    Remove-LinkOrDirectory $_.FullName
+  }
 }
 
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $pkgJsonPath = Join-Path $profileRoot 'package.json'
-$cnFile = ('file:{0}' -f ((Join-Path $packagesRoot 'cn') -replace '\\', '/'))
-$pkgRaw = [System.IO.File]::ReadAllText($pkgJsonPath).TrimStart([char]0xFEFF)
-$pkgRaw = $pkgRaw -replace '"@dshtrading/cn"\s*:\s*"[^"]+"', ('"@dshtrading/cn": "{0}"' -f $cnFile)
-[System.IO.File]::WriteAllText($pkgJsonPath, $pkgRaw.TrimEnd() + "`n", $utf8)
+$depLines = @($orderedMarkets | ForEach-Object {
+  $file = ((Join-Path $packagesRoot $_) -replace '\\', '/')
+  '    "@dshtrading/{0}": "file:{1}"' -f $_, $file
+})
+$bundleNames = @('@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app') + @($orderedMarkets | ForEach-Object { "@dshtrading/$_" })
+$bundleLines = @($bundleNames | ForEach-Object { '        "{0}"' -f $_ })
+$manifest = @(
+  '{',
+  '  "name": "dsh-profile-trading-web",',
+  '  "private": true,',
+  '  "dependencies": {',
+  ($depLines -join ",`n"),
+  '  },',
+  '  "dsh": {',
+  '    "profile": {',
+  '      "bundles": [',
+  ($bundleLines -join ",`n"),
+  '      ],',
+  '      "patchReload": "live"',
+  '    }',
+  '  }',
+  '}'
+) -join "`n"
+[System.IO.File]::WriteAllText($pkgJsonPath, $manifest.TrimEnd() + "`n", $utf8)
+Write-Host '== Profile bundles =='
+$bundleNames | ForEach-Object { Write-Host "  $_" }
 
 $wsPath = Join-Path $profileRoot 'pnpm-workspace.yaml'
 $ws = if (Test-Path $wsPath) {

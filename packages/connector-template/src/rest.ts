@@ -3,7 +3,7 @@
  *
  * 本文件保持「结构真实、通道特有逻辑留 TODO」：TradingServiceError 与通用的
  * fetch → JSON → 错误映射管线可以直接用；签名头、端点、字段解析、单位换算、
- * 错误码表是每个通道不同的，TODO 处参见完整参照实现 connector-qmt/src/rest.ts。
+ * 错误码表是每个通道不同的，TODO 处参见完整参照实现 connector-tencent/src/rest.ts。
  *
  * 填充检查清单（对照参照实现的对应段）：
  *   1. baseUrl（REST host；注意 demo 与实盘是否同一 host——同 host 靠头区分的
@@ -39,7 +39,7 @@ import type {
 /* 错误载体（api 包词汇的运行时映射）                                      */
 /* ------------------------------------------------------------------ */
 
-/** api 包 TradingError 契约的运行时 Error 实现（connector-qmt 同款，直接复用）。 */
+/** api 包 TradingError 契约的运行时 Error 实现（connector-tencent 同款，直接复用）。 */
 export class TradingServiceError extends Error {
   readonly code: TradingErrorCode
 
@@ -91,7 +91,7 @@ export class ExchangeRestClient {
 
   /**
    * 构造鉴权头。TODO: 按交易所签名规范实现（参照实现：
-   * connector-qmt/src/rest.ts buildAuthHeaders——prehash 拼接、HMAC、时间戳、模拟盘头）。
+   * connector-tencent/src/rest.ts buildAuthHeaders——prehash 拼接、HMAC、时间戳、模拟盘头）。
    * 返回空对象的默认实现只适用于无鉴权公共端点；实现后由 request 统一附加。
    */
   protected async authHeaders(
@@ -157,7 +157,7 @@ export class ExchangeRestClient {
   /* ---------- 端点（TODO: 填端点路径与字段解析） ---------- */
 
   async getTicker(symbol: string): Promise<Ticker> {
-    // TODO: GET /market/ticker 等；响应 → api Ticker 解析（参照 connector-qmt parseTicker）。
+    // TODO: GET /market/ticker 等；响应 → api Ticker 解析（参照 connector-tencent parseTicker）。
     const json = await this.request<JsonRecord>('GET', `/TODO/ticker/${encodeURIComponent(symbol)}`)
     return this.parseTicker(json)
   }
@@ -171,38 +171,38 @@ export class ExchangeRestClient {
 
   async placeOrder(_params: JsonRecord, _credentials: ExchangeCredentials): Promise<JsonRecord[]> {
     // TODO: POST /trade/order；单位换算（quantity 恒为 base 币数）在参数构造前完成。
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement placeOrder — see connector-qmt/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement placeOrder — see connector-tencent/src/rest.ts')
   }
 
   async cancelOrder(_symbol: string, _orderId: string, _credentials: ExchangeCredentials): Promise<JsonRecord[]> {
     // TODO: POST /trade/cancel-order（按所要求的定位键，可能是 symbol+id 双键）。
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement cancelOrder — see connector-qmt/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement cancelOrder — see connector-tencent/src/rest.ts')
   }
 
   async getOrder(_symbol: string, _orderId: string, _credentials: ExchangeCredentials): Promise<JsonRecord[]> {
     // TODO: GET /trade/order 查单（若按 (symbol, id) 双键定位，api 契约的
     //      cancelOrder(id) 单参形态不够时扩展第二可选参数——@dshtrading/api R3 先例）。
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getOrder — see connector-qmt/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getOrder — see connector-tencent/src/rest.ts')
   }
 
   async getBalance(_credentials: ExchangeCredentials): Promise<JsonRecord[]> {
     // TODO: GET 账户余额（账户结构差异大：按明细行归一为 AccountBalance[]）。
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getBalance — see connector-qmt/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getBalance — see connector-tencent/src/rest.ts')
   }
 
   async getPositions(_credentials: ExchangeCredentials): Promise<JsonRecord[]> {
     // TODO: GET 持仓（合约单位 → 币数换算）。
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getPositions — see connector-qmt/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getPositions — see connector-tencent/src/rest.ts')
   }
 
   /* ---------- 解析（TODO: 字段布局按交易所实现） ---------- */
 
   protected parseTicker(_json: JsonRecord): Ticker {
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement parseTicker — see connector-qmt/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement parseTicker — see connector-tencent/src/rest.ts')
   }
 
   protected parseKlines(_json: JsonRecord): Kline[] {
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement parseKlines — see connector-qmt/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement parseKlines — see connector-tencent/src/rest.ts')
   }
 }
 

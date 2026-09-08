@@ -17,7 +17,7 @@ from typing import Any
 #   multiplier    合约单位(合约乘数)
 #   tickSize      最小变动价位
 #   quotesSource  sse_board(可取 T 型行情) | szse_static_only(仅静态表,无行情)
-#                 | synth | iquant_board(经 dsh-iquant-quote,本层只传 synth)
+#                 | synth | iquant_board(经 dsh-iquant-quote;live 合约 SHO/SZO)
 _REGISTRY_PATH = "data/underlyings.json"
 
 

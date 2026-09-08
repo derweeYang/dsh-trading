@@ -25,7 +25,7 @@
   "packages/connector-eastmoney/tsconfig.json": 11,
   "packages/connector-hithink/tsconfig.json": 0,
   "packages/connector-options/tsconfig.json": 0,
-  "packages/connector-qmt/tsconfig.json": 17,
+  "packages/connector-iquant/tsconfig.json": 0,
   "packages/connector-template/tsconfig.json": 7,
   "packages/connector-tencent/tsconfig.json": 4,
   "packages/connector-tushare/tsconfig.json": 16,

@@ -51,3 +51,18 @@ describe('connector-tencent dataplane（注册表模式，2026-08-30 整改 #1�
     expect(cn.provided.tradingCnMarketData).toBeUndefined()
   })
 })
+
+describe('connector-tencent dataplane（无注册表时不二次 provide）', () => {
+  it('市场键已被占用 → 跳过，不覆盖', () => {
+    const existing = { keep: true }
+    const provided: Record<string, unknown> = { tradingCnMarketData: existing }
+    const ctx = {
+      get: (key: string) => (key === 'tradingCnMarketData' ? existing : undefined),
+      reflect: {
+        provide: (name: string, value: unknown) => { provided[name] = value },
+      },
+    } as unknown as Context
+    apply(ctx, { market: 'cn', dryRun: true, liveTrading: false })
+    expect(provided.tradingCnMarketData).toBe(existing)
+  })
+})

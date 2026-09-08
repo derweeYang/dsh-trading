@@ -67,6 +67,10 @@
    fetch 已在 `api.ts:118` 起）：在它之上加下单面板与 spot 高亮，不用重写。
 4. **双闸语义**：GUI 默认请求实盘（dryRun: false），闸门拒绝时
    `TRADING_LIVE_TRADING_DISABLED` 原文展示——不要在 UI 层伪造 dry-run 成功。
+5. **`source=iquant` 已是默认**：桥 JSON **仍出长代码**。国信行情簿是短码 + `SHO`/`SZO`。
+   CN 默认 provider 是 `iquant`（`:5810`）。设置里加「国信 iQuant」，**去掉 MiniQMT**。
+   期权 live 下单已删除，dry-run 预览仍可。
+6. **不要改** `packages/client-ui-*/src/client/**` 以外由后端已改的桥默认。
 
 ---
 

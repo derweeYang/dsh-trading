@@ -11,6 +11,12 @@ if (-not (Test-Path (Join-Path $dir 'pyproject.toml'))) {
   exit 1
 }
 
+$listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+foreach ($row in $listeners) {
+  Write-Host "Stopping PID $($row.OwningProcess) on port $Port"
+  Stop-Process -Id $row.OwningProcess -Force -ErrorAction SilentlyContinue
+}
+
 $env:DSH_OPTIONS_GATEWAY_PORT = [string]$Port
 Set-Location $dir
 Write-Host "Starting dsh-options gateway on 127.0.0.1:$Port. Keep this window open."

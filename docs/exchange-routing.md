@@ -70,7 +70,7 @@ crypto-trader preset（会话级，单预设）
 | 决策 | 内容 |
 |---|---|
 | **路由权威** | 连接器 `apply` 时：`enabled === false` → 静默关；否则读 `tradingMarketRouter.activeProvider(market)`，**路由值就是权威**——与自身 provider slug 不符即跳过（log 说明）。无 router（老部署未升级）→ 回退现有 enabled 语义（向后兼容） |
-| **provider slug** | = 连接器市场内唯一短名：binance / okx / yahoo / stooq / tencent。slug 与 pinng 命名无关，是路由层词汇 |
+| **provider slug** | = 连接器市场内唯一短名。CN 默认 `iquant`（国信只行情，现货 `SH`/`SZ`、期权 `SHO`/`SZO`）。腾讯/东财可手动切。MiniQMT `qmt` 已删除。 |
 | **默认值** | `base` 层（组合默认，非用户层）：crypto=binance、us=yahoo、cn/hk=tencent。用户文档未写时 = 默认数据面（现状行为零变化） |
 | **生效时机** | 会话面 `applies: 'restart'`——连接器 apply 只在挂载时跑，切交易所后**新建会话**生效（preset 挂载是会话级的，无需重启 dsh 进程；会话内数据源一致性是有意语义）。**GUI 数据面 = 即时生效**（2026-08-30 注册表模式：host 面连接器全部注册进 tradingMarketDataRegistry，行情桥每请求按路由当前值惰性解析，无 watch 无重启——见 `.agents/notes/implemented/architecture/2026-08-30-market-data-registry-hot-switch.md`）。**生效口径边界**（2026-08-30 实测）：即时生效经**设置 UI 官方写路径**实证闭环；settings-file 的手编 YAML 文件监听传播在该次实测中未观察到（chokidar 无 reload 迹象）——手编文件后按旧口径新建会话/重启兜底，升级宿主时按 upstream-upgrade-checklist §3 复查 |
 | **explicit 覆盖** | 用户文档显式写 provider（=用户层存在）即覆盖 base 默认；schema enum 校验非法值直接拒写 |
@@ -110,6 +110,7 @@ export const Config: Schema<Config> = Schema.object({
 |---|---|---|
 | 接 Bybit | ① 新连接器 slug=bybit 读 `activeProvider('crypto')==='bybit'`；② bundle deps 加包 + preset 加候选行 enabled:true；③（仅内置候选）设置 UI `PROVIDER_LABELS` 加显示行。**schema 不再需动**（2026-08-30 开放字符串） | 连接器自包含，路由零改 |
 | 接第二个 us 源 | schema us.provider enum 加候选（若 stooq 实证则已在内）；us 连接器（yahoo/stooq）各读自己的 slug | 同上 |
+| 接国信 iQuant 只行情 (`iquant`) | **已落地**：默认 `cn.provider=iquant`。MiniQMT 已删。期权合约订 `SHO`/`SZO`。 | 设置 UI 候选归 workbuddy |
 | 新市场（jp） | schema markets 加 `jp` 键（dict 零改）+ jp bundle/router 读 jp | api 增强 + preset |
 | 数据/交易分离（binance 行情 + okx 下单） | markets.crypto 加 `tradeProvider`；行情键 provider 照旧，交易服务遵守 tradeProvider | schema 加字段 + 连接器交易面读 tradeProvider；**字段预留但不提前实现**（铁律 #4：两个市场真实需要才做） |
 | 设置 UI 一级菜单 | 新界面体系落地后，按其客户端形态注册 settings 面板；**namespace/schema 已就位，UI 只是消费端** | 纯 UI 增量 |

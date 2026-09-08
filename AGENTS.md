@@ -5,6 +5,7 @@ DSH 交易插件包 monorepo：按市场组织 bundle（crypto/us/cn/hk），主
 ## Instruction Layers
 
 - 架构与铁律：[README.md](README.md)（目标结构、五条设计铁律、关键架构定稿、数据源 ToS 表）
+- Windows 受保护树：[.cursor/rules/windows-protected-trees.mdc](.cursor/rules/windows-protected-trees.mdc)（禁止递归删 `.local` / junction）
 - 决策记录与软件工厂治理：[.agents/notes/README.md](.agents/notes/README.md)（Agent Notes 规范、Prompt 分层缓存、CI 确定性自愈、Pareto 模型分级与反震荡治理）
 - 市场复制手册：[docs/replication.md](docs/replication.md)（含 14 条实证坑清单，改包结构前必读）
 - 交易所接入手册：[docs/connector-playbook.md](docs/connector-playbook.md)（新增交易所/数据源连接器前必读：先经 `scripts/new-connector.mjs` 生成，再按手册填写）
@@ -26,6 +27,7 @@ DSH 交易插件包 monorepo：按市场组织 bundle（crypto/us/cn/hk），主
 - **前后端任务分工**：界面 / client 半（`packages/client-ui-*/src/client/**`）由 **workbuddy** 完成；后端（`@dshtrading/api`、connector/kit/bundle、`python/**`、client-ui 的 node 半桥）由 **Cursor / Claude** 完成。Cursor/Claude 不擅自改行情 UI 组件；交接面是稳定的桥 JSON。见 [process note](.agents/notes/implemented/process/2026-09-08-frontend-backend-agent-split.md)。
 - **交付流分级**：按改动规模与风险面分两档（有没有建 Issue 不是判据）。较大功能开发——改公共契约（packages/api）、交易安全语义（铁律 #3）、跨多包联动的新功能/重构——走「最新 main 开 `feat/<issue号>-<短名>` 分支 + PR 合并」，PR 描述挂 Issue、至少一个审查批准；小修小补（docs/notes、注释、CI 与脚本微调、单点 bug 修复、lockfile 维护）直接提交 main，不强制 PR。定案见 [PR flow note](.agents/notes/archived/process/2026-09-02-issue-batch-assignment-pr-flow.md) 与 [scope refinement](.agents/notes/implemented/process/2026-09-02-pr-flow-scope-refined.md)。
 - **代码与 Git 规范**：提交用 Conventional Commits；不发布 npm（未授权）；DSH 宿主本体为 npm 全局安装的 `@deepseek-ai/dsh@0.1.2-rc.1`（`/opt/homebrew/lib/node_modules/@deepseek-ai/dsh`），是 SDK cohort 与 profile 行的权威来源，全程只读；旧 checkout（/Users/zcl/code/deepseek-harness）已弃用，不再作为约束引用。
+- **Windows 受保护树（禁止递归删）**：`.local/`（本机钉死的 DSH 宿主）、`packages/**` 源树、`%USERPROFILE%\.dsh\profiles\trading-web`。卸 worktree 只走 `git worktree remove` + `prune`。删 junction 用 `[System.IO.Directory]::Delete`（只掉链接）。**禁止** `Remove-Item -Recurse` / `rm -rf` 扫可能含 junction 的树——PowerShell 5.1 会跟着链接删掉目标（2026-09-08 已把 `.local` 掏空）。见 [bug-fix note](.agents/notes/implemented/bug-fix/2026-09-08-windows-worktree-recurse-wipe-local.md) 与 [Cursor rule](.cursor/rules/windows-protected-trees.mdc)。
 
 ## 交易会话守则（Trading Session）
 

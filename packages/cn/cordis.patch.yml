@@ -19,6 +19,12 @@
 
     # host 面数据行（2026-08-30 GUI 行情桥配套）：提供 tradingCnMarketData 注册表。
     - id: dsh-trading-cn-dataplane
+      name: '@dshtrading/connector-iquant/dataplane'
+      config:
+        market: cn
+        enabled: true
+        gatewayUrl: http://127.0.0.1:5810
+    - id: dsh-trading-cn-dataplane-tencent
       name: '@dshtrading/connector-tencent/dataplane'
       config:
         market: cn
@@ -35,10 +41,6 @@
       name: '@dshtrading/connector-akshare/dataplane'
       config:
         enabled: true
-    - id: dsh-trading-cn-dataplane-qmt
-      name: '@dshtrading/connector-qmt/dataplane'
-      config:
-        enabled: true
     - id: dsh-trading-cn-dataplane-hithink
       name: '@dshtrading/connector-hithink/dataplane'
       config:
@@ -49,7 +51,7 @@
       config:
         enabled: true
         gatewayUrl: http://127.0.0.1:8090
-        source: akshare
+        source: iquant
 
 
 

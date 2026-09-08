@@ -69,7 +69,7 @@ export type OptionRight = 'C' | 'P'
 
 /**
  * 期权数据源。synth = 离线确定性链（CI / 无网关）；akshare = 上交所研究级
- * （深市 NO_DATA）；iquant = 迅投研终端（沪深皆可达，解深市行情缺口）。
+ * （深市 NO_DATA）；iquant = 国信 iQuant（现货 SH/SZ，期权合约 SHO/SZO）。
  */
 export type OptionSource = 'synth' | 'akshare' | 'iquant'
 
@@ -80,7 +80,7 @@ export interface OptionUnderlying {
   readonly name: string
   readonly multiplier: number
   readonly tickSize: number
-  /** sse_board 有 T 板；szse_static_only 只有静态表；iquant_board 走迅投研。 */
+  /** sse_board 有 T 板；szse_static_only 只有静态表；iquant_board 走国信 SHO/SZO。 */
   readonly quotesSource: 'sse_board' | 'szse_static_only' | 'iquant_board' | 'synth'
   /** 阶段 4 互联：桥侧从 holdings 聚合的持仓份额（现货腿预填/备兑覆盖参考；无持仓缺省）。 */
   readonly heldQty?: number

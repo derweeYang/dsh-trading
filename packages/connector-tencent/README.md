@@ -2,7 +2,7 @@
 
 > **状态：已实证（本出口可用）**。2026-08-31 实测：报价（qt.gtimg.cn）与日/周/月 K（web.ifzq.gtimg.cn fqkline）从本开发出口均可返回真实数据，cn（贵州茅台）真实网络验证 PASS，证据 `spikes/impl-cn-hk/REPORT.md` 与 `r1/r2/r3-*` 原始文件。
 
-dsh-trading **cn 市场切片**行情连接器：经腾讯公共行情端点实现 `@dshtrading/api` 的 `MarketDataService` 契约，并提供 `cn_get_ticker` / `cn_get_klines` / `cn_place_order` 三工具（下单三段闸门与 connector-qmt 同构）。
+dsh-trading **cn 市场切片**行情连接器：经腾讯公共行情端点实现 `@dshtrading/api` 的 `MarketDataService` 契约，并提供 `cn_get_ticker` / `cn_get_klines` / `cn_place_order` 三工具（下单三段闸门与其它 cn 连接器同构）。
 
 ## 挂载形态
 

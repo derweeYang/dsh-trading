@@ -33,7 +33,7 @@ Status: implemented
 
 ## Consequences
 
-- Windows 从源码启动的权威步骤是 `docs/windows-local-dev.md` + 根目录 `start-trading-web.bat`。
+- Windows 从源码启动的权威步骤是 `docs/windows-local-dev.md` + 根目录 `start-trading-web.bat`。该入口先打印校对（宿主 / 端口 / iQuant DLL / `:5810` `/health` / `:8090` 是否在听），再另开窗口起 iQuant 行情（`:5810` 已在听则跳过）；只重启宿主用 `start-trading-web.ps1 -SkipIquant`。T 板分析仍另起 `start-options-gateway.bat`（`:8090`），不自动拉起。本仓已聚焦 CN 后，profile 若仍列 `@dshtrading/crypto|hk|us` 会在打出 token 前退出；`start-trading-web` 发现缺 bundle 会先跑 `link-trading-web-workspace.ps1`，把 bundles 收成仓库里仍有 `dsh.bundle` 的包（现为 `base` + `cn`）。
 - 工具调用崩 `prepare` 时先跑 `scripts/refresh-trading-web-profile.ps1`，再重启实例；只 `dsh plugin install` 会重新物化影子拷贝。
 - `service "tradingXxxMarketData" has been registered at <Include>` 与 issue #81
   同族：profile 里 0.1.4 连接器实拷 + workspace 0.1.5 junction + 仓库 pnpm
@@ -41,5 +41,9 @@ Status: implemented
   `link-trading-web-workspace.ps1` 挂上本仓全部 `@dshtrading/*`（只挂 api 不够），
   再 refresh（CORE_PKGS 含 `cordis` / `cordis-plugin-*`）。脚本删 junction 用
   `Directory.Delete`，不用 `Remove-Item -Recurse`（PowerShell 5.1 会误删源树）。
+  2026-09-08 清 `worktrees/refactor-cn-focus` 时违反此条，掏空 `.local`；纪律升格为
+  [protected-trees note](../bug-fix/2026-09-08-windows-worktree-recurse-wipe-local.md)。
+  另一条（六家 CN dataplane 并行 apply、注册表尚未 provide 就回退占根键）见
+  [dataplane registry race](../bug-fix/2026-09-08-cn-dataplane-registry-race.md)。
 - 换端口：`start-trading-web.bat 3082`。token 以当次黑窗口打印值为准。
 - 本机 Cursor 若再出现 `tool_calls` 协议失败，先怀疑 episodic-memory ABI，不要当成 trading-web 回归。

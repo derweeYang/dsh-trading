@@ -31,8 +31,8 @@
     "@dshtrading/connector-akshare": "workspace:*",
     "@dshtrading/connector-eastmoney": "workspace:*",
     "@dshtrading/connector-hithink": "workspace:*",
+    "@dshtrading/connector-iquant": "workspace:*",
     "@dshtrading/connector-options": "workspace:*",
-    "@dshtrading/connector-qmt": "workspace:*",
     "@dshtrading/connector-tencent": "workspace:*",
     "@dshtrading/connector-tushare": "workspace:*",
     "@dshtrading/kit-cn": "workspace:*"

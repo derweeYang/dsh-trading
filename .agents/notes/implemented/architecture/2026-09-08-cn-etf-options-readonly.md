@@ -57,3 +57,7 @@ T 板 UI 仍归 workbuddy，本变更不改 `src/client/**`。
   `@dshtrading/*` junction 进 profile（只挂 api/cn 会留下 0.1.4 连接器实拷，
   dataplane 双 apply），再跑 `refresh-trading-web-profile.ps1` 把 `cordis` 等
   宿主核心包挂到 `.local`；不跑会重物化影子拷贝的 `dsh plugin install`。
+- 国信期权行情（2026-09-08 live）：合约市场 token 是 `SHO`/`SZO`，不是
+  `SH`/`SZ`。只行情连接器另记
+  [iquant-quote-connector](../../proposed/feature/2026-09-08-iquant-quote-connector.md)；
+  本记录「不接 iQuant 实盘」仍成立——第一期没有期权执行。

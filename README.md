@@ -68,7 +68,7 @@ A shoddy terminal makes even the smartest agent an armchair general.
 |---|---|
 | **Crypto** | Binance, OKX (Paper/Live), Bybit, CCXT (100+ exchanges) |
 | **US Equities** | Yahoo Finance, Alpaca (Paper/Live), FMP, Finnhub, Polygon.io, Interactive Brokers |
-| **China A-Shares** | Tencent Finance, Eastmoney, Tushare Pro, AkShare, MiniQMT broker gateway, ETF options kernel (`python/options` via `:8090`) |
+| **China A-Shares** | 国信 iQuant quotes (default, `SHO`/`SZO` for options), Tencent, Eastmoney, Tushare Pro, AkShare, ETF options kernel (`python/options` via `:8090`). MiniQMT removed. |
 | **Hong Kong** | Tencent HK, Longbridge OpenAPI, Futu OpenD, Tiger OpenAPI |
 
 **Hot-swappable data planes.** Not happy with a data source? Swap it. Settings → Trading routes any market to any installed provider: the quote panel re-routes on save, agent sessions pick it up on their next turn — no restarts, no config archaeology.
@@ -108,7 +108,7 @@ dsh --profile trading-web
 
 Open the printed URL: watchlist left, chart center, your agent right. New conversation → pick a market preset → first ask it what it sees.
 
-On Windows, starting from this repo (`.local` host, port 3081, token URL, `prepare` crashes) is documented in [docs/windows-local-dev.md](docs/windows-local-dev.md); double-click `start-trading-web.bat` at the repo root.
+On Windows, starting from this repo (`.local` host, port 3081, token URL, `prepare` crashes) is documented in [docs/windows-local-dev.md](docs/windows-local-dev.md); double-click `start-trading-web.bat` at the repo root (it also opens the iQuant quote window on `:5810`). ETF options analysis: `start-options-gateway.bat` (`:8090`).
 
 ## The architecture at a glance
 
@@ -118,7 +118,7 @@ A layered [Cordis](https://github.com/cordisjs) microkernel ecosystem where mark
 @dshtrading/base          ← core: account/order/quote contracts, approval gate, GUI shell
 ├── @dshtrading/crypto    ← Binance / OKX / Bybit / CCXT + skills + preset
 ├── @dshtrading/us        ← Yahoo / Alpaca / FMP / Finnhub / Polygon / IBKR + skills + preset
-├── @dshtrading/cn        ← Tencent / Eastmoney / Tushare / AkShare / MiniQMT / ETF options + skills + preset
+├── @dshtrading/cn        ← iQuant (default quotes) / Tencent / Eastmoney / Tushare / AkShare / ETF options + skills + preset
 └── @dshtrading/hk        ← Tencent HK / Longbridge / Futu / Tiger + skills + preset
 ```
 
@@ -129,7 +129,7 @@ Six invariants lock the ecosystem down: insert-only bundle patches · knowledge 
 | Market | Default source | Boundary |
 |---|---|---|
 | US | Yahoo Finance / Alpaca | Yahoo public endpoint (individual use); Alpaca official Paper/Live APIs |
-| CN | Tencent Finance / Eastmoney / HiThink (Fuyao) | Public endpoints; HiThink REST API for fundamentals & auction data; live execution via local MiniQMT gateway; ETF options read-only via `connector-options` + local `python/options` gateway |
+| CN | 国信 iQuant (default) / Tencent / Eastmoney / HiThink | iQuant quotes-only via local `:5810` (spot `SH`/`SZ`, options **`SHO`/`SZO`**). Public sources remain switchable. No MiniQMT. ETF options analysis via `connector-options` + `python/options`. |
 | HK | Tencent HK / Longbridge | Public endpoint; licensed broker OpenAPI/Gateway for execution |
 | Crypto | Binance / OKX | Official APIs; OKX paper trading with your own keys |
 | Crypto fundamentals | CoinCap | Public REST, individual use only — no redistribution, no bulk scraping |

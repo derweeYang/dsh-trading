@@ -59,7 +59,7 @@ export const PROVIDER_VOCABULARY = [
   'eastmoney',
   'tushare',
   'akshare',
-  'qmt',
+  'iquant',
   'hithink',
 ] as const
 export type Provider = (typeof PROVIDER_VOCABULARY)[number]
@@ -79,7 +79,7 @@ export interface Config {
 }
 
 export const DEFAULT_MARKETS: Record<string, MarketProviderEntry> = {
-  cn: { provider: 'tencent' },
+  cn: { provider: 'iquant' },
 }
 
 const MarketProviderEntrySchema = Schema.object({

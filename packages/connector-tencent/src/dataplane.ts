@@ -7,16 +7,20 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { MarketDataService } from '@dshtrading/api'
 import { TRADING_CN_MARKET_DATA_KEY, TencentMarketDataService, type Config } from './index.ts'
-export const inject: string[] = []
+export const inject = ['tradingMarketDataRegistry']
 
 /** 注册表服务的最小消费面（鸭式，不定死接口——连接器对 router 包保持零依赖，与 router consult 同纪律）。 */
 interface MarketDataRegistryLike {
   register(market: string, provider: string, service: MarketDataService): () => void
 }
 
+function ctxGet(ctx: Context, key: string): unknown {
+  return (ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }).get?.(key, false)
+}
+
 /** 解析注册表服务；老部署（base/router 未升级）返回 undefined → 调用方回退旧的直接 provide 路径。 */
 function resolveMarketDataRegistry(ctx: Context): MarketDataRegistryLike | undefined {
-  const candidate = (ctx as unknown as { get?: (key: string, strict?: boolean) => unknown }).get?.('tradingMarketDataRegistry', false)
+  const candidate = ctxGet(ctx, 'tradingMarketDataRegistry')
   return candidate !== undefined ? (candidate as MarketDataRegistryLike) : undefined
 }
 /** 本连接器的路由 provider slug（路由层词汇，docs/exchange-routing.md §2.2）。 */
@@ -27,6 +31,7 @@ export function apply(ctx: Context, config: Config): void {
   const key = TRADING_CN_MARKET_DATA_KEY
   const registry = resolveMarketDataRegistry(ctx)
   if (registry === undefined) {
+    if (ctxGet(ctx, key) !== undefined) return
     new TencentMarketDataService(ctx, {}, key)
     return
   }

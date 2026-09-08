@@ -110,7 +110,7 @@ dsh --profile trading-web
 
 打开终端打印的 URL：左边自选，中间图表，右边是你的 Agent。新建会话 → 选市场预设 → 先问它「你看到了什么」。
 
-Windows 从本仓库源码启动（`.local` 宿主、3081、token URL、工具 `prepare` 崩溃）见 [docs/windows-local-dev.md](docs/windows-local-dev.md)，双击根目录 `start-trading-web.bat`。
+Windows 从本仓库源码启动（`.local` 宿主、3081、token URL、工具 `prepare` 崩溃）见 [docs/windows-local-dev.md](docs/windows-local-dev.md)，双击根目录 `start-trading-web.bat`（会另开 iQuant 行情窗口 `:5810`）。ETF 期权分析：`start-options-gateway.bat`（`:8090`）。
 
 ## 架构一瞥
 

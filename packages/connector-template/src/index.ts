@@ -1,7 +1,7 @@
 /**
  * 【模板】交易所连接器插件入口骨架 —— 由生成器展开为新交易所插件后逐项填充。
  *
- * 结构（对照 connector-qmt，本仓当前唯一的真实 TradeService 参照系）：
+ * 结构（对照 connector-tencent，本仓当前唯一的真实 TradeService 参照系）：
  *   - Config：互斥激活（enabled 默认 false）+ 三态环境（env=demo|live）+ 铁律 #3
  *     双闸门（dryRun/liveTrading）+ BYOK 凭证（demo/live 各一组）。
  *   - 服务：__EXCHANGE__MarketDataService（trading__MARKET_CAP__MarketData）与
@@ -210,7 +210,7 @@ const SUBSCRIBE_DEFAULT_MS = 5_000
 
 export class __EXCHANGE__MarketDataService extends Service implements MarketDataService {
   // TS 编译期 private 而非 ECMAScript # 私有字段：cordis 跨 realm 代理按类身份校验会炸
-  // （connector-qmt 同款纪律，replication 坑清单）。
+  // （connector-tencent 同款纪律，replication 坑清单）。
   private readonly client: ExchangeRestClient
 
   constructor(ctx: Context, options: ExchangeRestOptions = {}, client?: ExchangeRestClient, serviceName: string = TRADING_MARKET_DATA_KEY) {
@@ -329,7 +329,7 @@ export class __EXCHANGE__TradeService extends Service implements TradeService {
   /**
    * 撤单。若交易所按 (symbol, id) 双键定位，api 契约的 cancelOrder(id) 单参形态
    * 不够时扩展第二可选参数（@dshtrading/api R3 先例）。
-   * TODO: 撤单幂等化——通道的「已终态」错误码视作成功（参照 connector-qmt 的处理）。
+   * TODO: 撤单幂等化——通道的「已终态」错误码视作成功（参照 connector-tencent 的处理）。
    */
   async cancelOrder(id: string, symbol?: string): Promise<void> {
     // 服务缝闸门（P0）：撤单是会改变交易所真实状态的实盘动作，与真实下单同门槛
@@ -481,7 +481,7 @@ export function evaluateOrderGate(config: Config, args: PlaceOrderArgs): OrderGa
   return { action: 'live', environment: config.env }
 }
 
-/** 参数校验（模型调用问题抛普通 Error；服务故障才用错误词汇，connector-qmt 先例）。 */
+/** 参数校验（模型调用问题抛普通 Error；服务故障才用错误词汇，connector-tencent 先例）。 */
 function validatePlaceOrderArgs(args: PlaceOrderArgs): void {
   if (typeof args.symbol !== 'string' || args.symbol.trim() === '') {
     throw new Error(`${MARKET}_place_order: invalid symbol ${JSON.stringify(args.symbol)} — expected a non-empty exchange symbol`)
@@ -506,7 +506,7 @@ function normalizePlaceOrderArgs(raw: unknown): PlaceOrderArgs {
   return { ...args, symbol }
 }
 
-/** DRY-RUN 回执（connector-qmt 同款形状；参照行情来自通道公共 ticker）。 */
+/** DRY-RUN 回执（connector-tencent 同款形状；参照行情来自通道公共 ticker）。 */
 export interface DryRunReference {
   source: string
   price?: number

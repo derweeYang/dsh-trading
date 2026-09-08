@@ -99,7 +99,7 @@ def handle_contracts(request: dict[str, Any], cache_dir: Path) -> dict[str, Any]
 
         raw = iquant.run_quote(
             "option_instruments",
-            {"market": iquant.market_of(row), "underlying": underlying},
+            {"market": iquant.option_market_of(row), "underlying": underlying},
             request,
         )
         contracts = [

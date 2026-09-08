@@ -107,7 +107,7 @@ def _fetch_remote(
         raw = iquant.run_quote(
             "history_bars",
             {
-                "market": iquant.market_of(row),
+                "market": iquant.option_market_of(row),
                 "symbol": request["contract"],
                 "period": "1d",
                 "startMs": start_ms,
