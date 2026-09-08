@@ -75,10 +75,7 @@ const ORIGIN_BADGE_KEY: Record<PositionOrigin, MarketLocaleKey> = {
 }
 
 const MARKET_LABEL_KEY: Record<MarketId, MarketLocaleKey> = {
-  crypto: 'tab.crypto',
-  us: 'tab.us',
   cn: 'tab.cn',
-  hk: 'tab.hk',
 }
 
 /** Tab 条短标签（会话列宽度约束下的紧凑文案）。 */
@@ -193,7 +190,7 @@ function HoldingDraftFields({ t, draft, onChange }: {
       <label className={css.formField}>
         <span>{t('trade.holdings.field.market')}</span>
         <select value={draft.market} onChange={(e) => onChange({ ...draft, market: e.target.value as MarketId })}>
-          {(['crypto', 'us', 'cn', 'hk'] as const).map(m => (
+          {(['cn'] as const).map(m => (
             <option key={m} value={m}>{t(MARKET_LABEL_KEY[m])}</option>
           ))}
         </select>
@@ -202,7 +199,7 @@ function HoldingDraftFields({ t, draft, onChange }: {
         <span>{t('trade.symbol')}</span>
         <input
           value={draft.symbol}
-          placeholder="AAPL / 002714.SZ / BTCUSDT"
+          placeholder="002714.SZ / 600519.SH"
           onChange={(e) => onChange({ ...draft, symbol: e.target.value })}
         />
       </label>
@@ -1134,7 +1131,7 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
       <HoldingFormDialog
         t={t}
         title={t('trade.holdings.add.title')}
-        initial={{ market: 'crypto', symbol: '', size: '', entryPrice: '', account: '', kind: 'real' }}
+        initial={{ market: 'cn', symbol: '', size: '', entryPrice: '', account: '', kind: 'real' }}
         open={addOpen}
         onSubmit={(draft) => {
           const item = draftToNewHolding(draft)
@@ -1148,7 +1145,7 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
         t={t}
         title={t('trade.holdings.edit.title')}
         initial={{
-          market: editingSnapshot?.market ?? 'crypto',
+          market: editingSnapshot?.market ?? 'cn',
           symbol: editingSnapshot?.symbol ?? '',
           size: editingSnapshot !== null ? String(editingSnapshot.size) : '',
           entryPrice: editingSnapshot?.entryPrice !== undefined ? String(editingSnapshot.entryPrice) : '',

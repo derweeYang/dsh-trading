@@ -71,12 +71,12 @@ export type NavSubCategory =
   | 'action_splits'
 
 function formatChange(change: number | undefined): { text: string; cls: string } {
-  if (change === undefined || Number.isNaN(change)) return { text: '--', cls: css.valNeutral }
+  if (change === undefined || Number.isNaN(change)) return { text: '--', cls: css.valNeutral ?? '' }
   const sign = change > 0 ? '+' : ''
   const text = `${sign}${change.toFixed(2)}%`
-  if (change > 0) return { text, cls: css.valUp }
-  if (change < 0) return { text, cls: css.valDown }
-  return { text, cls: css.valNeutral }
+  if (change > 0) return { text, cls: css.valUp ?? '' }
+  if (change < 0) return { text, cls: css.valDown ?? '' }
+  return { text, cls: css.valNeutral ?? '' }
 }
 
 export function FundamentalsStage({ t, useSelection }: FundamentalsStageProps) {
@@ -142,7 +142,6 @@ export function FundamentalsStage({ t, useSelection }: FundamentalsStageProps) {
 
   const matrix = data?.matrix
   const stock = (data?.stock ?? data) as unknown as StockFundamentals
-  const crypto = data?.crypto
   const profile = data?.profile
   const forecast = data?.forecast
   const reports = data?.reports
@@ -278,18 +277,6 @@ export function FundamentalsStage({ t, useSelection }: FundamentalsStageProps) {
             <div className={css.pillItem}>
               <span className={css.pillLabel}>{t('fund.pill.turnover')}</span>
               <span className={css.pillValue}>{stock.turnoverRate.toFixed(2)}%</span>
-            </div>
-          )}
-          {crypto?.marketCapUsd !== undefined && (
-            <div className={css.pillItem}>
-              <span className={css.pillLabel}>{t('fund.pill.floatCap')}</span>
-              <span className={css.pillValue}>${fv(crypto.marketCapUsd)}</span>
-            </div>
-          )}
-          {crypto?.rank !== undefined && (
-            <div className={css.pillItem}>
-              <span className={css.pillLabel}>{t('fund.pill.rank')}</span>
-              <span className={css.pillValue}>#{crypto.rank}</span>
             </div>
           )}
         </div>

@@ -222,11 +222,16 @@ export function OptionsStage({
                           const putPct = put?.changePct
                           const callSelected = selectedLeg?.side === 'call' && selectedLeg.strike === strike
                           const putSelected = selectedLeg?.side === 'put' && selectedLeg.strike === strike
+                          // exactOptionalPropertyTypes：last/iv 缺席整键省略，不传 undefined。
                           const selectCall = (): void => {
-                            setSelectedLeg({ side: 'call', strike, last: call?.last ?? call?.prevSettle, iv: call?.impliedVol })
+                            const last = call?.last ?? call?.prevSettle
+                            const iv = call?.impliedVol
+                            setSelectedLeg({ side: 'call', strike, ...(last !== undefined ? { last } : {}), ...(iv !== undefined ? { iv } : {}) })
                           }
                           const selectPut = (): void => {
-                            setSelectedLeg({ side: 'put', strike, last: put?.last ?? put?.prevSettle, iv: put?.impliedVol })
+                            const last = put?.last ?? put?.prevSettle
+                            const iv = put?.impliedVol
+                            setSelectedLeg({ side: 'put', strike, ...(last !== undefined ? { last } : {}), ...(iv !== undefined ? { iv } : {}) })
                           }
                           return (
                             <tr key={strike} className={css.row}>

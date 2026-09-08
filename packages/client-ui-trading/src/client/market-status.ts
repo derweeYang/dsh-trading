@@ -12,27 +12,12 @@ export interface MarketIndexDef {
   readonly nameKey: MarketLocaleKey
 }
 
-/** 各市场默认核心大盘指数 */
+/** 各市场默认核心大盘指数（市场收敛后仅 cn：上证/深成/创业板）。 */
 export const MARKET_INDICES: Record<MarketId, MarketIndexDef[]> = {
   cn: [
     { symbol: 'sh000001', nameKey: 'index.shComposite' },
     { symbol: 'sz399001', nameKey: 'index.szComponent' },
     { symbol: 'sz399006', nameKey: 'index.chinext' },
-  ],
-  hk: [
-    { symbol: 'HSI', nameKey: 'index.hangSeng' },
-    { symbol: 'HSTECH', nameKey: 'index.hangSengTech' },
-    { symbol: 'HSCEI', nameKey: 'index.hscei' },
-  ],
-  us: [
-    { symbol: '^GSPC', nameKey: 'index.sp500' },
-    { symbol: '^IXIC', nameKey: 'index.nasdaq' },
-    { symbol: '^DJI', nameKey: 'index.dowJones' },
-  ],
-  crypto: [
-    { symbol: 'BTCUSDT', nameKey: 'index.btc' },
-    { symbol: 'ETHUSDT', nameKey: 'index.eth' },
-    { symbol: 'SOLUSDT', nameKey: 'index.sol' },
   ],
 }
 
@@ -77,10 +62,6 @@ function getZonedTime(date: Date, timeZone: string): { dayOfWeek: number; minute
  * 灰灯: 已收盘 / 周末休市 (#8e95a3)
  */
 export function getMarketSessionStatus(market: MarketId, dateOrTimestamp: Date | number = Date.now()): MarketSessionInfo {
-  if (market === 'crypto') {
-    return { statusKey: 'status.trading', isOpen: true, color: '#2ba471' }
-  }
-
   const date = typeof dateOrTimestamp === 'number' ? new Date(dateOrTimestamp) : dateOrTimestamp
 
   if (market === 'cn') {
@@ -107,53 +88,6 @@ export function getMarketSessionStatus(market: MarketId, dateOrTimestamp: Date |
     return { statusKey: 'status.closed', isOpen: false, color: '#8e95a3' }
   }
 
-  if (market === 'hk') {
-    const { dayOfWeek, minutes } = getZonedTime(date, 'Asia/Hong_Kong')
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      return { statusKey: 'status.closed', isOpen: false, color: '#8e95a3' }
-    }
-    // 09:00 - 09:30 开盘竞价
-    if (minutes >= 540 && minutes < 570) {
-      return { statusKey: 'status.auction', isOpen: false, color: '#e37318' }
-    }
-    // 09:30 - 12:00 早市交易
-    if (minutes >= 570 && minutes < 720) {
-      return { statusKey: 'status.trading', isOpen: true, color: '#2ba471' }
-    }
-    // 12:00 - 13:00 午间休市
-    if (minutes >= 720 && minutes < 780) {
-      return { statusKey: 'status.midday', isOpen: false, color: '#e37318' }
-    }
-    // 13:00 - 16:00 午市交易
-    if (minutes >= 780 && minutes < 960) {
-      return { statusKey: 'status.trading', isOpen: true, color: '#2ba471' }
-    }
-    // 16:00 - 16:10 收市竞价
-    if (minutes >= 960 && minutes < 970) {
-      return { statusKey: 'status.auction', isOpen: false, color: '#e37318' }
-    }
-    return { statusKey: 'status.closed', isOpen: false, color: '#8e95a3' }
-  }
-
-  if (market === 'us') {
-    const { dayOfWeek, minutes } = getZonedTime(date, 'America/New_York')
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      return { statusKey: 'status.closed', isOpen: false, color: '#8e95a3' }
-    }
-    // 04:00 - 09:30 盘前
-    if (minutes >= 240 && minutes < 570) {
-      return { statusKey: 'status.preMarket', isOpen: false, color: '#e37318' }
-    }
-    // 09:30 - 16:00 正常盘中
-    if (minutes >= 570 && minutes < 960) {
-      return { statusKey: 'status.trading', isOpen: true, color: '#2ba471' }
-    }
-    // 16:00 - 20:00 盘后
-    if (minutes >= 960 && minutes < 1200) {
-      return { statusKey: 'status.afterHours', isOpen: false, color: '#e37318' }
-    }
-    return { statusKey: 'status.closed', isOpen: false, color: '#8e95a3' }
-  }
-
+  // 防御兜底：市场收敛后 MarketId 仅 'cn'，理论不可达。
   return { statusKey: 'status.closed', isOpen: false, color: '#8e95a3' }
 }

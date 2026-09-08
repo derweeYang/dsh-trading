@@ -25,7 +25,7 @@ export function summarizeFundamentals(pkg: FundamentalsPackage): Record<string, 
   const periods = matrix?.periods.slice(-3) ?? []
   return {
     market: pkg.market, symbol: pkg.symbol,
-    stock: pkg.stock, crypto: pkg.crypto,
+    stock: pkg.stock,
     profile: pkg.profile === undefined ? undefined : {
       name: pkg.profile.name, industry: pkg.profile.industry, sector: pkg.profile.sector,
       description: pkg.profile.description, businessScope: pkg.profile.businessScope,

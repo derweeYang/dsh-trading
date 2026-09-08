@@ -67,12 +67,9 @@ export interface HoldingsBookSnapshot {
   readonly holdings: Holding[]
 }
 
-/** 市场缺省币种推导（§2：crypto→USDT, us→USD, cn→CNY, hk→HKD）。 */
+/** 市场缺省币种推导（§2；市场收敛后仅 cn→CNY，历史多币种台账显示不受影响）。 */
 export const MARKET_DEFAULT_CURRENCY: Record<MarketId, HoldingCurrency> = {
-  crypto: 'USDT',
-  us: 'USD',
   cn: 'CNY',
-  hk: 'HKD',
 }
 
 /** 盯市价格表的键（§6.2：`${market}:${symbol}`）。 */
@@ -80,5 +77,5 @@ export function holdingsPriceKey(market: MarketId, symbol: string): string {
   return `${market}:${symbol}`
 }
 
-/** 全部持仓市场（四市场 live 拉取/盯市分组的迭代序，§6.4）。 */
-export const HOLDINGS_MARKETS: readonly MarketId[] = ['crypto', 'us', 'cn', 'hk']
+/** 全部持仓市场（live 拉取/盯市分组的迭代序，§6.4；市场收敛后仅 cn）。 */
+export const HOLDINGS_MARKETS: readonly MarketId[] = ['cn']

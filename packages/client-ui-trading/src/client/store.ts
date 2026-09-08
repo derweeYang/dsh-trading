@@ -78,20 +78,20 @@ export type SelectionStore = WritableObservable<SelectionState> & {
   select(instrument: Instrument): void
 }
 
+/**
+ * 市场恒为 cn（市场收敛后唯一市场）；签名保留 symbol 便于符号规范化扩展，
+ * 现仅做防御性归一：历史 localStorage / 上游数据里的 crypto/us/hk 一律落 cn。
+ */
 export function inferMarket(symbol?: string): MarketId {
-  if (!symbol) return 'crypto'
-  const sym = symbol.toUpperCase()
-  if (sym.endsWith('.SH') || sym.endsWith('.SZ') || /^\d{6}$/.test(sym)) return 'cn'
-  if (sym.endsWith('.HK') || /^\d{5}$/.test(sym)) return 'hk'
-  if (sym.includes('USDT') || sym.includes('BTC') || sym.includes('ETH')) return 'crypto'
-  return 'us'
+  void symbol
+  return 'cn'
 }
 
 export function createSelectionStore(): SelectionStore {
   const raw = readJson<Instrument | null>(SELECTION_KEY, null)
   const initialInstrument: Instrument | null = raw && typeof raw.symbol === 'string' && raw.symbol
     ? {
-        market: raw.market && ['crypto', 'us', 'cn', 'hk'].includes(raw.market) ? (raw.market as MarketId) : inferMarket(raw.symbol),
+        market: inferMarket(raw.symbol),
         symbol: raw.symbol,
         ...(raw.name ? { name: raw.name } : {}),
       }
@@ -103,7 +103,7 @@ export function createSelectionStore(): SelectionStore {
     ...store,
     select(instrument) {
       const sanitized: Instrument = {
-        market: instrument.market && ['crypto', 'us', 'cn', 'hk'].includes(instrument.market) ? instrument.market : inferMarket(instrument.symbol),
+        market: inferMarket(instrument.symbol),
         symbol: instrument.symbol,
         ...(instrument.name ? { name: instrument.name } : {}),
       }
@@ -137,12 +137,13 @@ export function sameInstrument(a: Instrument, b: Instrument): boolean {
 function sanitizeWatchlists(raw: Watchlists): Watchlists {
   const clean: Watchlists = {}
   for (const [key, rows] of Object.entries(raw)) {
-    if (!['crypto', 'us', 'cn', 'hk'].includes(key) || !Array.isArray(rows)) continue
+    // 市场收敛后唯一合法键 'cn'；localStorage 里遗留的 crypto/us/hk 键直接丢弃。
+    if (key !== 'cn' || !Array.isArray(rows)) continue
     const market = key as MarketId
     clean[market] = rows
       .filter((row): row is Instrument => Boolean(row && typeof row.symbol === 'string' && row.symbol))
       .map(row => ({
-        market: row.market && ['crypto', 'us', 'cn', 'hk'].includes(row.market) ? row.market : market,
+        market,
         symbol: row.symbol,
         ...(row.name ? { name: row.name } : {}),
       }))
@@ -165,7 +166,8 @@ export function createWatchlistStore(): WatchlistStore {
       return Array.isArray(rows)
     },
     add(market, instrument) {
-      const targetMarket = ['crypto', 'us', 'cn', 'hk'].includes(market) ? market : inferMarket(instrument.symbol)
+      void market // 签名保留多市场形参；市场收敛后恒 cn（inferMarket 决定）
+      const targetMarket = inferMarket(instrument.symbol)
       const sanitized: Instrument = {
         market: targetMarket,
         symbol: instrument.symbol,
@@ -179,7 +181,8 @@ export function createWatchlistStore(): WatchlistStore {
       persist()
     },
     remove(market, symbol) {
-      const targetMarket = ['crypto', 'us', 'cn', 'hk'].includes(market) ? market : inferMarket(symbol)
+      void market // 同 add：签名保留，目标市场恒 cn
+      const targetMarket = inferMarket(symbol)
       store.update((current) => {
         const existing = current[targetMarket]
         const baseRows = Array.isArray(existing) ? existing : (DEFAULT_WATCHLISTS[targetMarket] ?? [])
@@ -201,10 +204,8 @@ export function rowsFor(watchlists: Watchlists, market: MarketId): Instrument[] 
   return DEFAULT_WATCHLISTS[market] ?? []
 }
 
-/** Chart intervals offered per market (connector-supported subsets only). */
+/** Chart intervals offered per market (connector-supported subsets only).
+ *  市场收敛后仅 cn（腾讯连接器支持的周期子集）。 */
 export const MARKET_INTERVALS: Record<MarketId, string[]> = {
-  crypto: ['5m', '15m', '30m', '1h', '4h', '1d', '1w'],
-  us: ['5m', '15m', '30m', '1h', '1d', '1w', '1M'],
   cn: ['5m', '30m', '1d', '1w', '1M'],
-  hk: ['5m', '15m', '30m', '1h', '1d', '1w', '1M'],
 }

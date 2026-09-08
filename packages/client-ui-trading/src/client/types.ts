@@ -3,10 +3,14 @@
  * (src/bridge.ts) and @dshtrading/api's data contracts — type-only imports,
  * erased at bundle time (the client half must not require non-seed modules).
  */
-import type { AccountBalance, DerivativesData, DerivativesHistory, DerivativesPoint, Kline, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeTick } from '@dshtrading/api'
+import type { AccountBalance, Kline, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeTick } from '@dshtrading/api'
 
-/** Markets served by the bridge (subset = installed connector set). */
-export type MarketId = 'crypto' | 'us' | 'cn' | 'hk'
+/**
+ * Markets served by the bridge. 曾为四市场 'crypto' | 'us' | 'cn' | 'hk'；
+ * 市场收敛后（阶段 1/2）只剩 cn——保留类型别名与签名，避免日后复辟时
+ * 全链路改签名。
+ */
+export type MarketId = 'cn'
 
 /** One watchable instrument (a watchlist row / the quote stage's subject). */
 export interface Instrument {
@@ -25,7 +29,7 @@ export type TickerOutcome =
   | { ok: true; ticker: Ticker }
   | { ok: false; code: string; message: string }
 
-export type { Kline, Ticker, StockFundamentals, DerivativesData, DerivativesHistory, DerivativesPoint, Orderbook, TradeTick, Position, Order, AccountBalance, TradeFill }
+export type { Kline, Ticker, StockFundamentals, Orderbook, TradeTick, Position, Order, AccountBalance, TradeFill }
 
 /** Per-instrument cached reference series: closes for the sparkline + prev daily close for change%. */
 export interface ReferenceSeries {

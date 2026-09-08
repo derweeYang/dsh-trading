@@ -48,10 +48,7 @@ const SPARK_INTERVAL = '1d'
 const SPARK_LIMIT = 32
 
 const TAB_KEY: Record<MarketId, MarketLocaleKey> = {
-  crypto: 'tab.crypto',
-  us: 'tab.us',
   cn: 'tab.cn',
-  hk: 'tab.hk',
 }
 
 const KNOWN_SH_INDICES = new Set(['000688', '000300', '000016', '000905', '000852'])
@@ -72,7 +69,7 @@ export function MarketSidebar({
   const [prices, setPrices] = useState<Record<string, Ticker>>({})
   const [series, setSeries] = useState<Record<string, ReferenceSeries>>({})
   const [draft, setDraft] = useState('')
-  const [addMarket, setAddMarket] = useState<MarketId>('crypto')
+  const [addMarket] = useState<MarketId>('cn')
   const [catalogVersion, setCatalogVersion] = useState(0)
   const colorMode = useSyncExternalStore(colorModeStore.subscribe, colorModeStore.getSnapshot)
 
@@ -86,7 +83,7 @@ export function MarketSidebar({
 
   // 动态标的全集预取（Issue #15）：切页签或挂载时触发，成功后注入 catalog 并刷新联想
   useEffect(() => {
-    const targetMarkets: MarketId[] = tab === 'watch' ? ['crypto', 'us', 'cn', 'hk'] : [tab]
+    const targetMarkets: MarketId[] = tab === 'watch' ? ['cn'] : [tab]
     let cancelled = false
     for (const m of targetMarkets) {
       fetchSymbols(m)
@@ -127,7 +124,7 @@ export function MarketSidebar({
 
     let cancelled = false
     const timer = setTimeout(() => {
-      const targetMarkets: MarketId[] = tab === 'watch' ? ['cn', 'hk', 'us', 'crypto'] : [tab]
+      const targetMarkets: MarketId[] = tab === 'watch' ? ['cn'] : [tab]
       for (const m of targetMarkets) {
         fetchSymbols(m, raw)
           .then((items) => {
@@ -302,8 +299,6 @@ export function MarketSidebar({
               if (target === 'cn' && /^\d{6}$/.test(raw)) {
                 const isSh = raw.startsWith('6') || raw.startsWith('9') || raw.startsWith('5') || KNOWN_SH_INDICES.has(raw)
                 symbol = `${raw}.${isSh ? 'SH' : 'SZ'}`
-              } else if (target === 'hk' && /^\d{1,5}$/.test(raw)) {
-                symbol = `${raw.padStart(5, '0')}.HK`
               } else {
                 symbol = raw
               }
@@ -318,18 +313,9 @@ export function MarketSidebar({
             setDraft('')
           }}>
             {tab === 'watch' && (
-              <button
-                type="button"
-                className={css.addMarketToggle}
-                title={t('sidebar.addMarketHint')}
-                onClick={() => {
-                  const order: MarketId[] = ['crypto', 'us', 'cn', 'hk']
-                  const index = order.indexOf(addMarket)
-                  setAddMarket(order[(index + 1) % order.length] ?? 'crypto')
-                }}
-              >
+              <span className={css.addMarketToggle} title={t('sidebar.addMarketHint')}>
                 {t(TAB_KEY[addMarket])}
-              </button>
+              </span>
             )}
             <input
               className={css.addInput}

@@ -30,7 +30,8 @@ export interface OrderPanelProps {
 
 /** 智能推断标的资产单位 */
 function resolveAssetUnit(symbol: string, t: (k: MarketLocaleKey) => string, market?: MarketId): string {
-  if (market === 'crypto' || /USDT|USDC|BUSD|BTC|ETH/i.test(symbol)) {
+  void market // 签名保留；市场收敛后单位推断只看 symbol 形态
+  if (/USDT|USDC|BUSD|BTC|ETH/i.test(symbol)) {
     const clean = symbol.toUpperCase().replace(/[-_].*$/, '')
     for (const quote of ['USDT', 'USDC', 'BUSD', 'USD']) {
       if (clean.endsWith(quote) && clean.length > quote.length) {

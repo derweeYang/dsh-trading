@@ -6,9 +6,9 @@
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  fetchKlines, fetchTickers, fetchDerivatives, fetchDerivativesHistory, fetchOrderbook, fetchRecentTrades,
+  fetchKlines, fetchTickers, fetchOrderbook, fetchRecentTrades,
   fetchTradePositions, fetchTradeBalances, fetchTradeOpenOrders, fetchTradeFills, placeGuiOrder,
-  cancelGuiOrder, fetchOptionsUnderlyings, fetchOptionsExpiries, fetchOptionsChain,
+  fetchOptionsUnderlyings, fetchOptionsExpiries, fetchOptionsChain,
   type TradeRowsReason,
 } from './api.ts'
 import { setHoldingsPanelOpen } from './holdings-store.ts'
@@ -20,8 +20,6 @@ import { composeQuoteDataSection, type QuoteDataSectionCopy } from './compose-qu
 import type { QuoteMessageCopy } from './compose-quote.ts'
 import type { SendImageInput, FillComposerFn } from './fill-composer.ts'
 import { FundamentalsStage } from './FundamentalsStage.tsx'
-import { DerivativesPane } from './DerivativesPane.tsx'
-import { DerivativesStage } from './DerivativesStage.tsx'
 import { OptionsStage, type SelectedOptionLeg } from './OptionsStage.tsx'
 import { OrderbookPane } from './OrderbookPane.tsx'
 import { OrderPanel } from './OrderPanel.tsx'
@@ -31,7 +29,7 @@ import { IconChevronDown, IconIndicators, IconSend } from './icons.tsx'
 import type { MarketLocaleKey } from './contract.ts'
 import {
   INTRADAY_INTERVALS, changePercent, directionColor,
-  fmtChange, fmtClock, fmtCompact, fmtFundingRate, fmtPercent, fmtPrice, scaleLocaleOf,
+  fmtChange, fmtClock, fmtCompact, fmtPercent, fmtPrice, scaleLocaleOf,
 } from './format.ts'
 import { indicators, isCustomIndicator } from './indicator-registry.ts'
 import type { IndicatorDefinition, IndicatorInstance } from '@dshtrading/indicators'
@@ -40,7 +38,7 @@ import { effectiveInstanceParams, isInstanceVisibleOn, symbolScopeKey } from '@d
 import { MARKET_INTERVALS } from './store.ts'
 import type { SelectionState } from './store.ts'
 import type { ChartState } from './chart-state.ts'
-import type { AccountBalance, DerivativesData, DerivativesHistory, Order, Orderbook, Position, TradeFill, TradeTick } from './types.ts'
+import type { AccountBalance, Order, Orderbook, Position, TradeFill, TradeTick } from './types.ts'
 import { colorModeStore } from './color-mode.ts'
 import { MARKET_INDICES, getMarketSessionStatus } from './market-status.ts'
 import type { Kline, MarketId, Ticker } from './types.ts'
@@ -61,28 +59,19 @@ const ORDERBOOK_OPEN_KEY = 'dshtrading.orderbook.open'
 const TRADE_DESK_OPEN_KEY = 'dshtrading.tradeDesk.open'
 const TICKER_POLL_MS = 5000
 const KLINE_RESYNC_MS = 30000
-// 衍生品指标快照轮询（issue #38）：一次刷新 = 2~5 个上游公共端点调用，取 30s
-// 对齐 K 线 resync 节奏，避免放大限频消耗（funding 8h 才变，OI 30s 粒度够看）。
-const DERIVATIVES_POLL_MS = 30000
-// 衍生品历史序列（issue #54，页签趋势卡）：8h 一期的费率与 1D OI 变化极慢，
-// 5min 节奏足够；仅页签激活时拉取，省上游配额。
-const DERIVATIVES_HISTORY_POLL_MS = 300000
 // 盘口/分笔轮询（issue #39）：竖栏打开才拉；一次刷新 = depth + trades 两请求，
 // 4s 在「盯盘时效」与公共端点限频之间取衡。
 const ORDERBOOK_POLL_MS = 4000
 // 交易台只读轮询（issue #40）：15s 慢节奏（签名端点 + 个人账户面，无盯盘时效要求）。
 const TRADE_DESK_POLL_MS = 15000
 // CN ETF 期权（2026-09-08 第一期只读面）：名册与到期月是连接器本地静态算
-// （不打网关），10min 足够；T 板链 30s 对齐衍生品快照节奏，且仅「期权」页签
+// （不打网关），10min 足够；T 板链 30s 对齐 ticker 节奏，且仅「期权」页签
 // 激活时才拉——网关未起时不空转（契约见 docs/options-bridge.md）。
 const OPTIONS_LIST_POLL_MS = 600000
 const OPTIONS_CHAIN_POLL_MS = 30000
-// 盘中周期 K 线根数按市场区分：crypto 取 300——OKX 单请求上限 300，图表每 30s
-// resync 一次，不触发游标翻页、不放大限频消耗；其余市场取 500。日 K 深度需求由
-// 1d 分支单独走 DAILY_LIMIT。
+// 盘中周期 K 线根数（曾按市场区分 crypto 300 / 其余 500；市场收敛后统一 500）。
+// 日 K 深度需求由 1d 分支单独走 DAILY_LIMIT。
 const KLINE_LIMIT_DEFAULT = 500
-const KLINE_LIMIT_BY_MARKET: Partial<Record<MarketId, number>> = { crypto: 300 }
-const klineLimit = (market: MarketId): number => KLINE_LIMIT_BY_MARKET[market] ?? KLINE_LIMIT_DEFAULT
 // 日 K（头部参考 + 日线图表）：750 根 ≈ 三年交易日；OKX 超出单请求 300 的部分由连接器 after 游标翻页补足。
 const DAILY_LIMIT = 750
 
@@ -124,27 +113,24 @@ export interface QuoteStageProps {
   fillComposer?: FillComposerFn
 }
 
+/** 市场收敛后唯一市场 cn（曾为四市场推断；符号形态判断保留作规范化注释参考）。 */
 function inferMarketFromSymbol(symbol?: string): MarketId | undefined {
   if (!symbol) return undefined
-  const sym = symbol.toUpperCase()
-  if (sym.endsWith('.SH') || sym.endsWith('.SZ') || /^\d{6}$/.test(sym)) return 'cn'
-  if (sym.endsWith('.HK') || /^\d{5}$/.test(sym)) return 'hk'
-  if (sym.includes('USDT') || sym.includes('BTC') || sym.includes('ETH')) return 'crypto'
-  return 'us'
+  return 'cn'
 }
 
 type SendState = 'idle' | 'sending' | 'sent' | 'error'
 
-/** 信号 reason 的币种符号（按市场；crypto 以 USD 计价近似）。 */
-const CURRENCY_SYMBOL: Record<MarketId, string> = { cn: '¥', hk: 'HK$', us: '$', crypto: '$' }
+/** 信号 reason 的币种符号（市场收敛后人民币）。 */
+const CURRENCY_SYMBOL: Record<MarketId, string> = { cn: '¥' }
 
 export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, fillComposer }: QuoteStageProps) {
   const instrument = useSelection(value => value.instrument)
-  const market: MarketId | undefined = (instrument?.market && ['crypto', 'us', 'cn', 'hk'].includes(instrument.market))
-    ? (instrument.market as MarketId)
+  const market: MarketId | undefined = instrument?.market === 'cn'
+    ? 'cn'
     : inferMarketFromSymbol(instrument?.symbol)
   const symbol = instrument?.symbol
-  const activeMarket: MarketId = market ?? 'crypto'
+  const activeMarket: MarketId = market ?? 'cn'
 
   const colorMode = useSyncExternalStore(colorModeStore.subscribe, colorModeStore.getSnapshot)
   // 数值紧凑单位 locale（亿/万 vs K/M/B）：词典哨兵键判定，随语言切换响应。
@@ -211,27 +197,16 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   const [optionChainLoaded, setOptionChainLoaded] = useState(false)
 
   /** 行情板块页签（图表 | 基本面 | 新闻 | 公告）：跨标的保持。
-   *  期权不再埋在此处——升格为与现货平级的「现货 ⇄ 期权」双透镜（见 lens）。 */
-  const [stageTab, setStageTab] = useState<'chart' | 'derivatives' | 'fundamentals' | 'options' | 'news' | 'announcements'>('chart')
+   *  期权不再埋在此处——升格为与现货平级的「现货 ⇄ 期权」双透镜（见 lens）。
+   *  「衍生品」页签（crypto 专属）已随市场收敛移除。 */
+  const [stageTab, setStageTab] = useState<'chart' | 'fundamentals' | 'options' | 'news' | 'announcements'>('chart')
   /** 「现货 ⇄ 期权」对等双透镜（2026-09-08 期权升格重构）：仅带期权标的（optionsAvailable）
    *  启用；期权从 6 个次级页签升格为与 A 股现货平级的一级切换。非期权标的恒 'spot'。 */
   const [lens, setLens] = useState<'spot' | 'options'>('spot')
   const activeLens = optionsAvailable ? lens : 'spot'
-  // 渲染期页签归一（issue #54 评审 L3）：衍生品页签是 crypto 专属，切到非 crypto
-  // 市场时渲染直接按图表页签处理——不等 useEffect 纠偏（paint 后才跑会闪一帧公告）。
-  // 基本面页签反向收敛（2026-09-04）：加密资产无标准财报矩阵，crypto 不再展示基本面，
-  // 残留的 fundamentals 页签同样渲染期归一到图表。
-  const viewTab =
-    (stageTab === 'derivatives' && market !== 'crypto') || (stageTab === 'fundamentals' && market === 'crypto')
-    || (stageTab === 'options' && !optionsAvailable)
-      ? 'chart'
-      : stageTab
-  /** 衍生品指标快照（issue #38，crypto 专属；null = 未实现/失败 → 面板整体隐藏）。 */
-  const [derivatives, setDerivatives] = useState<DerivativesData | null>(null)
-  /** 衍生品历史序列（issue #54；页签激活才拉；null = 未实现/失败 → 趋势卡隐藏）。 */
-  const [derivativesHistory, setDerivativesHistory] = useState<DerivativesHistory | null>(null)
-  /** 历史首个应答是否已落地（区分「加载中」与「不可用」，评审 L2）。 */
-  const [derivativesHistoryLoaded, setDerivativesHistoryLoaded] = useState(false)
+  // 渲染期页签归一（issue #54 评审 L3）：期权是注册标的专属，切到非注册标的
+  // （或未挂 connector-options）时渲染直接按图表页签处理——不等 useEffect 纠偏。
+  const viewTab = stageTab === 'options' && !optionsAvailable ? 'chart' : stageTab
   /** 盘口竖栏（issue #39）：开关跨标的/会话记忆；数据 null = 数据源未提供（降级提示）。 */
   const [orderbookOpen, setOrderbookOpen] = useState<boolean>(() => readOrderbookOpen())
   const [orderbook, setOrderbook] = useState<Orderbook | null>(null)
@@ -242,8 +217,9 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   /** 右侧栏资产面板（2026-09-05 起取代底部资产抽屉）：默认展开，开关跨会话记忆。 */
   const [tradePositions, setTradePositions] = useState<Position[] | null>(null)
   const [tradeBalances, setTradeBalances] = useState<AccountBalance[] | null>(null)
-  const [tradeOrders, setTradeOrders] = useState<Order[] | null>(null)
-  const [tradeFills, setTradeFills] = useState<TradeFill[] | null>(null)
+  // 挂单/成交行已随 crypto 衍生品面板移除消费端；state 仅保留写入端供刷新管道填充。
+  const [, setTradeOrders] = useState<Order[] | null>(null)
+  const [, setTradeFills] = useState<TradeFill[] | null>(null)
   /** 交易面不可用原因（2026-09-04）：positions 为探针，区分「市场未挂交易连接器」与「凭证缺失」。 */
   // positions 仍作探针以驱动 reason 分类（balances 列展示用）；持仓/汇总面已
   // 迁右缘资产面板（holdings-store 自管数据），不再消费这里的 reason。
@@ -282,8 +258,6 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
 
   const activePositions = tradeMode === 'paper' ? paperTradingStore.getPositions() : tradePositions
   const activeBalances = tradeMode === 'paper' ? paperTradingStore.getBalances() : tradeBalances
-  const activeOrders = tradeMode === 'paper' ? paperTradingStore.getOrders() : tradeOrders
-  const activeFills = tradeMode === 'paper' ? paperTradingStore.getFills() : tradeFills
   const paperCash = paperTradingStore.getAccount().cash
   void paperTick // 模拟账本 subscribe 通知的重渲染驱动（paper 行直读 store）
 
@@ -301,12 +275,11 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
       return paperCash
     }
     if (!activeBalances || activeBalances.length === 0) return 0
-    const targetAsset = activeMarket === 'crypto' ? 'USDT' : activeMarket === 'us' ? 'USD' : activeMarket === 'hk' ? 'HKD' : 'CNY'
-    const found = activeBalances.find((b) => b.asset.toUpperCase() === targetAsset.toUpperCase())
+    const found = activeBalances.find((b) => b.asset.toUpperCase() === 'CNY')
       ?? activeBalances.find((b) => /USD|USDT|CNY|HKD|CASH/i.test(b.asset))
       ?? activeBalances[0]
     return found ? found.free : 0
-  }, [tradeMode, paperCash, activeBalances, activeMarket])
+  }, [tradeMode, paperCash, activeBalances])
   /** 区间统计：框选模式开 + 已选逻辑下标区间（TvChart 上报，面板消费）。 */
   const [rangeMode, setRangeMode] = useState(false)
   const [rangeSelection, setRangeSelection] = useState<{ start: number; end: number } | null>(null)
@@ -368,7 +341,7 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
     const request = `${market}:${symbol}:${chartInterval}`
     requestRef.current = request
     try {
-      const rows = await fetchKlines(market, symbol, chartInterval, chartInterval === '1d' ? DAILY_LIMIT : klineLimit(market))
+      const rows = await fetchKlines(market, symbol, chartInterval, chartInterval === '1d' ? DAILY_LIMIT : KLINE_LIMIT_DEFAULT)
       if (requestRef.current !== request) return
       setKlines(rows)
       setKError(null)
@@ -387,32 +360,6 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
       .catch(() => { /* 头部统计缺省 */ })
     return () => { cancelled = true }
   }, [market, symbol])
-
-  // 衍生品指标轮询（issue #38，仅 crypto；现货输入由连接器升到对应永续）。
-  // 竞态守卫（issue #54 评审 M3）：换标的后在途响应丢弃，不覆盖新标的 state。
-  const derivativesRequestRef = useRef('')
-  usePoll(async () => {
-    if (market !== 'crypto' || symbol === undefined) return
-    const request = `${market}:${symbol}`
-    derivativesRequestRef.current = request
-    const data = await fetchDerivatives(market, symbol)
-    if (derivativesRequestRef.current !== request) return
-    setDerivatives(data)
-  }, DERIVATIVES_POLL_MS, [market, symbol])
-
-  // 衍生品历史序列轮询（issue #54，仅 crypto + 衍生品页签激活）。
-  // 竞态守卫同款：5min 周期下旧标的慢响应可挂很久，必须丢弃（评审 M3）。
-  const derivativesHistoryRequestRef = useRef('')
-  usePoll(async () => {
-    if (stageTab !== 'derivatives' || market !== 'crypto' || symbol === undefined) return
-    const request = `${market}:${symbol}`
-    derivativesHistoryRequestRef.current = request
-    const history = await fetchDerivativesHistory(market, symbol)
-    if (derivativesHistoryRequestRef.current !== request) return
-    setDerivativesHistory(history)
-    // L2：首个应答落地（无论成败）即离开「加载中」，null 从此可读作「不可用」。
-    setDerivativesHistoryLoaded(true)
-  }, DERIVATIVES_HISTORY_POLL_MS, [stageTab, market, symbol])
 
   // CN ETF 期权（2026-09-08 第一期只读面）：名册 → 到期月 → T 板链三段。
   // 名册：仅 CN 拉（连接器静态表，不打网关）；失败即空数组 → 页签不显示，不报错横幅。
@@ -543,14 +490,11 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
     })
   }
 
-  // 页签市场归一（issue #54 + 2026-09-04 基本面收敛）：衍生品是 crypto 专属，基本面是
-  // 非 crypto 专属（加密资产无标准财报）——切市场越界时自动回图表页签。
+  // 页签市场归一：期权是注册标的专属——切到非注册标的（或未挂
+  // connector-options）→ 回图表页签。（衍生品页签已随市场收敛移除。）
   useEffect(() => {
-    if (stageTab === 'derivatives' && market !== 'crypto') setStageTab('chart')
-    if (stageTab === 'fundamentals' && market === 'crypto') setStageTab('chart')
-    // 期权是注册标的专属：切到非注册标的（或未挂 connector-options）→ 回图表页签。
     if (stageTab === 'options' && !optionsAvailable) setStageTab('chart')
-  }, [stageTab, market, optionsAvailable])
+  }, [stageTab, optionsAvailable])
 
   // 统一填入反馈（2026-09-04 入口收敛）：sending/sent/error 状态由「发送给 Agent」
   // 按钮整体承载，行情快照与资金面快照共用同一套反馈。
@@ -593,38 +537,6 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
     })()
   }
 
-  // 「资金面快照」（原衍生品条「分析资金面」，issue #54；2026-09-04 收敛进统一
-  // 「发送给 Agent」下拉菜单）：把衍生品快照上下文填进会话输入框（只填不发）。
-  // 骨架走词典（derivatives.analyzeBody + 各行标签键）；行值为纯数字/代码，无文案。
-  const onSendFunding = (): void => {
-    if (derivatives === null || symbol === undefined) return
-    const d = derivatives
-    const parts = [
-      d.openInterest !== undefined
-        ? `- ${t('derivatives.oi')} ${fmtCompact(d.openInterest, numLocale)}${d.openInterestValue !== undefined ? ` (${fmtCompact(d.openInterestValue, numLocale)} USD)` : ''}`
-        : undefined,
-      d.fundingRate !== undefined
-        ? `- ${t('derivatives.funding')} ${fmtFundingRate(d.fundingRate)}${d.nextFundingRate !== undefined ? ` (${t('derivatives.predicted')} ${fmtFundingRate(d.nextFundingRate)})` : ''}`
-        : undefined,
-      d.longShortRatio !== undefined ? `- ${t('derivatives.longShort')} ${d.longShortRatio.toFixed(2)}` : undefined,
-      d.topTraderLongShortRatio !== undefined ? `- ${t('derivatives.topLongShort')} ${d.topTraderLongShortRatio.toFixed(2)}` : undefined,
-      d.takerBuySellRatio !== undefined ? `- ${t('derivatives.taker')} ${d.takerBuySellRatio.toFixed(2)}` : undefined,
-      d.markPrice !== undefined && d.indexPrice !== undefined && d.indexPrice > 0
-        ? `- ${t('derivatives.basis')} ${fmtPercent((d.markPrice - d.indexPrice) / d.indexPrice * 100)} (${t('derivatives.markPrice')} ${fmtPrice(d.markPrice)} / ${t('derivatives.indexPrice')} ${fmtPrice(d.indexPrice)})`
-        : undefined,
-    ].filter((line): line is string => line !== undefined)
-    const body = t('derivatives.analyzeBody', { symbol: d.symbol, source: d.source, lines: parts.join('\n') })
-    runFill(body)
-  }
-
-  const onCancelGuiOrder = async (orderId: string, sym?: string): Promise<boolean> => {
-    const ok = await cancelGuiOrder(activeMarket, orderId, sym)
-    if (ok) {
-      void refreshTradeDesk(activeMarket)
-    }
-    return ok
-  }
-
   // 换标的：立即清场
   useEffect(() => {
     setKlines(null)
@@ -632,9 +544,6 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
     setTicker(null)
     setHoverIndex(null)
     setKError(null)
-    setDerivatives(null)
-    setDerivativesHistory(null)
-    setDerivativesHistoryLoaded(false)
     setOrderbook(null)
     setTrades(null)
     setNewsItems(null)
@@ -912,8 +821,7 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
           sourcesUnavailable: t('compose.research.sourcesUnavailable'), guidance: t('compose.research.guidance'),
           omitted: t('compose.research.omitted'),
         })
-        const funding = derivatives === null ? '' : `derivatives: ${JSON.stringify(derivatives)}`
-        return [text, dataSection, research, funding].filter(Boolean).join('\n\n')
+        return [text, dataSection, research].filter(Boolean).join('\n\n')
       } finally {
         clearTimeout(timer)
       }
@@ -945,17 +853,22 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   const tickerName = (ticker as { name?: string })?.name
   const displayName = (!isPlaceholderName ? rawName : (tickerName || rawName || symbol))
 
-  /** 期权合约 → Agent 下单请求文案（dry-run 优先；ETF ↔ 期权互联在客户端即打通）。 */
+  /** 期权合约 → Agent 下单请求文案（dry-run 优先；ETF ↔ 期权互联在客户端即打通）。
+   *  文案走词典（options.agentOrder.*），骨架拼接在 zh/en 两侧对齐。 */
   const sendLegToAgent = fillComposer !== undefined
     ? (leg: SelectedOptionLeg): void => {
-        const verb = leg.side === 'call' ? '认购' : '认沽'
         const parts: string[] = [
-          `期权合约下单请求：标的 ${symbol ?? ''}（${displayName}），${verb} @ 行权价 ${leg.strike}`,
+          t('options.agentOrder.head', {
+            symbol: symbol ?? '',
+            name: displayName,
+            side: t(leg.side === 'call' ? 'options.side.call' : 'options.side.put'),
+            strike: leg.strike,
+          }),
         ]
-        if (leg.last !== undefined) parts.push(`，最新价 ${leg.last}`)
-        if (leg.iv !== undefined) parts.push(`，IV ${leg.iv}`)
-        parts.push('。请按当前交易设置评估并下单（dry-run 优先）。')
-        parts.push('本页只读分析，不构成投资建议。')
+        if (leg.last !== undefined) parts.push(t('options.agentOrder.last', { last: leg.last }))
+        if (leg.iv !== undefined) parts.push(t('options.agentOrder.iv', { iv: leg.iv }))
+        parts.push(t('options.agentOrder.tail'))
+        parts.push(t('options.agentOrder.disclaimer'))
         void fillComposer(parts.join(''))
       }
     : undefined
@@ -1013,30 +926,16 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
           >
             {t('quote.tab.chart')}
           </button>
-          {market === 'crypto' && (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={stageTab === 'derivatives'}
-              className={css.stageTab}
-              data-active={stageTab === 'derivatives' ? 'true' : undefined}
-              onClick={() => { setStageTab('derivatives') }}
-            >
-              {t('quote.tab.derivatives')}
-            </button>
-          )}
-          {market !== 'crypto' && (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={stageTab === 'fundamentals'}
-              className={css.stageTab}
-              data-active={stageTab === 'fundamentals' ? 'true' : undefined}
-              onClick={() => { setStageTab('fundamentals') }}
-            >
-              {t('quote.tab.fundamentals')}
-            </button>
-          )}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={stageTab === 'fundamentals'}
+            className={css.stageTab}
+            data-active={stageTab === 'fundamentals' ? 'true' : undefined}
+            onClick={() => { setStageTab('fundamentals') }}
+          >
+            {t('quote.tab.fundamentals')}
+          </button>
           <button
             type="button"
             role="tab"
@@ -1111,20 +1010,6 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
                   >
                     {t('quote.sendMenuSnapshot')}
                   </button>
-                  {market === 'crypto' && derivatives !== null && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className={css.sendMenuItem}
-                      title={t('quote.sendFundingHint')}
-                      onClick={() => {
-                        setSendMenuOpen(false)
-                        onSendFunding()
-                      }}
-                    >
-                      {t('quote.sendMenuFunding')}
-                    </button>
-                  )}
                 </div>
               </>
             )}
@@ -1140,14 +1025,6 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
           <span className={css.stat}><label>{t('quote.high')}</label>{fmtPrice(readoutCandle?.high)}</span>
           <span className={css.stat}><label>{t('quote.low')}</label>{fmtPrice(readoutCandle?.low)}</span>
           <span className={css.stat}><label>{t('quote.volume')}</label>{fmtCompact(readoutCandle?.volume, numLocale)}</span>
-          {market === 'crypto' && derivatives !== null && (
-            <DerivativesPane
-              t={t}
-              derivatives={derivatives}
-              colorMode={colorMode}
-              onOpenStage={() => { setStageTab('derivatives') }}
-            />
-          )}
         </div>
       )}
 
@@ -1465,12 +1342,8 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
             underlyingName={displayName}
             onViewSpot={() => { setLens('spot'); setStageTab('chart') }}
             onTradeSpot={() => { setTradeDeskOpen(true) }}
-            onSendLegToAgent={sendLegToAgent}
+            {...(sendLegToAgent !== undefined ? { onSendLegToAgent: sendLegToAgent } : {})}
           />
-        </div>
-      ) : viewTab === 'derivatives' ? (
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <DerivativesStage t={t} derivatives={derivatives} history={derivativesHistory} historyLoaded={derivativesHistoryLoaded} colorMode={colorMode} />
         </div>
       ) : viewTab === 'fundamentals' ? (
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -1840,8 +1713,5 @@ function writeTradeDeskOpen(open: boolean): void {
 }
 
 const TAB_KEY: Record<MarketId, MarketLocaleKey> = {
-  crypto: 'tab.crypto',
-  us: 'tab.us',
   cn: 'tab.cn',
-  hk: 'tab.hk',
 }
