@@ -47,7 +47,7 @@ describe('wireHostWatchlistSync', () => {
 
   it('迁移：host 空 + 本地有定制行 → 导入成功后重拉；host 非空拒绝则跳过', async () => {
     const watchlists = createWatchlistStore()
-    watchlists.add('cn', MAOTAI) // 本地镜像（localStorage 模拟）
+    watchlists.set({ cn: [MAOTAI] }) // 本地已定制镜像（localStorage 模拟）
     const selection = createSelectionStore()
 
     apiMock.fetchHostWatchlists.mockResolvedValueOnce({}) // 首查：host 空
@@ -61,7 +61,7 @@ describe('wireHostWatchlistSync', () => {
 
   it('迁移幂等：host 非空拒绝导入 → 不改本地（等待统一重拉）', async () => {
     const watchlists = createWatchlistStore()
-    watchlists.add('cn', MAOTAI)
+    watchlists.set({ cn: [MAOTAI] })
     const selection = createSelectionStore()
 
     apiMock.fetchHostWatchlists.mockResolvedValueOnce({}) // 首查 host 空
@@ -81,12 +81,13 @@ describe('wireHostWatchlistSync', () => {
 
     wireHostWatchlistSync({ watchlists, selection })
 
-    watchlists.add('cn', MAOTAI)
-    await vi.waitFor(() => { expect(watchlists.getSnapshot().cn).toHaveLength(1) })
-    expect(apiMock.addHostWatchlistRow).toHaveBeenCalledWith(MAOTAI)
+    const cmb: Instrument = { market: 'cn', symbol: '600036', name: '招商银行' }
+    watchlists.add('cn', cmb)
+    await vi.waitFor(() => { expect(watchlists.getSnapshot().cn).toHaveLength(5) })
+    expect(apiMock.addHostWatchlistRow).toHaveBeenCalledWith(cmb)
 
-    watchlists.remove('cn', '600519')
-    await vi.waitFor(() => { expect(watchlists.getSnapshot().cn).toHaveLength(0) })
+    watchlists.remove('cn', '600036')
+    await vi.waitFor(() => { expect(watchlists.getSnapshot().cn).toHaveLength(4) })
 
     selection.select(MAOTAI)
     await vi.waitFor(() => { expect(selection.getSnapshot().instrument).toEqual(MAOTAI) })

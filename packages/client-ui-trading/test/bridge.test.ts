@@ -469,15 +469,26 @@ describe('watchlist + selection endpoints（issue #32 / P3）', () => {
 
   it('POST /watchlists 追加行（幂等 added）→ GET 可见 → DELETE 移除', async () => {
     const { bridge } = makeWatchlistHost()
-    const add = await dispatchBridgeRequest(bridge, 'POST', '/watchlists', new URLSearchParams(), { market: 'cn', symbol: '600519', name: '贵州茅台' })
-    expect(add.payload).toMatchObject({ ok: true, added: true, instrument: { market: 'cn', symbol: '600519' } })
-    const dup = await dispatchBridgeRequest(bridge, 'POST', '/watchlists', new URLSearchParams(), { market: 'cn', symbol: '600519' })
+    const add = await dispatchBridgeRequest(bridge, 'POST', '/watchlists', new URLSearchParams(), { market: 'cn', symbol: '600036', name: '招商银行' })
+    expect(add.payload).toMatchObject({ ok: true, added: true, instrument: { market: 'cn', symbol: '600036' } })
+    const dup = await dispatchBridgeRequest(bridge, 'POST', '/watchlists', new URLSearchParams(), { market: 'cn', symbol: '600036' })
     expect((dup.payload as { added: boolean }).added).toBe(false)
 
     const list = await dispatchBridgeRequest(bridge, 'GET', '/watchlists', new URLSearchParams())
-    expect(list.payload).toMatchObject({ ok: true, watchlists: { cn: [{ market: 'cn', symbol: '600519', name: '贵州茅台' }] } })
+    expect(list.payload).toMatchObject({
+      ok: true,
+      watchlists: {
+        cn: [
+          { market: 'cn', symbol: '600519', name: '贵州茅台' },
+          { market: 'cn', symbol: '000001', name: '平安银行' },
+          { market: 'cn', symbol: '601318', name: '中国平安' },
+          { market: 'cn', symbol: '510050', name: '上证50ETF' },
+          { market: 'cn', symbol: '600036', name: '招商银行' },
+        ],
+      },
+    })
 
-    const del = await dispatchBridgeRequest(bridge, 'DELETE', '/watchlists', new URLSearchParams({ market: 'cn', symbol: '600519' }))
+    const del = await dispatchBridgeRequest(bridge, 'DELETE', '/watchlists', new URLSearchParams({ market: 'cn', symbol: '600036' }))
     expect(del.payload).toMatchObject({ ok: true, removed: true })
     await expect(dispatchBridgeRequest(bridge, 'DELETE', '/watchlists', new URLSearchParams({ market: 'cn' })))
       .rejects.toThrowError(/market and symbol are required/)

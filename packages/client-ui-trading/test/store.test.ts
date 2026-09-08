@@ -42,9 +42,15 @@ describe('createWatchlistStore', () => {
     expect(store.isCustomized('cn')).toBe(false)
     expect(store.listFor('cn').map(row => row.symbol)).toContain('600519')
 
+    store.add('cn', { market: 'cn', symbol: '600519', name: '贵州茅台' })
+    expect(store.isCustomized('cn')).toBe(false)
+
     store.add('cn', { market: 'cn', symbol: '600036', name: '招商银行' })
     expect(store.isCustomized('cn')).toBe(true)
     expect(store.listFor('cn').some(row => row.symbol === '600036')).toBe(true)
+    expect(store.listFor('cn').map(row => row.symbol)).toEqual(
+      ['600519', '000001', '601318', '510050', '600036'],
+    )
 
     store.add('cn', { market: 'cn', symbol: '600036', name: '招商银行' })
     expect(store.listFor('cn').filter(row => row.symbol === '600036')).toHaveLength(1)

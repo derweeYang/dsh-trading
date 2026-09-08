@@ -25,6 +25,7 @@ Status: implemented
 - **未定制状态下的 remove 基准回落**：
   - 当市场尚未定制（`map[market] === undefined`）时，`remove(market, symbol)` 以 `WATCHLIST_SEEDS[market]` 为基底进行过滤。若匹配中并删除了标的，则将剩余标的物化为该市场的定制列表并写盘持久化，返回 `true` 并广播事件；若种子中亦无该标的，返回 `false`。
   - 客户端本地 `store.ts` 的 `remove` 保持同构：未定制时基于 `DEFAULT_WATCHLISTS[targetMarket]` 过滤并持久化。
+- **未定制状态下的 add 基准回落**（2026-09-08 补齐，与 remove 同构）：见 [watchlist-add-materialize-seeds](2026-09-08-watchlist-add-materialize-seeds.md)。未定制时 `add` 以种子为基底追加；已在种子中则返回 `false` 且不落盘。
 - **端到端空数组保留**：
   - `toLocalWatchlists` 保留 `Array.isArray(rows)` 的空数组映射；`isHostWatchlists` 基于 `Object.keys(value).length > 0` 识别 host 记录；`bridge.ts` 的 `importWatchlists` 幂等保护同步采用 key 数量检查。
 

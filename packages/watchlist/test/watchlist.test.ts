@@ -29,9 +29,13 @@ function makeDeps() {
 describe('memory stores', () => {
   it('add 按 symbol 去重；remove 返回 existed；save 全量替换', async () => {
     const store = createMemoryWatchlistStore()
-    expect(await store.add('cn', { market: 'cn', symbol: '600519', name: '贵州茅台' })).toBe(true)
-    expect(await store.add('cn', { market: 'cn', symbol: '600519' })).toBe(false)
-    expect(await store.add('cn', { market: 'cn', symbol: '000001', name: '平安银行' })).toBe(true)
+    expect(await store.add('cn', { market: 'cn', symbol: '600519', name: '贵州茅台' })).toBe(false)
+    expect(await store.add('cn', { market: 'cn', symbol: '600036', name: '招商银行' })).toBe(true)
+    expect(await store.add('cn', { market: 'cn', symbol: '600036' })).toBe(false)
+    const afterAdd = await store.list()
+    expect(afterAdd.cn?.map(row => row.symbol)).toEqual(
+      expect.arrayContaining(['600519', '000001', '601318', '510050', '600036']),
+    )
     expect(await store.remove('cn', '600519')).toBe(true)
     expect(await store.remove('cn', '600519')).toBe(false)
     await store.save({ cn: [{ market: 'cn', symbol: '510050' }] })
@@ -44,9 +48,13 @@ describe('file stores（原子写）', () => {
     const dir = await mkdtemp(join(tmpdir(), 'dsh-watchlist-'))
     const filePath = join(dir, 'watchlists.json')
     const store = createFileWatchlistStore(filePath)
-    await store.add('cn', { market: 'cn', symbol: '600519', name: '贵州茅台' })
+    await store.add('cn', { market: 'cn', symbol: '600036', name: '招商银行' })
     const reread = createFileWatchlistStore(filePath)
-    expect(await reread.list()).toEqual({ cn: [{ market: 'cn', symbol: '600519', name: '贵州茅台' }] })
+    const persisted = await reread.list()
+    expect(persisted.cn?.map(row => row.symbol)).toEqual(
+      ['600519', '000001', '601318', '510050', '600036'],
+    )
+    expect(persisted.cn?.at(-1)).toEqual({ market: 'cn', symbol: '600036', name: '招商银行' })
     const files = await readdir(dir)
     expect(files.filter(f => f.includes('.tmp.'))).toEqual([])
   })
@@ -81,26 +89,27 @@ describe('watchlist_* tools', () => {
     expect(Object.values(empty.sources).every(source => source === 'seed')).toBe(true)
     expect(empty.watchlists.cn[0]).toEqual({ market: 'cn', symbol: '600519', name: '贵州茅台' })
 
-    await createWatchlistAddTool(deps).execute({ market: 'cn', symbol: '600519', name: '贵州茅台' })
+    await createWatchlistAddTool(deps).execute({ market: 'cn', symbol: '600036', name: '招商银行' })
     const wire = JSON.parse(String(await tool.execute({}))) as {
       total: number
       sources: Record<string, 'custom' | 'seed'>
       watchlists: Record<string, Array<{ symbol: string }>>
     }
-    // 定制后该市场以用户行为准（不再混入种子），来源翻 custom；行内容不变。
+    // 未定制时第一次加新标的：物化种子 + 新行，来源翻 custom。
     expect(wire.sources.cn).toBe('custom')
-    expect(wire.watchlists.cn).toEqual([{ market: 'cn', symbol: '600519', name: '贵州茅台' }])
-    // cn 1（定制后种子被抑制）。
-    expect(wire.total).toBe(1)
+    expect(wire.watchlists.cn.map(row => row.symbol)).toEqual(
+      ['600519', '000001', '601318', '510050', '600036'],
+    )
+    expect(wire.total).toBe(5)
   })
 
   it('watchlist_add：去重 + 事件回调仅在实际新增时触发', async () => {
     const { deps, onWatchlistsChanged } = makeDeps()
     const tool = createWatchlistAddTool(deps)
-    const first = JSON.parse(String(await tool.execute({ market: 'cn', symbol: '600519' }))) as { added: boolean }
+    const first = JSON.parse(String(await tool.execute({ market: 'cn', symbol: '600036' }))) as { added: boolean }
     expect(first.added).toBe(true)
     expect(onWatchlistsChanged).toHaveBeenCalledTimes(1)
-    const second = JSON.parse(String(await tool.execute({ market: 'cn', symbol: '600519' }))) as { added: boolean }
+    const second = JSON.parse(String(await tool.execute({ market: 'cn', symbol: '600036' }))) as { added: boolean }
     expect(second.added).toBe(false)
     expect(onWatchlistsChanged).toHaveBeenCalledTimes(1)
   })
@@ -190,16 +199,18 @@ describe('file store 并发读改写（issue #58）', () => {
     const filePath = join(dir, 'watchlists.json')
     const store = createFileWatchlistStore(filePath)
     const results = await Promise.all([
-      store.add('cn', { market: 'cn', symbol: '600519' }),
-      store.add('cn', { market: 'cn', symbol: '000001' }),
-      store.add('cn', { market: 'cn', symbol: '601318' }),
-      store.add('cn', { market: 'cn', symbol: '510050' }),
+      store.add('cn', { market: 'cn', symbol: '000858' }),
+      store.add('cn', { market: 'cn', symbol: '600036' }),
+      store.add('cn', { market: 'cn', symbol: '000333' }),
+      store.add('cn', { market: 'cn', symbol: '601166' }),
     ])
     expect(results).toEqual([true, true, true, true])
     // 新实例（空缓存）从盘上读：修复前最后一个 flush 用旧态整行覆盖，先写行丢失。
     const reread = createFileWatchlistStore(filePath)
     const list = await reread.list()
-    expect(list.cn?.map(r => r.symbol).sort()).toEqual(['000001', '510050', '600519', '601318'])
+    expect(list.cn?.map(r => r.symbol).sort()).toEqual(
+      ['000001', '000333', '000858', '510050', '600036', '600519', '601166', '601318'],
+    )
     const files = await readdir(dir)
     expect(files.filter(f => f.includes('.tmp.'))).toEqual([])
   })
@@ -209,12 +220,14 @@ describe('file store 并发读改写（issue #58）', () => {
     const filePath = join(dir, 'watchlists.json')
     const store = createFileWatchlistStore(filePath)
     const results = await Promise.all([
-      store.add('cn', { market: 'cn', symbol: '600519' }),
-      store.add('cn', { market: 'cn', symbol: '600519' }),
+      store.add('cn', { market: 'cn', symbol: '600036' }),
+      store.add('cn', { market: 'cn', symbol: '600036' }),
     ])
     expect(results.filter(Boolean)).toHaveLength(1)
     const list = await store.list()
-    expect(list.cn).toHaveLength(1)
+    expect(list.cn?.map(r => r.symbol)).toEqual(
+      ['600519', '000001', '601318', '510050', '600036'],
+    )
   })
 
   it('file store 空文件下直接 remove 默认种子标的持久化落盘，新实例可见定制', async () => {

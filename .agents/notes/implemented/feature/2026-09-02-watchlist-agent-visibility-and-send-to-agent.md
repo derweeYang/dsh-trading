@@ -25,7 +25,7 @@ owner 2026-09-02 实测暴露两处「行情插件数据对 Agent 不透明」�
 ## Alternatives considered
 
 - **客户端首启把种子行写进 host store（升级迁移同款）**：会违背 issue #32/P3 的既定裁决「种子不进 host」——种子是展示回退不是用户数据，写进去后 remove/customize 语义全部变形，多端（重置 localStorage 的浏览器）行为漂移；合并视图在读取侧闭环，零写入。
-- **`watchlist_add` 时自动补全市场种子**：方向反了——用户加一行不该拉进来 14 行噪音，agent 侧重复度更高。
+- **`watchlist_add` 时自动补全市场种子**：当时否决（种子表更大，agent 加一行会拉进 14 行噪音）。2026-09-08 GUI 搜索加一行会把可见默认列表整表替换，第一次 add 改为与 remove 同构物化种子，见 [watchlist-add-materialize-seeds](../bug-fix/2026-09-08-watchlist-add-materialize-seeds.md)。
 - **按钮走 DOM 注入 composer（querySelector 填 textarea）**：官方 composer 是 shell 持有的 Lexical 编辑器，对外只暴露 session 作用域 slot 的 `InputActions` 标准 prop 与 `conversation` 根服务（`SessionInputResolver` face）——`setDraft`/`addImages` 是文档化的程序化写入口，DOM hack 反而绕过草稿镜像与撤销栈（旧首版 `session.prompt` 直投方案已被 owner 复审否决：自动启动分析过了头，见 Decision 4）。
 - **截图走 html2canvas 全面板**：重依赖 + CSS 兼容风险；v5 `takeScreenshot()` 是库原生能力，零依赖覆盖图表主体（头部报价文本已并入消息文本，无需入图）。
 - **无会话时禁用按钮**：home 场景（未开会话）恰是用户最可能指行情问询的时刻；startSession + 短轮询让入口恒可用。

@@ -174,7 +174,8 @@ export function createWatchlistStore(): WatchlistStore {
         ...(instrument.name ? { name: instrument.name } : {}),
       }
       store.update((current) => {
-        const rows = current[targetMarket] ?? []
+        const existing = current[targetMarket]
+        const rows = Array.isArray(existing) ? existing : (DEFAULT_WATCHLISTS[targetMarket] ?? [])
         if (rows.some(row => row.symbol === sanitized.symbol)) return current
         return { ...current, [targetMarket]: [...rows, sanitized] }
       })
