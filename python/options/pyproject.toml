@@ -15,6 +15,8 @@ dependencies = [
   "pandas>=2.2,<3",
   "pyarrow>=18,<21",
   "akshare>=1.16",
+  "volsurface>=0.2.0",
+  "matplotlib>=3.10.9",
 ]
 
 [project.scripts]
