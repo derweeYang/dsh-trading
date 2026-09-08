@@ -173,6 +173,40 @@
   background: var(--dsw-futu-text-primary, #1a1e24);
 }
 
+/* 「现货 ⇄ 期权」对等双透镜（2026-09-08 期权升格）：与次级下划线页签视觉区分的胶囊组 */
+.lensToggle {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  border-radius: 999px;
+  padding: 2px;
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+}
+
+.lensTab {
+  appearance: none;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  padding: 3px 16px;
+  border-radius: 999px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.lensTab:hover {
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.lensTab[data-active='true'] {
+  background: var(--dsw-futu-accent, #3b82f6);
+  color: #fff;
+}
+
 /* 区间统计按钮激活态（与技术指标按钮同族样式） */
 .pickerButton[data-active='true'] {
   color: #2563eb;

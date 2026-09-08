@@ -1,18 +1,26 @@
 /**
- * CN ETF 期权 T 型报价板（2026-09-08 第一期只读面，QuoteStage「期权」页签）。
+ * CN ETF 期权 T 型报价板（2026-09-08 第一期只读面；2026-09-08 期权升格重构后由
+ * QuoteStage「现货 ⇄ 期权」对等双透镜的「期权」透镜挂载，与 A 股现货平级）。
  *
- * 形态：到期月胶囊条（本地算，网关未起也能画）+ T 表（中间行权价、左认购右认沽）。
- * 数据全部来自桥 `GET /dshtrading/api/options/{expiries,chain}`，类型取
- * `@dshtrading/api`——不在 client 另造一份（交接契约 docs/options-bridge.md）。
+ * 形态：ETF 联动操作条（查看标的 / 交易现货 / 把选中合约发给 Agent 下单）+ 到期月
+ * 胶囊条（本地算，网关未起也能画）+ T 表（中间行权价、左认购右认沽）。数据全部
+ * 来自桥 `GET /dshtrading/api/options/{expiries,chain}`，类型取 `@dshtrading/api`
+ * ——不在 client 另造一份（交接契约 docs/options-bridge.md）。
+ *
+ * **ETF ↔ ETF 期权互联（本期目标）**：
+ * - 顶部联动条把期权的「标的 ETF」做实——一键切回现货透镜（onViewSpot）、一键打开
+ *   现货交易台（onTradeSpot），使期权分析与 ETF 现货交易闭环；
+ * - T 表任意一档（认购/认沽）可点选为待下单合约，经 onSendLegToAgent 把合约要素
+ *   交给 Agent 评估下单（dry-run 优先），期权下单链路在客户端即与现货交易打通。
  *
  * 降级纪律：
- * - 未挂 connector-options → 页签整体不渲染（上层的显隐判据），本组件不处理；
+ * - 未挂 connector-options → 透镜整体不渲染（QuoteStage 的显隐判据），本组件不处理；
  * - TRADING_NETWORK → 提示启动网关；TRADING_NO_DATA → 空态 + 原文 message；
- * - 首个应答在途（loaded=false）→ 留白加载，不闪「不可用」；
- * - 点某一档不切换图表标的（本期只读，不联动）。
+ * - 首个应答在途（loaded=false）→ 留白加载，不闪「不可用」。
  *
  * 本页只读分析，不构成投资建议。
  */
+import { useState } from 'react'
 import type { OptionChain, OptionExpiryMonth, OptionQuoteRow } from '@dshtrading/api'
 import type { ColorMode } from './color-mode.ts'
 import type { MarketLocaleKey } from './contract.ts'
@@ -20,6 +28,14 @@ import { directionColor, fmtClock, fmtCompact, fmtPercent, fmtPrice } from './fo
 import css from './options-stage.module.css'
 
 export type OptionsStageTranslate = (key: MarketLocaleKey) => string
+
+/** 用户在 T 表点选的待下单合约要素（交给 Agent 评估下单，dry-run 优先）。 */
+export interface SelectedOptionLeg {
+  side: 'call' | 'put'
+  strike: number
+  last?: number
+  iv?: number
+}
 
 export interface OptionsStageProps {
   t: OptionsStageTranslate
@@ -35,6 +51,16 @@ export interface OptionsStageProps {
   /** 首个链应答是否已落地（区分「加载中」与「不可用」）。 */
   loaded: boolean
   colorMode: ColorMode
+  /** 标的 ETF 代码（用于联动条展示与「查看现货」回跳）。 */
+  underlyingSymbol: string
+  /** 标的 ETF 名称（联动条展示，缺省回退代码）。 */
+  underlyingName?: string
+  /** 查看标的现货：切回现货透镜并定位该 ETF（由 QuoteStage 注入）。 */
+  onViewSpot: () => void
+  /** 交易现货 ETF：打开现货交易台预填该 ETF（由 QuoteStage 注入）。 */
+  onTradeSpot: () => void
+  /** 把选中合约要素交给 Agent 评估下单（dry-run 优先）；未注入（无 fillComposer）则不渲染按钮。 */
+  onSendLegToAgent?: (leg: SelectedOptionLeg) => void
 }
 
 /** 行权价并集升序：认购/认沽挂出的档位未必对称（深市静态表尤其）。 */
@@ -67,12 +93,61 @@ function snapshotClock(snapshotAt: string | undefined): string | undefined {
 
 export function OptionsStage({
   t, months, selectedMonth, onSelectMonth, chain, failure, loaded, colorMode,
+  underlyingSymbol, underlyingName, onViewSpot, onTradeSpot, onSendLegToAgent,
 }: OptionsStageProps): React.JSX.Element {
   const strikes = chain === null ? [] : strikeOrder(chain)
   const clock = chain === null ? undefined : snapshotClock(chain.snapshotAt)
+  /** 用户在 T 表点选的待下单合约（认购/认沽 + 行权价）。 */
+  const [selectedLeg, setSelectedLeg] = useState<SelectedOptionLeg | null>(null)
 
   return (
     <div className={css.root} data-dshtrading-options-stage="">
+      {/* ETF ↔ 期权 联动操作条：标的回跳 / 交易现货 / 合约下单（本期互联核心） */}
+      <div className={css.actionBar}>
+        <button
+          type="button"
+          className={css.underlyingChip}
+          aria-label={t('options.viewSpot')}
+          title={t('options.viewSpot')}
+          onClick={onViewSpot}
+        >
+          <label>{t('options.underlying')}</label>
+          <span className={css.underlyingName}>{underlyingName ?? underlyingSymbol}</span>
+          <span className={css.underlyingCode}>{underlyingSymbol}</span>
+        </button>
+        <button
+          type="button"
+          className={css.tradeSpotBtn}
+          onClick={onTradeSpot}
+        >
+          {t('options.tradeSpot')}
+        </button>
+        <span className={css.spacer} />
+        {selectedLeg !== null && (
+          <span className={css.legTag}>
+            <span>{t('options.legSelected')}</span>
+            <strong>{t(selectedLeg.side === 'call' ? 'options.side.call' : 'options.side.put')} @{fmtPrice(selectedLeg.strike)}</strong>
+            <button
+              type="button"
+              className={css.legClear}
+              aria-label={t('options.leg.clear')}
+              title={t('options.leg.clear')}
+              onClick={() => { setSelectedLeg(null) }}
+            >
+              ✕
+            </button>
+          </span>
+        )}
+        <button
+          type="button"
+          className={css.sendLegBtn}
+          disabled={selectedLeg === null || onSendLegToAgent === undefined}
+          onClick={() => { if (selectedLeg !== null && onSendLegToAgent !== undefined) onSendLegToAgent(selectedLeg) }}
+        >
+          {t('options.sendLegToAgent')}
+        </button>
+      </div>
+
       {/* 到期月胶囊：本地算，网关未起也画得出来 */}
       <div className={css.expiryBar} role="tablist" aria-label="option expiry months">
         {months.length === 0
@@ -145,21 +220,37 @@ export function OptionsStage({
                           const put = rowOf(chain.puts, strike)
                           const callPct = call?.changePct
                           const putPct = put?.changePct
+                          const callSelected = selectedLeg?.side === 'call' && selectedLeg.strike === strike
+                          const putSelected = selectedLeg?.side === 'put' && selectedLeg.strike === strike
+                          const selectCall = (): void => {
+                            setSelectedLeg({ side: 'call', strike, last: call?.last ?? call?.prevSettle, iv: call?.impliedVol })
+                          }
+                          const selectPut = (): void => {
+                            setSelectedLeg({ side: 'put', strike, last: put?.last ?? put?.prevSettle, iv: put?.impliedVol })
+                          }
                           return (
                             <tr key={strike} className={css.row}>
-                              <td className={css.iv}>{fmtIv(call?.impliedVol)}</td>
-                              <td>{call?.volume === undefined ? '—' : fmtCompact(call.volume)}</td>
-                              <td style={callPct === undefined ? undefined : { color: directionColor(callPct, colorMode) }}>
+                              <td className={`${css.iv} ${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectCall}>{fmtIv(call?.impliedVol)}</td>
+                              <td className={`${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectCall}>{call?.volume === undefined ? '—' : fmtCompact(call.volume)}</td>
+                              <td
+                                className={`${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`}
+                                onClick={selectCall}
+                                style={callPct === undefined ? undefined : { color: directionColor(callPct, colorMode) }}
+                              >
                                 {fmtPercent(callPct)}
                               </td>
-                              <td className={css.last}>{fmtPrice(call?.last ?? call?.prevSettle)}</td>
+                              <td className={`${css.last} ${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectCall}>{fmtPrice(call?.last ?? call?.prevSettle)}</td>
                               <td className={css.strikeCell}>{fmtPrice(strike)}</td>
-                              <td className={css.last}>{fmtPrice(put?.last ?? put?.prevSettle)}</td>
-                              <td style={putPct === undefined ? undefined : { color: directionColor(putPct, colorMode) }}>
+                              <td className={`${css.last} ${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectPut}>{fmtPrice(put?.last ?? put?.prevSettle)}</td>
+                              <td
+                                className={`${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`}
+                                onClick={selectPut}
+                                style={putPct === undefined ? undefined : { color: directionColor(putPct, colorMode) }}
+                              >
                                 {fmtPercent(putPct)}
                               </td>
-                              <td>{put?.volume === undefined ? '—' : fmtCompact(put.volume)}</td>
-                              <td className={css.iv}>{fmtIv(put?.impliedVol)}</td>
+                              <td className={`${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectPut}>{put?.volume === undefined ? '—' : fmtCompact(put.volume)}</td>
+                              <td className={`${css.iv} ${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectPut}>{fmtIv(put?.impliedVol)}</td>
                             </tr>
                           )
                         })}

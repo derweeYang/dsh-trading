@@ -22,7 +22,7 @@ import type { SendImageInput, FillComposerFn } from './fill-composer.ts'
 import { FundamentalsStage } from './FundamentalsStage.tsx'
 import { DerivativesPane } from './DerivativesPane.tsx'
 import { DerivativesStage } from './DerivativesStage.tsx'
-import { OptionsStage } from './OptionsStage.tsx'
+import { OptionsStage, type SelectedOptionLeg } from './OptionsStage.tsx'
 import { OrderbookPane } from './OrderbookPane.tsx'
 import { OrderPanel } from './OrderPanel.tsx'
 import { paperTradingStore } from './paper-trading-store.ts'
@@ -210,8 +210,13 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   /** 首个链应答是否落地（区分「加载中」与「不可用」）。 */
   const [optionChainLoaded, setOptionChainLoaded] = useState(false)
 
-  /** 行情板块页签（图表 | 基本面 | 期权 | 新闻 | 公告）：跨标的保持。 */
+  /** 行情板块页签（图表 | 基本面 | 新闻 | 公告）：跨标的保持。
+   *  期权不再埋在此处——升格为与现货平级的「现货 ⇄ 期权」双透镜（见 lens）。 */
   const [stageTab, setStageTab] = useState<'chart' | 'derivatives' | 'fundamentals' | 'options' | 'news' | 'announcements'>('chart')
+  /** 「现货 ⇄ 期权」对等双透镜（2026-09-08 期权升格重构）：仅带期权标的（optionsAvailable）
+   *  启用；期权从 6 个次级页签升格为与 A 股现货平级的一级切换。非期权标的恒 'spot'。 */
+  const [lens, setLens] = useState<'spot' | 'options'>('spot')
+  const activeLens = optionsAvailable ? lens : 'spot'
   // 渲染期页签归一（issue #54 评审 L3）：衍生品页签是 crypto 专属，切到非 crypto
   // 市场时渲染直接按图表页签处理——不等 useEffect 纠偏（paint 后才跑会闪一帧公告）。
   // 基本面页签反向收敛（2026-09-04）：加密资产无标准财报矩阵，crypto 不再展示基本面，
@@ -940,6 +945,21 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   const tickerName = (ticker as { name?: string })?.name
   const displayName = (!isPlaceholderName ? rawName : (tickerName || rawName || symbol))
 
+  /** 期权合约 → Agent 下单请求文案（dry-run 优先；ETF ↔ 期权互联在客户端即打通）。 */
+  const sendLegToAgent = fillComposer !== undefined
+    ? (leg: SelectedOptionLeg): void => {
+        const verb = leg.side === 'call' ? '认购' : '认沽'
+        const parts: string[] = [
+          `期权合约下单请求：标的 ${symbol ?? ''}（${displayName}），${verb} @ 行权价 ${leg.strike}`,
+        ]
+        if (leg.last !== undefined) parts.push(`，最新价 ${leg.last}`)
+        if (leg.iv !== undefined) parts.push(`，IV ${leg.iv}`)
+        parts.push('。请按当前交易设置评估并下单（dry-run 优先）。')
+        parts.push('本页只读分析，不构成投资建议。')
+        void fillComposer(parts.join(''))
+      }
+    : undefined
+
   return (
     <div className={css.root} data-dshtrading-quote-stage="">
       {/* 顶部报价头与二级 Sub-Tab 导航（图表 | 基本面） */}
@@ -954,8 +974,34 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
           <span>{fmtChange(stats.change)}</span>
           <span>{fmtPercent(stats.pct)}</span>
         </span>
-        {/* 行情板块页签：图表 | 基本面 | 新闻 | 公告（富途牛牛式，页签随报价头同行）；
-            衍生品仅 crypto（issue #54），基本面仅非 crypto（加密资产无标准财报，2026-09-04） */}
+        {/* 「现货 ⇄ 期权」对等双透镜（2026-09-08 期权升格）：带期权 ETF 才有；
+            与次级页签视觉区分的胶囊组，期权与 A 股现货平级，不再埋在页签里。 */}
+        {optionsAvailable && (
+          <div className={css.lensToggle} role="tablist" aria-label="spot or options lens">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeLens === 'spot'}
+              className={css.lensTab}
+              data-active={activeLens === 'spot' ? 'true' : undefined}
+              onClick={() => { setLens('spot'); if (stageTab === 'options') setStageTab('chart') }}
+            >
+              {t('lens.spot')}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeLens === 'options'}
+              className={css.lensTab}
+              data-active={activeLens === 'options' ? 'true' : undefined}
+              onClick={() => { setLens('options') }}
+            >
+              {t('lens.options')}
+            </button>
+          </div>
+        )}
+        {/* 次级板块页签（图表 | 基本面 | 新闻 | 公告）：现货透镜下随报价头同行；期权透镜下整体隐藏 */}
+        {activeLens !== 'options' && (
         <div className={css.stageTabs} role="tablist" aria-label="quote section">
           <button
             type="button"
@@ -991,18 +1037,6 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
               {t('quote.tab.fundamentals')}
             </button>
           )}
-          {optionsAvailable && (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={stageTab === 'options'}
-              className={css.stageTab}
-              data-active={stageTab === 'options' ? 'true' : undefined}
-              onClick={() => { setStageTab('options') }}
-            >
-              {t('quote.tab.options')}
-            </button>
-          )}
           <button
             type="button"
             role="tab"
@@ -1024,6 +1058,7 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
             {t('quote.tab.announcements')}
           </button>
         </div>
+        )}
         <span className={css.meta}>
           {ticker !== null && <span>{t('quote.updated')} {fmtClock(ticker.timestamp)}</span>}
         </span>
@@ -1415,15 +1450,7 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
             </div>
           )}
         </div>
-      ) : viewTab === 'derivatives' ? (
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <DerivativesStage t={t} derivatives={derivatives} history={derivativesHistory} historyLoaded={derivativesHistoryLoaded} colorMode={colorMode} />
-        </div>
-      ) : viewTab === 'fundamentals' ? (
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <FundamentalsStage t={t} useSelection={useSelection} />
-        </div>
-      ) : viewTab === 'options' ? (
+      ) : activeLens === 'options' ? (
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <OptionsStage
             t={t}
@@ -1434,7 +1461,20 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
             failure={optionFailure}
             loaded={optionChainLoaded}
             colorMode={colorMode}
+            underlyingSymbol={symbol ?? ''}
+            underlyingName={displayName}
+            onViewSpot={() => { setLens('spot'); setStageTab('chart') }}
+            onTradeSpot={() => { setTradeDeskOpen(true) }}
+            onSendLegToAgent={sendLegToAgent}
           />
+        </div>
+      ) : viewTab === 'derivatives' ? (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <DerivativesStage t={t} derivatives={derivatives} history={derivativesHistory} historyLoaded={derivativesHistoryLoaded} colorMode={colorMode} />
+        </div>
+      ) : viewTab === 'fundamentals' ? (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <FundamentalsStage t={t} useSelection={useSelection} />
         </div>
       ) : viewTab === 'news' ? (
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
