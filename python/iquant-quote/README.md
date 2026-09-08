@@ -12,4 +12,5 @@ uv run python -m dsh_iquant_quote.gateway
 
 - 现货市场：`SH` / `SZ` / `BJ` / `HK`
 - 期权合约：`SHO` / `SZO`（不要订到 `SH`）
-- 长代码 `510050C2609M02850` 本层拒绝
+- 长代码 `510050C2609M02850` 作 ticker/K 线主键时拒绝；`option_chain` 会从合约简称组 T 板，并把长代码写回 `code`
+- `POST /v1/option_chain`：名单解析 + tick；盘后 drain 空则回落日 K（有时间预算，不编造）

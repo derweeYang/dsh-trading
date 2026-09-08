@@ -26,10 +26,14 @@ describe('IquantRestClient', () => {
   it('reads ticker from fake gateway', async () => {
     const client = new IquantRestClient({
       gatewayUrl: 'http://127.0.0.1:5810',
-      fetchImpl: stubFetch(() => ({ ok: true, result: { symbol: '510050.SH', last: 3.017, volume: 10 } })),
+      fetchImpl: stubFetch(() => ({
+        ok: true,
+        result: { symbol: '510050.SH', last: 3.017, preClose: 3.01, volume: 10, timestamp: 1 },
+      })),
     })
     const ticker = await client.getTicker('510050')
     expect(ticker.price).toBe(3.017)
+    expect(ticker.prevClose).toBe(3.01)
     expect(ticker.symbol).toBe('510050.SH')
   })
 

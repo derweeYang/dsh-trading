@@ -36,7 +36,10 @@ export const SSE_UNDERLYINGS = ['510050', '510300', '510500', '588000', '588080'
 export const SZSE_UNDERLYINGS = ['159919', '159915', '159901', '159922'] as const
 export const SYNTH_UNDERLYINGS = ['910050'] as const
 /** iquant（国信）名册：沪深皆可达；合约行情市场是 SHO/SZO，不是 SH/SZ。 */
-export const IQUANT_UNDERLYINGS = ['510050', '159915'] as const
+export const IQUANT_UNDERLYINGS = [
+  '510050', '510300', '510500', '588000', '588080',
+  '159919', '159915', '159901', '159922',
+] as const
 
 const STATIC_ROWS: Record<OptionSource, readonly OptionUnderlying[]> = {
   akshare: [
@@ -52,7 +55,14 @@ const STATIC_ROWS: Record<OptionSource, readonly OptionUnderlying[]> = {
   ],
   iquant: [
     { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
+    { underlying: '510300', exchange: 'SSE', name: '华泰柏瑞沪深300ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
+    { underlying: '510500', exchange: 'SSE', name: '南方中证500ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
+    { underlying: '588000', exchange: 'SSE', name: '华夏科创50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
+    { underlying: '588080', exchange: 'SSE', name: '易方达科创50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
+    { underlying: '159919', exchange: 'SZSE', name: '嘉实沪深300ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
     { underlying: '159915', exchange: 'SZSE', name: '创业板ETF易方达', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
+    { underlying: '159901', exchange: 'SZSE', name: '深证100ETF易方达', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
+    { underlying: '159922', exchange: 'SZSE', name: '嘉实中证500ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
   ],
   synth: [
     { underlying: '910050', exchange: 'SYNTH', name: 'synth50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'synth' },

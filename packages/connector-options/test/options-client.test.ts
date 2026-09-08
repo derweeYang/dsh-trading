@@ -41,6 +41,7 @@ describe('normalizeCnUnderlying', () => {
 
   it('静态名册覆盖沪深注册标的', () => {
     expect(isKnownUnderlying('510050')).toBe(true)
+    expect(isKnownUnderlying('510300')).toBe(true)
     expect(isKnownUnderlying('159915')).toBe(true)
     expect(isKnownUnderlying('910050')).toBe(true)
     expect(isKnownUnderlying('600519')).toBe(false)

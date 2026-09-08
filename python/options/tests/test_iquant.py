@@ -93,7 +93,10 @@ def test_iquant_registry_lists_sse_and_szse_boards():
     result = contracts.handle_underlyings({"source": "iquant"})
     quotes = {row["underlying"]: row["quotesSource"] for row in result["underlyings"]}
     assert quotes["510050"] == "iquant_board"
+    assert quotes["510300"] == "iquant_board"
     assert quotes["159915"] == "iquant_board"
+    assert quotes["159901"] == "iquant_board"
+    assert result["rows"] == 9
     assert result["source"] == "iquant"
 
 
@@ -173,7 +176,7 @@ def test_iquant_unsupported_is_honest_no_data(monkeypatch):
 
 def test_chain_iquant_rejects_unknown_underlying():
     with pytest.raises(OptionsError) as err:
-        chain.handle_chain({"source": "iquant", "underlying": "510300", "expiryMonth": "2609"})
+        chain.handle_chain({"source": "iquant", "underlying": "600519", "expiryMonth": "2609"})
     assert err.value.code == "BAD_REQUEST"
 
 

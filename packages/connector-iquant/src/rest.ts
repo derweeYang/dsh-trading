@@ -97,13 +97,19 @@ export class IquantRestClient {
 
   async getTicker(symbol: string): Promise<Ticker> {
     const parsed = parseIquantSymbol(symbol)
-    const row = await this.requestJson<{ symbol: string; last: number; volume?: number; timestamp?: number }>(
-      `/v1/ticker?symbol=${encodeURIComponent(parsed.symbol)}`,
-    )
+    const row = await this.requestJson<{
+      symbol: string
+      last: number
+      preClose?: number
+      volume?: number
+      timestamp?: number
+    }>(`/v1/ticker?symbol=${encodeURIComponent(parsed.symbol)}`)
     return {
       symbol: row.symbol ?? parsed.symbol,
       price: row.last,
+      ...(row.preClose !== undefined ? { prevClose: row.preClose } : {}),
       ...(row.volume !== undefined ? { volume: row.volume } : {}),
+      ...(row.timestamp !== undefined ? { timestamp: row.timestamp } : {}),
     }
   }
 

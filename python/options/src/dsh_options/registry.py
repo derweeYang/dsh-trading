@@ -28,7 +28,7 @@ def load_registry(source: str) -> list[dict[str, Any]]:
     ----------
     source : str
         ``synth`` | ``akshare`` | ``iquant``;akshare 返回全部真实品种,
-        synth 返回合成品种,iquant 返回经 iquant-quote 适配的沪深各一只。
+        synth 返回合成品种,iquant 返回与 akshare 相同的九只 ETF 期权标的。
 
     Returns
     -------

@@ -76,7 +76,9 @@ python/iquant-quote   cwd=bin.x64
 | GET | `/v1/instruments?market=` |
 | POST | `/v1/snapshot` / `history_bars` / `option_chain` / `option_instruments` |
 
-长代码 → `BAD_REQUEST`。网关不可达 → `NETWORK` / `TRADING_NETWORK`，不编造。
+ticker/K 线传入长代码 → `BAD_REQUEST`。`option_chain` 从 `SHO`/`SZO` 简称组 T 板，
+并把长代码写回 `code`；盘后 drain 空则回落日 K。网关不可达 → `NETWORK` /
+`TRADING_NETWORK`，不编造。
 
 ## 4. TypeScript
 

@@ -26,8 +26,9 @@
 `underlying` 接受 `510050.SH`、`510050`、`510050C2609M02850`。
 `expiryMonth` 为 `YYMM`（如 `2609`）。默认 `source=iquant`，走国信 iQuant：
 标的现货市场 `SH`/`SZ`，**期权合约市场 `SHO`/`SZO`**（短码 `100xxxxx.SHO` /
-`900xxxxx.SZO`）。长代码不是行情主键，须先映射短码。深市别只依赖
-akshare（`szse_static_only` → `TRADING_NO_DATA`）。
+`900xxxxx.SZO`）。长代码不是行情主键；行情网关从合约简称组 T 板后再写回长代码。
+iQuant 名册覆盖九只 ETF 期权标的。深市别只依赖 akshare（`szse_static_only` →
+`TRADING_NO_DATA`）。
 
 ## 成功形状
 

@@ -104,10 +104,73 @@
       "quotesSource": "iquant_board"
     },
     {
+      "underlying": "510300",
+      "exchange": "SSE",
+      "boardName": "iquant300ETF",
+      "name": "华泰柏瑞沪深300ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "iquant_board"
+    },
+    {
+      "underlying": "510500",
+      "exchange": "SSE",
+      "boardName": "iquant500ETF",
+      "name": "南方中证500ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "iquant_board"
+    },
+    {
+      "underlying": "588000",
+      "exchange": "SSE",
+      "boardName": "iquantSTAR50ETF",
+      "name": "华夏科创50ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "iquant_board"
+    },
+    {
+      "underlying": "588080",
+      "exchange": "SSE",
+      "boardName": "iquantSTAR50EF",
+      "name": "易方达科创50ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "iquant_board"
+    },
+    {
+      "underlying": "159919",
+      "exchange": "SZSE",
+      "boardName": "iquantSZ300ETF",
+      "name": "嘉实沪深300ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "iquant_board"
+    },
+    {
       "underlying": "159915",
       "exchange": "SZSE",
       "boardName": "iquantChiNextETF",
       "name": "创业板ETF易方达",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "iquant_board"
+    },
+    {
+      "underlying": "159901",
+      "exchange": "SZSE",
+      "boardName": "iquantSZ100ETF",
+      "name": "深证100ETF易方达",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "iquant_board"
+    },
+    {
+      "underlying": "159922",
+      "exchange": "SZSE",
+      "boardName": "iquantSZ500ETF",
+      "name": "嘉实中证500ETF",
       "multiplier": 10000,
       "tickSize": 0.0001,
       "quotesSource": "iquant_board"

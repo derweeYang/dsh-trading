@@ -34,7 +34,7 @@ Greeks 与 IV 全部自算（`bsm.py`，不引 QuantLib）：Merton 连续股息
 
 - `synth` —— 定种子的确定性合成期权链，不读时钟、不联网。刻意包含一个已摘牌合约（序列止于到期日）与一个故意的平价违反合约（供下游 parity 校验当靶子）。它证明管线，不证明市场事实。
 - `akshare` —— 免费研究级数据。上交所系标的（50/300/500/科创50×2）：T 型报价走交易所接口，单合约全历史日线。深交所标的：**期权合约**仅静态表——行情与合约日线是已登记缺口（`szse_static_only`），按 `NO_DATA` 报告，不编造。标的 ETF 现货日线不受此限（`fetch_underlying_daily`，含 `159922`）。
-- `iquant` —— 经子进程调用 `dsh-iquant-quote`（SDK 接触只在那一层）。注册表目前是 `510050`（沪）与 `159915`（深），`quotesSource=iquant_board`。适配器默认仍向 iquant-quote 发 `source: synth`；`iquantSource: live` 才登录国信 DLL。**行情市场 token（2026-09-08 live）**：标的现货用 `SH`/`SZ`；期权合约必须用 **`SHO`/`SZO`**（上证短码 `100xxxxx`，深证 `900xxxxx`）。把期权短码订到 `SH` 会空名单、空 tick、空日 K——那是订错市场，不是「没有期权源」。国信终端 `ContextInfo.get_option_detail_data` / `get_option_list` / `get_option_iv` 也用 `10002235.SHO` 这种写法。深市在该源上不再是 `szse_static_only`。`UNSUPPORTED` 收成 `NO_DATA`。`asOf` 只属于 synth；定价 / IV 要求显式 `rate`。
+- `iquant` —— 经本地 `dsh-iquant-quote` 网关（`:5810`）。注册表与 akshare 九只 ETF 期权标的对齐，`quotesSource=iquant_board`。适配器无 `iquantArgvPrefix` 时 POST 网关 `/v1/<subcommand>`。**行情市场 token**：标的现货 `SH`/`SZ`；期权合约必须 **`SHO`/`SZO`**。T 板由网关从合约简称（`50ETF购9月2650`）组链，盘后 drain 空则回落日 K。把期权短码订到 `SH` 会空——那是订错市场，不是「没有期权源」。深市在该源上不再是 `szse_static_only`。`UNSUPPORTED` 收成 `NO_DATA`。`asOf` 只属于 synth；定价 / IV 要求显式 `rate`。
 
 合约存在两套代码体系：标准长代码（`510050C2609M02850`，桥/API 主键）与短代码（`10011255`）。akshare 日线走新浪短码映射（Greeks 接口懒建立、parquet 缓存；缺失报 `NO_DATA`，不猜测）。国信 live 行情簿主键是 **短码 + `SHO`/`SZO`**，不是长代码，也不是 `SH`/`SZ`。`EXCHANGE_MARKET` 现仍只映射现货 `SH`/`SZ`——live 合约订阅不得复用该表。
 

@@ -32,7 +32,11 @@ MiniQMT（含股票/期权实盘），把 iQuant 行情设成主行情。
 - 日常入口 `start-trading-web.bat` 会另开窗口起 `:5810`。只重启行情：`start-iquant-quote.bat`。手工：`python -m dsh_iquant_quote.gateway`（cwd 会切到 `bin.x64`）。期权分析网关：`start-options-gateway.bat`（`:8090`），不随宿主自动拉起。
 - 期权内核无 `iquantArgvPrefix` 时 POST `:5810/v1/<subcommand>`。
 - 设置 UI 在 workbuddy 改完之前仍可能显示 MiniQMT。
-- 盘后期权 drain 可空，验收以日 K / 名单为准。
+- 盘后期权 drain 可空，验收以日 K / 名单为准。`LiveBackend.option_chain` 已从
+  `SHO`/`SZO` 合约简称组 T 板（`50ETF购9月2650` → `510050C2609M02650`）；有 tick
+  用 tick，没有则回落日 K，不再空抛 `NO_DATA`。iQuant 名册与九只 ETF 期权标的对齐。
+- 现货 `ticker` 同样：盘后 snapshot 空或 `last=0` 时回落日 K。否则模拟下单拿不到
+  `ticker.price`，会报「未获取到有效成交价格」。
 - `QuoteClient.request_history` 形参名 `symbol/period` 实为 `(market, code)`，后面是
   `start_ms, end_ms, period_ms, kline_type, limit, callback`。网关不得再插入 `"1d"`
   周期字符串（会 TypeError 10 vs 8–9）；回调是 `(status, tag, bars)`。改完须重启
