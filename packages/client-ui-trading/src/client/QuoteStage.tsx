@@ -453,7 +453,7 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   // T 板链：仅「期权」页签激活 + 已选出到期月才拉（网关未起时不空转）。
   const optionChainRequestRef = useRef('')
   usePoll(async () => {
-    if (stageTab !== 'options' || !optionsAvailable || optionUnderlying === undefined || optionMonth === null) return
+    if (activeLens !== 'options' || !optionsAvailable || optionUnderlying === undefined || optionMonth === null) return
     const request = `${optionUnderlying}:${optionMonth}`
     optionChainRequestRef.current = request
     const res = await fetchOptionsChain(optionUnderlying, optionMonth)
@@ -466,7 +466,7 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
       setOptionFailure({ code: res.code, message: res.message })
     }
     setOptionChainLoaded(true)
-  }, OPTIONS_CHAIN_POLL_MS, [stageTab, optionsAvailable, optionUnderlying, optionMonth])
+  }, OPTIONS_CHAIN_POLL_MS, [activeLens, optionsAvailable, optionUnderlying, optionMonth])
 
   // 换标的/换月：回到「加载中」，避免上一份链与旧错误码残留（评审 L2 同款纪律）。
   useEffect(() => {
@@ -1302,7 +1302,7 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
 
       {/* 图表主舞台 / 基本面页签（互斥挂载）；crypto 图表下方挂衍生品指标条（issue #38），
           右侧可折叠盘口竖栏（issue #39） */}
-      {viewTab === 'chart' ? (
+      {activeLens !== 'options' && viewTab === 'chart' ? (
         <div className={css.chartRow}>
           <div className={css.chartColumn}>
             <div className={css.chartBox}>

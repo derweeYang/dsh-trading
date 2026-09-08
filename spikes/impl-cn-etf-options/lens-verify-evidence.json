@@ -1,0 +1,58 @@
+{
+ "steps": {
+  "lens_before": [
+   {
+    "t": "Spot",
+    "active": true
+   },
+   {
+    "t": "Options",
+    "active": false
+   }
+  ],
+  "board": {
+   "pills": [
+    "*2609",
+    "2610",
+    "2612",
+    "2703"
+   ],
+   "head": [
+    "认购 | 行权价 | 认沽",
+    "隐含波动率 | 成交量 | 涨跌幅 | 最新价 |  | 最新价 | 涨跌幅 | 成交量 | 隐含波动率"
+   ],
+   "rows": [
+    "— | — | -0.76% | 0.3658 | 2.65 | 0.000400 | 0.00% | — | —",
+    "— | — | -1.04% | 0.3149 | 2.70 | 0.000700 | -12.50% | — | —",
+    "— | — | -0.93% | 0.2663 | 2.75 | 0.001000 | 0.00% | — | —"
+   ],
+   "rowCount": 14
+  },
+  "action_bar": {
+   "underlyingChip": "Underlying ETF上证50ETF510050",
+   "tradeSpotBtn": {
+    "text": "Trade spot ETF",
+    "disabled": false
+   },
+   "sendLegBtn": {
+    "text": "Send contract to Agent to order",
+    "disabled": true
+   }
+  },
+  "after_select_leg": {
+   "sendLegDisabled": false,
+   "legTag": "Selected contractCall @2.65✕"
+  },
+  "lens_after": [
+   {
+    "t": "Spot",
+    "active": true
+   },
+   {
+    "t": "Options",
+    "active": false
+   }
+  ]
+ },
+ "pass": true
+}
