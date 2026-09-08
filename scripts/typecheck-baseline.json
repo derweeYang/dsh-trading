@@ -34,6 +34,7 @@
   "packages/connector-ibkr/tsconfig.json": 16,
   "packages/connector-longbridge/tsconfig.json": 24,
   "packages/connector-okx/tsconfig.json": 14,
+  "packages/connector-options/tsconfig.json": 0,
   "packages/connector-polygon/tsconfig.json": 16,
   "packages/connector-qmt/tsconfig.json": 18,
   "packages/connector-stooq/tsconfig.json": 2,

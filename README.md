@@ -68,7 +68,7 @@ A shoddy terminal makes even the smartest agent an armchair general.
 |---|---|
 | **Crypto** | Binance, OKX (Paper/Live), Bybit, CCXT (100+ exchanges) |
 | **US Equities** | Yahoo Finance, Alpaca (Paper/Live), FMP, Finnhub, Polygon.io, Interactive Brokers |
-| **China A-Shares** | Tencent Finance, Eastmoney, Tushare Pro, AkShare, MiniQMT broker gateway |
+| **China A-Shares** | Tencent Finance, Eastmoney, Tushare Pro, AkShare, MiniQMT broker gateway, ETF options kernel (`python/options` via `:8090`) |
 | **Hong Kong** | Tencent HK, Longbridge OpenAPI, Futu OpenD, Tiger OpenAPI |
 
 **Hot-swappable data planes.** Not happy with a data source? Swap it. Settings → Trading routes any market to any installed provider: the quote panel re-routes on save, agent sessions pick it up on their next turn — no restarts, no config archaeology.
@@ -118,7 +118,7 @@ A layered [Cordis](https://github.com/cordisjs) microkernel ecosystem where mark
 @dshtrading/base          ← core: account/order/quote contracts, approval gate, GUI shell
 ├── @dshtrading/crypto    ← Binance / OKX / Bybit / CCXT + skills + preset
 ├── @dshtrading/us        ← Yahoo / Alpaca / FMP / Finnhub / Polygon / IBKR + skills + preset
-├── @dshtrading/cn        ← Tencent / Eastmoney / Tushare / AkShare / MiniQMT + skills + preset
+├── @dshtrading/cn        ← Tencent / Eastmoney / Tushare / AkShare / MiniQMT / ETF options + skills + preset
 └── @dshtrading/hk        ← Tencent HK / Longbridge / Futu / Tiger + skills + preset
 ```
 
@@ -129,7 +129,7 @@ Six invariants lock the ecosystem down: insert-only bundle patches · knowledge 
 | Market | Default source | Boundary |
 |---|---|---|
 | US | Yahoo Finance / Alpaca | Yahoo public endpoint (individual use); Alpaca official Paper/Live APIs |
-| CN | Tencent Finance / Eastmoney / HiThink (Fuyao) | Public endpoints; HiThink REST API for fundamentals & auction data; live execution via local MiniQMT gateway |
+| CN | Tencent Finance / Eastmoney / HiThink (Fuyao) | Public endpoints; HiThink REST API for fundamentals & auction data; live execution via local MiniQMT gateway; ETF options read-only via `connector-options` + local `python/options` gateway |
 | HK | Tencent HK / Longbridge | Public endpoint; licensed broker OpenAPI/Gateway for execution |
 | Crypto | Binance / OKX | Official APIs; OKX paper trading with your own keys |
 | Crypto fundamentals | CoinCap | Public REST, individual use only — no redistribution, no bulk scraping |

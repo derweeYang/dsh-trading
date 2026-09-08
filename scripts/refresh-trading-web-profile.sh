@@ -23,7 +23,8 @@ HOST_ROOT="/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepsee
 # lockfile 混代遗留）及三份同版实体拷贝（dsh-settings/dsh-skill/dsh-tool-cordis），
 # 全部并入 symlink 归一，消除模块实例割裂类 FAIL/WARN。
 CORE_PKGS=(dsh-web-app dsh-tools cosmokit schemastery dsh-agent-presets dsh-brand dsh-util-values \
-  dsh-settings dsh-skill dsh-tool-cordis dsh-llm dsh-scope dsh-timeout dsh-typert-protocol dsh-util-crypto)
+  dsh-settings dsh-skill dsh-tool-cordis dsh-llm dsh-scope dsh-timeout dsh-typert-protocol dsh-util-crypto \
+  cordis cordis-plugin-group cordis-plugin-include cordis-plugin-loader cordis-plugin-timer)
 
 echo "== 停止运行中的 trading-web 实例 =="
 pgrep -f "profile trading-web" | xargs kill 2>/dev/null || true

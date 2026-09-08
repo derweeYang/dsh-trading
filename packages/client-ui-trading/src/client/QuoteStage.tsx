@@ -8,7 +8,8 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import {
   fetchKlines, fetchTickers, fetchDerivatives, fetchDerivativesHistory, fetchOrderbook, fetchRecentTrades,
   fetchTradePositions, fetchTradeBalances, fetchTradeOpenOrders, fetchTradeFills, placeGuiOrder,
-  cancelGuiOrder, type TradeRowsReason,
+  cancelGuiOrder, fetchOptionsUnderlyings, fetchOptionsExpiries, fetchOptionsChain,
+  type TradeRowsReason,
 } from './api.ts'
 import { setHoldingsPanelOpen } from './holdings-store.ts'
 import { tradeModeStore, writeTradeMode } from './trade-mode-store.ts'
@@ -21,6 +22,7 @@ import type { SendImageInput, FillComposerFn } from './fill-composer.ts'
 import { FundamentalsStage } from './FundamentalsStage.tsx'
 import { DerivativesPane } from './DerivativesPane.tsx'
 import { DerivativesStage } from './DerivativesStage.tsx'
+import { OptionsStage } from './OptionsStage.tsx'
 import { OrderbookPane } from './OrderbookPane.tsx'
 import { OrderPanel } from './OrderPanel.tsx'
 import { paperTradingStore } from './paper-trading-store.ts'
@@ -33,6 +35,7 @@ import {
 } from './format.ts'
 import { indicators, isCustomIndicator } from './indicator-registry.ts'
 import type { IndicatorDefinition, IndicatorInstance } from '@dshtrading/indicators'
+import type { OptionChain, OptionExpiryCalendar, OptionUnderlying } from '@dshtrading/api'
 import { effectiveInstanceParams, isInstanceVisibleOn, symbolScopeKey } from '@dshtrading/indicators'
 import { MARKET_INTERVALS } from './store.ts'
 import type { SelectionState } from './store.ts'
@@ -69,6 +72,11 @@ const DERIVATIVES_HISTORY_POLL_MS = 300000
 const ORDERBOOK_POLL_MS = 4000
 // 交易台只读轮询（issue #40）：15s 慢节奏（签名端点 + 个人账户面，无盯盘时效要求）。
 const TRADE_DESK_POLL_MS = 15000
+// CN ETF 期权（2026-09-08 第一期只读面）：名册与到期月是连接器本地静态算
+// （不打网关），10min 足够；T 板链 30s 对齐衍生品快照节奏，且仅「期权」页签
+// 激活时才拉——网关未起时不空转（契约见 docs/options-bridge.md）。
+const OPTIONS_LIST_POLL_MS = 600000
+const OPTIONS_CHAIN_POLL_MS = 30000
 // 盘中周期 K 线根数按市场区分：crypto 取 300——OKX 单请求上限 300，图表每 30s
 // resync 一次，不触发游标翻页、不放大限频消耗；其余市场取 500。日 K 深度需求由
 // 1d 分支单独走 DAILY_LIMIT。
@@ -181,14 +189,36 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   const [sendState, setSendState] = useState<SendState>('idle')
   // 统一「发送给 Agent」下拉菜单开合（2026-09-04 入口收敛）。
   const [sendMenuOpen, setSendMenuOpen] = useState(false)
-  /** 行情板块页签（图表 | 基本面 | 新闻 | 公告）：跨标的保持。 */
-  const [stageTab, setStageTab] = useState<'chart' | 'derivatives' | 'fundamentals' | 'news' | 'announcements'>('chart')
+  /** 当前标的的 6 位期权代码（`510050.SH` → `510050`）；非 CN 或非 6 位码 → undefined。 */
+  const optionUnderlying = useMemo(() => {
+    if (market !== 'cn' || symbol === undefined) return undefined
+    const code = symbol.replace(/\.(SH|SZ)$/i, '').toUpperCase()
+    return /^\d{6}$/.test(code) ? code : undefined
+  }, [market, symbol])
+  /** 注册标的名册（连接器静态表，不打网关）；空 = 未挂 connector-options 或取数失败。 */
+  const [optionsUnderlyings, setOptionsUnderlyings] = useState<readonly OptionUnderlying[]>([])
+  /** 名册命中当前标的 → 「期权」页签可显示（docs/options-bridge.md 显隐判据）。 */
+  const optionsAvailable = optionUnderlying !== undefined
+    && optionsUnderlyings.some(item => item.underlying === optionUnderlying)
+  /** 标准四季月（本地算，网关未起也画得出到期胶囊）。 */
+  const [optionExpiries, setOptionExpiries] = useState<OptionExpiryCalendar | null>(null)
+  /** 选中到期月（YYMM）。 */
+  const [optionMonth, setOptionMonth] = useState<string | null>(null)
+  /** T 型报价链与失败原因（按错误码分诊）。 */
+  const [optionChain, setOptionChain] = useState<OptionChain | null>(null)
+  const [optionFailure, setOptionFailure] = useState<{ code: string; message: string } | null>(null)
+  /** 首个链应答是否落地（区分「加载中」与「不可用」）。 */
+  const [optionChainLoaded, setOptionChainLoaded] = useState(false)
+
+  /** 行情板块页签（图表 | 基本面 | 期权 | 新闻 | 公告）：跨标的保持。 */
+  const [stageTab, setStageTab] = useState<'chart' | 'derivatives' | 'fundamentals' | 'options' | 'news' | 'announcements'>('chart')
   // 渲染期页签归一（issue #54 评审 L3）：衍生品页签是 crypto 专属，切到非 crypto
   // 市场时渲染直接按图表页签处理——不等 useEffect 纠偏（paint 后才跑会闪一帧公告）。
   // 基本面页签反向收敛（2026-09-04）：加密资产无标准财报矩阵，crypto 不再展示基本面，
   // 残留的 fundamentals 页签同样渲染期归一到图表。
   const viewTab =
     (stageTab === 'derivatives' && market !== 'crypto') || (stageTab === 'fundamentals' && market === 'crypto')
+    || (stageTab === 'options' && !optionsAvailable)
       ? 'chart'
       : stageTab
   /** 衍生品指标快照（issue #38，crypto 专属；null = 未实现/失败 → 面板整体隐藏）。 */
@@ -379,6 +409,67 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
     setDerivativesHistoryLoaded(true)
   }, DERIVATIVES_HISTORY_POLL_MS, [stageTab, market, symbol])
 
+  // CN ETF 期权（2026-09-08 第一期只读面）：名册 → 到期月 → T 板链三段。
+  // 名册：仅 CN 拉（连接器静态表，不打网关）；失败即空数组 → 页签不显示，不报错横幅。
+  usePoll(async () => {
+    if (market !== 'cn') {
+      setOptionsUnderlyings([])
+      return
+    }
+    const res = await fetchOptionsUnderlyings()
+    setOptionsUnderlyings(res.ok ? res.data : [])
+  }, OPTIONS_LIST_POLL_MS, [market])
+
+  // 到期月：注册标的命中才拉（本地算，网关未起也有）；切标的丢弃旧应答（竞态守卫）。
+  const optionExpiriesRequestRef = useRef('')
+  usePoll(async () => {
+    if (!optionsAvailable || optionUnderlying === undefined) return
+    const request = optionUnderlying
+    optionExpiriesRequestRef.current = request
+    const res = await fetchOptionsExpiries(request)
+    if (optionExpiriesRequestRef.current !== request) return
+    setOptionExpiries(res.ok ? res.data : null)
+  }, OPTIONS_LIST_POLL_MS, [optionsAvailable, optionUnderlying])
+
+  // 选中月纠偏：到期月落地后默认当月；换标的/换季后原选中月不在名册 → 回落第一个。
+  useEffect(() => {
+    const months = optionExpiries?.months ?? []
+    if (months.length === 0) {
+      if (optionMonth !== null) setOptionMonth(null)
+      return
+    }
+    const first = months[0]
+    if (first === undefined) return
+    if (optionMonth === null || !months.some(month => month.expiryMonth === optionMonth)) {
+      setOptionMonth(first.expiryMonth)
+    }
+  }, [optionExpiries, optionMonth])
+
+  // T 板链：仅「期权」页签激活 + 已选出到期月才拉（网关未起时不空转）。
+  const optionChainRequestRef = useRef('')
+  usePoll(async () => {
+    if (stageTab !== 'options' || !optionsAvailable || optionUnderlying === undefined || optionMonth === null) return
+    const request = `${optionUnderlying}:${optionMonth}`
+    optionChainRequestRef.current = request
+    const res = await fetchOptionsChain(optionUnderlying, optionMonth)
+    if (optionChainRequestRef.current !== request) return
+    if (res.ok) {
+      setOptionChain(res.data)
+      setOptionFailure(null)
+    } else {
+      setOptionChain(null)
+      setOptionFailure({ code: res.code, message: res.message })
+    }
+    setOptionChainLoaded(true)
+  }, OPTIONS_CHAIN_POLL_MS, [stageTab, optionsAvailable, optionUnderlying, optionMonth])
+
+  // 换标的/换月：回到「加载中」，避免上一份链与旧错误码残留（评审 L2 同款纪律）。
+  useEffect(() => {
+    setOptionChainLoaded(false)
+    setOptionChain(null)
+    setOptionFailure(null)
+  }, [optionUnderlying, optionMonth])
+
   // 盘口/分笔轮询（issue #39）：竖栏打开 + 图表页签时才拉，省上游配额。
   usePoll(async () => {
     if (!orderbookOpen || stageTab !== 'chart' || market === undefined || symbol === undefined) return
@@ -452,7 +543,9 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   useEffect(() => {
     if (stageTab === 'derivatives' && market !== 'crypto') setStageTab('chart')
     if (stageTab === 'fundamentals' && market === 'crypto') setStageTab('chart')
-  }, [stageTab, market])
+    // 期权是注册标的专属：切到非注册标的（或未挂 connector-options）→ 回图表页签。
+    if (stageTab === 'options' && !optionsAvailable) setStageTab('chart')
+  }, [stageTab, market, optionsAvailable])
 
   // 统一填入反馈（2026-09-04 入口收敛）：sending/sent/error 状态由「发送给 Agent」
   // 按钮整体承载，行情快照与资金面快照共用同一套反馈。
@@ -898,6 +991,18 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
               {t('quote.tab.fundamentals')}
             </button>
           )}
+          {optionsAvailable && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={stageTab === 'options'}
+              className={css.stageTab}
+              data-active={stageTab === 'options' ? 'true' : undefined}
+              onClick={() => { setStageTab('options') }}
+            >
+              {t('quote.tab.options')}
+            </button>
+          )}
           <button
             type="button"
             role="tab"
@@ -1317,6 +1422,19 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
       ) : viewTab === 'fundamentals' ? (
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <FundamentalsStage t={t} useSelection={useSelection} />
+        </div>
+      ) : viewTab === 'options' ? (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <OptionsStage
+            t={t}
+            months={optionExpiries?.months ?? []}
+            selectedMonth={optionMonth}
+            onSelectMonth={setOptionMonth}
+            chain={optionChain}
+            failure={optionFailure}
+            loaded={optionChainLoaded}
+            colorMode={colorMode}
+          />
         </div>
       ) : viewTab === 'news' ? (
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>

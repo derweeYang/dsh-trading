@@ -1,0 +1,116 @@
+{
+  "synth": [
+    {
+      "underlying": "910050",
+      "exchange": "SYNTH",
+      "boardName": "synth50ETF期权",
+      "name": "synth50ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "synth"
+    }
+  ],
+  "akshare": [
+    {
+      "underlying": "510050",
+      "exchange": "SSE",
+      "boardName": "华夏上证50ETF期权",
+      "name": "华夏上证50ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "sse_board"
+    },
+    {
+      "underlying": "510300",
+      "exchange": "SSE",
+      "boardName": "华泰柏瑞沪深300ETF期权",
+      "name": "华泰柏瑞沪深300ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "sse_board"
+    },
+    {
+      "underlying": "510500",
+      "exchange": "SSE",
+      "boardName": "南方中证500ETF期权",
+      "name": "南方中证500ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "sse_board"
+    },
+    {
+      "underlying": "588000",
+      "exchange": "SSE",
+      "boardName": "华夏科创50ETF期权",
+      "name": "华夏科创50ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "sse_board"
+    },
+    {
+      "underlying": "588080",
+      "exchange": "SSE",
+      "boardName": "易方达科创50ETF期权",
+      "name": "易方达科创50ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "sse_board"
+    },
+    {
+      "underlying": "159919",
+      "exchange": "SZSE",
+      "boardName": "嘉实沪深300ETF期权",
+      "name": "嘉实沪深300ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "szse_static_only"
+    },
+    {
+      "underlying": "159915",
+      "exchange": "SZSE",
+      "boardName": "创业板ETF期权",
+      "name": "创业板ETF易方达",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "szse_static_only"
+    },
+    {
+      "underlying": "159901",
+      "exchange": "SZSE",
+      "boardName": "深证100ETF期权",
+      "name": "深证100ETF易方达",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "szse_static_only"
+    },
+    {
+      "underlying": "159922",
+      "exchange": "SZSE",
+      "boardName": "嘉实中证500ETF期权",
+      "name": "嘉实中证500ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "szse_static_only"
+    }
+  ],
+  "iquant": [
+    {
+      "underlying": "510050",
+      "exchange": "SSE",
+      "boardName": "iquant50ETF",
+      "name": "华夏上证50ETF",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "iquant_board"
+    },
+    {
+      "underlying": "159915",
+      "exchange": "SZSE",
+      "boardName": "iquantChiNextETF",
+      "name": "创业板ETF易方达",
+      "multiplier": 10000,
+      "tickSize": 0.0001,
+      "quotesSource": "iquant_board"
+    }
+  ]
+}

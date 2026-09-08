@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createMemorySelectionStore, createMemoryWatchlistStore } from '../src/index.ts'
+import { WATCHLIST_SEEDS } from '../src/seeds.ts'
 import { createFileSelectionStore, createFileWatchlistStore } from '../src/file-store.ts'
 import {
   createWatchlistAddTool,
@@ -76,7 +77,7 @@ describe('watchlist_* tools', () => {
     }
     // 全空 host store → 4 个市场全部回落种子展示行。
     expect(empty.markets).toEqual(['crypto', 'us', 'cn', 'hk'])
-    expect(empty.total).toBe(14)
+    expect(empty.total).toBe(15)
     expect(Object.values(empty.sources).every(source => source === 'seed')).toBe(true)
     expect(empty.watchlists.us[0]).toEqual({ market: 'us', symbol: 'AAPL', name: '苹果' })
 
@@ -90,8 +91,8 @@ describe('watchlist_* tools', () => {
     expect(wire.sources.us).toBe('custom')
     expect(wire.sources.crypto).toBe('seed')
     expect(wire.watchlists.us).toEqual([{ market: 'us', symbol: 'AAPL', name: '苹果' }])
-    // crypto 4 + us 1（定制后种子被抑制）+ cn 3 + hk 3。
-    expect(wire.total).toBe(11)
+    // crypto 4 + us 1（定制后种子被抑制）+ cn 4 + hk 3。
+    expect(wire.total).toBe(12)
   })
 
   it('watchlist_add：去重 + 事件回调仅在实际新增时触发', async () => {
@@ -155,10 +156,10 @@ describe('watchlist_* tools', () => {
     const removeTool = createWatchlistRemoveTool(deps)
     const listTool = createWatchlistListTool(deps)
 
-    // 陆续删光 cn 市场的 3 只默认股票
-    await removeTool.execute({ market: 'cn', symbol: '600519' })
-    await removeTool.execute({ market: 'cn', symbol: '000001' })
-    await removeTool.execute({ market: 'cn', symbol: '601318' })
+    // 按种子表逐行删光（与 client store 同构；加种子时本用例自动跟上）。
+    for (const row of WATCHLIST_SEEDS.cn ?? []) {
+      await removeTool.execute({ market: 'cn', symbol: row.symbol })
+    }
 
     const list = JSON.parse(String(await listTool.execute({}))) as {
       sources: Record<string, string>

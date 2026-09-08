@@ -77,9 +77,10 @@ describe('createWatchlistStore', () => {
 
   it('删光自选标的后保持空列表，不复活种子', () => {
     const store = createWatchlistStore()
-    store.remove('cn', '600519')
-    store.remove('cn', '000001')
-    store.remove('cn', '601318')
+    // 按当前种子表逐行删光（CN 已含 510050；勿写死 symbol，避免再漏同步）。
+    for (const row of store.listFor('cn')) {
+      store.remove('cn', row.symbol)
+    }
 
     expect(store.isCustomized('cn')).toBe(true)
     expect(store.listFor('cn')).toEqual([])

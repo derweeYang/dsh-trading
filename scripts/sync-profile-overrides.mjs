@@ -55,6 +55,10 @@ function defaultDshRoot() {
     const m = real.match(/^(.+)\/bin\//)
     if (m) return join(m[1], 'node_modules')
   } catch { /* 无 dsh 可执行文件时回落 */ }
+  const localNested = join(ROOT, '.local', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules')
+  if (existsSync(localNested)) return localNested
+  const localFlat = join(ROOT, '.local', 'node_modules')
+  if (existsSync(join(localFlat, '@deepseek-ai', 'dsh'))) return localFlat
   return '/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules'
 }
 

@@ -14,7 +14,7 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, DerivativesData, DerivativesHistory, FundamentalsPackage, Interval, Kline, MarketDataService, NewsAggregator, NewsItem, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, DerivativesData, DerivativesHistory, FundamentalsPackage, Interval, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick } from '@dshtrading/api'
 import { aggregateNews as aggregateCnNews, fetchCnFundamentalsPackage } from '@dshtrading/kit-cn'
 import { aggregateNews as aggregateHkNews, fetchHkFundamentalsPackage } from '@dshtrading/kit-hk'
 import { aggregateNews as aggregateUsNews, fetchUsFundamentalsPackage } from '@dshtrading/kit-us'
@@ -104,6 +104,8 @@ export function createBridgeHost(services: {
   newsRegistry?: TradingNewsRegistryLike | undefined
   /** CryptoPanic API token 取值函数（从 router settings 获取；可选）。 */
   newsKey?: (() => string | undefined) | undefined
+  /** CN ETF 期权只读服务（host 面 tradingCnOptions；缺席 → 桥返回 NOT_IMPLEMENTED）。 */
+  cnOptions?: CnOptionsService | undefined
 }): BridgeHost {
   return {
     getMarketService: market => {
@@ -125,6 +127,7 @@ export function createBridgeHost(services: {
     fetchFxRates: services.fetchFxRates,
     newsRegistry: services.newsRegistry,
     newsKey: services.newsKey,
+    getCnOptions: () => services.cnOptions,
   }
 }
 
@@ -170,6 +173,8 @@ export interface BridgeHost {
   newsRegistry?: TradingNewsRegistryLike | undefined
   /** CryptoPanic API token 取值函数（从 router settings 获取；可选，issue #37）。 */
   newsKey?: (() => string | undefined) | undefined
+  /** CN ETF 期权只读服务；未挂 connector-options → undefined。 */
+  getCnOptions?(): CnOptionsService | undefined
 }
 
 export interface MarketInfoWire {
@@ -215,6 +220,31 @@ export interface DerivativesWire {
 export interface DerivativesHistoryWire {
   ok: true
   history: DerivativesHistory
+}
+
+export interface OptionUnderlyingsWire {
+  ok: true
+  underlyings: readonly OptionUnderlying[]
+}
+
+export interface OptionExpiriesWire {
+  ok: true
+  expiries: OptionExpiryCalendar
+}
+
+export interface OptionChainWire {
+  ok: true
+  chain: OptionChain
+}
+
+export interface OptionImpliedVolWire {
+  ok: true
+  impliedVol: OptionImpliedVolResult
+}
+
+export interface OptionStrategyWire {
+  ok: true
+  strategy: OptionStrategyResult
 }
 
 export interface OrderbookWire {
@@ -662,6 +692,99 @@ export class TradingBridge {
       )
     }
     return { ok: true, history: await service.getDerivativesHistory(trimmed) }
+  }
+
+  private requireCnOptions(): CnOptionsService {
+    const service = this.host.getCnOptions?.()
+    if (service === undefined) {
+      throw Object.assign(
+        new Error('CN ETF options service is not mounted — add @dshtrading/connector-options'),
+        { code: 'TRADING_NOT_IMPLEMENTED' },
+      )
+    }
+    return service
+  }
+
+  /**
+   * ETF 期权标的名册（workbuddy T 板显隐）。source 缺省走连接器默认值。
+   */
+  async optionUnderlyings(source?: string): Promise<OptionUnderlyingsWire> {
+    const typed = source === 'synth' || source === 'akshare' ? source : undefined
+    return { ok: true, underlyings: await this.requireCnOptions().listUnderlyings(typed) }
+  }
+
+  /**
+   * 标准四季月胶囊（当月/次月/+3/+6）。算法本地算，不打期权网关。
+   */
+  async optionExpiries(underlying: string, source?: string): Promise<OptionExpiriesWire> {
+    const trimmed = underlying.trim()
+    if (trimmed === '') throw new BridgeProtocolError(400, 'options expiries: underlying is required')
+    const typed = source === 'synth' || source === 'akshare' ? source : undefined
+    return {
+      ok: true,
+      expiries: await this.requireCnOptions().getOptionExpiries({
+        underlying: trimmed,
+        // exactOptionalPropertyTypes：可选字段不得显式传 undefined（2026-09-08）。
+        ...(typed === undefined ? {} : { source: typed }),
+      }),
+    }
+  }
+
+  /**
+   * T 型报价链。underlying 必填（510050.SH / 510050 / 长代码）；expiryMonth 必填 YYMM。
+   */
+  async optionChain(underlying: string, expiryMonth: string, source?: string): Promise<OptionChainWire> {
+    const trimmed = underlying.trim()
+    if (trimmed === '') throw new BridgeProtocolError(400, 'options chain: underlying is required')
+    const month = expiryMonth.trim()
+    if (month === '') throw new BridgeProtocolError(400, 'options chain: expiryMonth is required')
+    const typed = source === 'synth' || source === 'akshare' ? source : undefined
+    return {
+      ok: true,
+      chain: await this.requireCnOptions().getOptionChain({
+        underlying: trimmed,
+        expiryMonth: month,
+        ...(typed === undefined ? {} : { source: typed }),
+      }),
+    }
+  }
+
+  async optionImpliedVol(
+    underlying: string,
+    expiryMonth: string,
+    rateRaw: string,
+    source?: string,
+    priceField?: string,
+  ): Promise<OptionImpliedVolWire> {
+    const trimmed = underlying.trim()
+    if (trimmed === '') throw new BridgeProtocolError(400, 'options implied-vol: underlying is required')
+    const month = expiryMonth.trim()
+    if (month === '') throw new BridgeProtocolError(400, 'options implied-vol: expiryMonth is required')
+    const rate = Number(rateRaw)
+    if (!Number.isFinite(rate)) throw new BridgeProtocolError(400, 'options implied-vol: rate is required')
+    const typed = source === 'synth' || source === 'akshare' ? source : undefined
+    const field = priceField === 'prevSettle' ? 'prevSettle' as const : 'last' as const
+    return {
+      ok: true,
+      impliedVol: await this.requireCnOptions().getImpliedVol({
+        underlying: trimmed,
+        expiryMonth: month,
+        rate,
+        ...(typed === undefined ? {} : { source: typed }),
+        priceField: field,
+      }),
+    }
+  }
+
+  async optionStrategy(body: unknown): Promise<OptionStrategyWire> {
+    if (body === null || typeof body !== 'object') {
+      throw new BridgeProtocolError(400, 'options strategy: JSON object is required')
+    }
+    const input = body as OptionStrategyRequest
+    if (typeof input.underlying !== 'string' || input.underlying.trim() === '') {
+      throw new BridgeProtocolError(400, 'options strategy: underlying is required')
+    }
+    return { ok: true, strategy: await this.requireCnOptions().getStrategy(input) }
   }
 
   /**
@@ -1575,6 +1698,40 @@ export async function dispatchBridgeRequest(
         const symbol = search.get('symbol') ?? ''
         return { status: 200, payload: await bridge.derivativesHistory(market, symbol) }
       }
+      case '/options/underlyings': {
+        return { status: 200, payload: await bridge.optionUnderlyings(search.get('source') ?? undefined) }
+      }
+      case '/options/expiries': {
+        return {
+          status: 200,
+          payload: await bridge.optionExpiries(
+            search.get('underlying') ?? '',
+            search.get('source') ?? undefined,
+          ),
+        }
+      }
+      case '/options/chain': {
+        return {
+          status: 200,
+          payload: await bridge.optionChain(
+            search.get('underlying') ?? '',
+            search.get('expiryMonth') ?? '',
+            search.get('source') ?? undefined,
+          ),
+        }
+      }
+      case '/options/implied-vol': {
+        return {
+          status: 200,
+          payload: await bridge.optionImpliedVol(
+            search.get('underlying') ?? '',
+            search.get('expiryMonth') ?? '',
+            search.get('rate') ?? '',
+            search.get('source') ?? undefined,
+            search.get('priceField') ?? undefined,
+          ),
+        }
+      }
       case '/orderbook': {
         const market = search.get('market') ?? ''
         const symbol = search.get('symbol') ?? ''
@@ -1737,6 +1894,9 @@ export async function dispatchBridgeRequest(
     }
     if (pathname === '/holdings/discard') {
       return { status: 200, payload: await bridge.discardHoldings(body) }
+    }
+    if (pathname === '/options/strategy') {
+      return { status: 200, payload: await bridge.optionStrategy(body) }
     }
     throw new BridgeProtocolError(404, `no such endpoint: ${pathname}`)
   }

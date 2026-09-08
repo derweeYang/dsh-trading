@@ -117,6 +117,135 @@ export interface DerivativesHistory {
   readonly openInterest?: DerivativesPoint[]
 }
 
+/* ── CN ETF 期权（只读分析面，2026-09-08）──────────────────────────────── */
+
+/** 认购 / 认沽。规范长代码用 C/P。 */
+export type OptionRight = 'C' | 'P'
+
+/**
+ * 期权数据源。synth = 离线确定性链（CI / 无网关）；akshare = 上交所研究级；
+ * iquant 预留，第一期桥不暴露。
+ */
+export type OptionSource = 'synth' | 'akshare'
+
+/** 已注册的 ETF 期权标的（与 python/options underlyings.json 对齐）。 */
+export interface OptionUnderlying {
+  readonly underlying: string
+  readonly exchange: 'SSE' | 'SZSE' | 'SYNTH'
+  readonly name: string
+  readonly multiplier: number
+  readonly tickSize: number
+  /** sse_board 有 T 板；szse_static_only 只有静态表。 */
+  readonly quotesSource: 'sse_board' | 'szse_static_only' | 'synth'
+}
+
+/** 合约静态（规范主键 = 长代码，如 510050C2609M02850）。 */
+export interface OptionContract {
+  readonly code: string
+  readonly underlying: string
+  readonly optionType: OptionRight
+  readonly strike: number
+  readonly expiryMonth: string
+  readonly expiryDate: string
+  readonly multiplier: number
+  readonly tickSize: number
+}
+
+/** T 型报价一行。IV 由 impliedVol 接口回填，链快照可缺省。 */
+export interface OptionQuoteRow {
+  readonly code: string
+  readonly strike: number
+  readonly last?: number
+  readonly prevSettle?: number
+  readonly changePct?: number
+  readonly volume?: number
+  readonly impliedVol?: number
+  readonly converged?: boolean
+}
+
+/** 单标的单到期月 T 型报价。 */
+export interface OptionChain {
+  readonly underlying: string
+  readonly expiryMonth: string
+  readonly expiryDate?: string
+  readonly snapshotAt?: string
+  readonly source: OptionSource | string
+  readonly spot?: number
+  readonly calls: readonly OptionQuoteRow[]
+  readonly puts: readonly OptionQuoteRow[]
+}
+
+export interface OptionGreeks {
+  readonly delta: number
+  readonly gamma: number
+  readonly vega: number
+  readonly theta: number
+  readonly rho: number
+}
+
+export interface OptionImpliedVolRow extends OptionQuoteRow {
+  readonly impliedVol?: number
+  readonly converged: boolean
+  readonly failReason?: string
+}
+
+export interface OptionImpliedVolResult {
+  readonly underlying: string
+  readonly expiryMonth: string
+  readonly source: OptionSource | string
+  readonly rate: number
+  readonly priceField: 'last' | 'prevSettle'
+  readonly rows: readonly OptionImpliedVolRow[]
+}
+
+export interface OptionStrategyRequest {
+  readonly underlying: string
+  readonly expiryMonth?: string
+  readonly template?: 'covered_call' | 'collar' | 'vertical' | 'straddle' | 'butterfly'
+  readonly legs?: readonly unknown[]
+  readonly source?: OptionSource
+  readonly rate?: number
+}
+
+export interface OptionStrategyResult {
+  readonly underlying: string
+  readonly source: OptionSource | string
+  readonly template?: string
+  readonly result: unknown
+}
+
+export interface CnOptionsQuery {
+  readonly underlying: string
+  readonly expiryMonth?: string
+  readonly source?: OptionSource
+  readonly rate?: number
+  readonly priceField?: 'last' | 'prevSettle'
+}
+
+/** 标准四季月一行（当月 / 次月 / +3 / +6），到期日 = 该月第四个周三。 */
+export interface OptionExpiryMonth {
+  readonly expiryMonth: string
+  readonly expiryDate: string
+}
+
+export interface OptionExpiryCalendar {
+  readonly underlying: string
+  readonly source: OptionSource | string
+  readonly months: readonly OptionExpiryMonth[]
+}
+
+/**
+ * CN ETF 期权只读服务（独立键 tradingCnOptions，不挂行情 provider）。
+ * 实现方：@dshtrading/connector-options → 本地 HTTP 网关 → python/options。
+ */
+export interface CnOptionsService {
+  listUnderlyings(source?: OptionSource): Promise<readonly OptionUnderlying[]>
+  getOptionExpiries(query: CnOptionsQuery): Promise<OptionExpiryCalendar>
+  getOptionChain(query: CnOptionsQuery): Promise<OptionChain>
+  getImpliedVol(query: CnOptionsQuery & { readonly rate: number }): Promise<OptionImpliedVolResult>
+  getStrategy(request: OptionStrategyRequest): Promise<OptionStrategyResult>
+}
+
 /** 加密标的代币经济学与基本面快照。 */
 export interface CryptoFundamentals {
   /** 规范符号或代币代码（如 BTCUSDT 或 BTC）。 */
@@ -641,6 +770,10 @@ export type TradingErrorCode =
   | 'TRADING_AUTH_FAILED'
   | 'TRADING_RATE_LIMITED'
   | 'TRADING_NETWORK'
+  /** 上游 HTTP/网关非 2xx（连接器常用；期权内核 NO_DATA 不走此码）。 */
+  | 'TRADING_UPSTREAM_ERROR'
+  /** 注册标的存在但该源无报价（如 akshare 深市期权行情缺口）。 */
+  | 'TRADING_NO_DATA'
   | 'TRADING_INSUFFICIENT_BALANCE'
   /** liveTrading=false 闸门拒绝实盘（铁律 #3）。 */
   | 'TRADING_LIVE_TRADING_DISABLED'
@@ -704,6 +837,11 @@ declare module '@deepseek-ai/cordis' {
      * 各市场 Kit apply 时注册 aggregateNews 纯函数，GUI 行情桥按市场获取。
      */
     tradingNewsRegistry: TradingNewsRegistry
+    /**
+     * CN ETF 期权只读服务（2026-09-08）：由 connector-options host 面提供，
+     * 不走 tradingMarketDataRegistry / CN 行情 provider（默认腾讯无期权链）。
+     */
+    tradingCnOptions: CnOptionsService
   }
 }
 

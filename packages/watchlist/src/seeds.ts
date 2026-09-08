@@ -29,6 +29,7 @@ export const WATCHLIST_SEEDS: WatchlistsMap = {
     { market: 'cn', symbol: '600519', name: '贵州茅台' },
     { market: 'cn', symbol: '000001', name: '平安银行' },
     { market: 'cn', symbol: '601318', name: '中国平安' },
+    { market: 'cn', symbol: '510050', name: '上证50ETF' },
   ],
   hk: [
     { market: 'hk', symbol: '00700', name: '腾讯控股' },

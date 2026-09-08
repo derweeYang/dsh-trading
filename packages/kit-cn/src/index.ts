@@ -3,7 +3,7 @@
  *
  * 包含：
  *   1. skill provider：cn-risk-checklist、indicator-authoring、trading-strategy-paradigms、knowledge-curation 与 trading-notes-setup 随包分发；
- *   2. cn_get_news 与 cn_get_fundamentals 工具；
+ *   2. cn_get_news / cn_get_fundamentals / cn_get_option_* 工具；
  *   3. indicator_author 创作工具（Issue #19）；
  *   4. knowledge_ingest 与 knowledge_search 知识库工具（Issue #24）。
  *
@@ -29,10 +29,18 @@ import {
   fetchCnAuctionStrength,
   fetchCnLimitUpPool,
 } from './sentiment.js'
+import {
+  createGetOptionChainTool,
+  createGetOptionExpiriesTool,
+  createGetOptionIvTool,
+  createGetOptionStrategyTool,
+} from './options-tools.js'
+import type { CnOptionsService } from '@dshtrading/api'
 
 export * from './fundamentals.js'
 export * from './news.js'
 export * from './sentiment.js'
+export * from './options-tools.js'
 
 // ── skill provider（host 面 skill 全局可见即可，本切片不改 skill 作用域） ─────────
 
@@ -50,7 +58,7 @@ const RESOURCE_BASE = {
 
 const CANDIDATE: SkillCandidate = {
   name: 'cn-risk-checklist',
-  description: 'A 股交易风控检查清单：开仓前逐项核对 T+1 交收、涨跌停板与一字板流动性、ST/*ST 退市风险、融资融券门槛、限售与大宗折价。',
+  description: 'A 股交易风控检查清单：开仓前逐项核对 T+1 交收、涨跌停板与一字板流动性、ST/*ST 退市风险、融资融券门槛、限售与大宗折价，以及沪深 ETF 期权义务仓/保证金/临近到期。',
   invocation: { modelInvocable: true, userInvocable: true },
   provider: PROVIDER_NAME,
   source: 'bundled',
@@ -195,6 +203,12 @@ export function apply(ctx: Context, config: Config): void {
 
   // issue #33：cn_get_indicators 接入（计算库市场无关；行情 registry-first，老部署回退市场键）。
   const serviceGetter = ctx as unknown as { get?: (key: string, strict?: boolean) => unknown }
+  const lookupOptions = (): CnOptionsService | undefined =>
+    serviceGetter.get?.('tradingCnOptions', false) as CnOptionsService | undefined
+  registerOnce(createGetOptionExpiriesTool({ getService: lookupOptions }))
+  registerOnce(createGetOptionChainTool({ getService: lookupOptions }))
+  registerOnce(createGetOptionIvTool({ getService: lookupOptions }))
+  registerOnce(createGetOptionStrategyTool({ getService: lookupOptions }))
   const registry = serviceGetter.get?.('tradingMarketDataRegistry', false) as
     | { active(m: string): { service: MarketDataService } | undefined }
     | undefined

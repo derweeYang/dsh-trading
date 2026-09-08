@@ -207,7 +207,7 @@ importers:
         version: 0.3.16(react@18.3.1)
       '@xmanrui/dsh-im':
         specifier: ^4.11.0
-        version: 4.11.0
+        version: 4.11.0(debug@4.4.3)
     devDependencies:
       tsdown:
         specifier: ^0.22.0
@@ -551,6 +551,9 @@ importers:
       '@dshtrading/connector-hithink':
         specifier: workspace:*
         version: link:../connector-hithink
+      '@dshtrading/connector-options':
+        specifier: workspace:*
+        version: link:../connector-options
       '@dshtrading/connector-qmt':
         specifier: workspace:*
         version: link:../connector-qmt
@@ -856,6 +859,25 @@ importers:
       '@dshtrading/connector-binance':
         specifier: workspace:^
         version: link:../connector-binance
+      tsdown:
+        specifier: ^0.22.0
+        version: 0.22.14(tsx@4.23.12)(typescript@5.9.3)
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@24.13.3)(jsdom@30.0.1)(lightningcss@1.33.0)(tsx@4.23.12)
+
+  packages/connector-options:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: '>=4.0.0'
+        version: 4.0.2(@deepseek-ai/cordis-plugin-include@1.0.7)(@deepseek-ai/cordis-plugin-loader@1.0.3)
+      '@deepseek-ai/schemastery':
+        specifier: '>=3.18.0'
+        version: 3.18.2
+      '@dshtrading/api':
+        specifier: workspace:^
+        version: link:../api
+    devDependencies:
       tsdown:
         specifier: ^0.22.0
         version: 0.22.14(tsx@4.23.12)(typescript@5.9.3)
@@ -5186,7 +5208,7 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 2.0.0
 
-  '@wecom/aibot-node-sdk@1.0.7':
+  '@wecom/aibot-node-sdk@1.0.7(debug@4.4.3)':
     dependencies:
       axios: 1.20.0(debug@4.4.3)
       eventemitter3: 5.0.4
@@ -5197,11 +5219,11 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@xmanrui/dsh-im@4.11.0':
+  '@xmanrui/dsh-im@4.11.0(debug@4.4.3)':
     dependencies:
       '@tencent-connect/qqbot-connector': 1.2.0
       '@tencent-connect/qqbot-nodejs': 1.0.4
-      '@wecom/aibot-node-sdk': 1.0.7
+      '@wecom/aibot-node-sdk': 1.0.7(debug@4.4.3)
       dingtalk-stream: 2.1.4
       qrcode: 1.5.4
       undici: 7.29.0

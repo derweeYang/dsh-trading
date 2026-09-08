@@ -72,5 +72,6 @@ describe('instruments_search', () => {
     expect(SYMBOL_CATALOG.crypto!.length).toBeGreaterThan(3)
     expect(SYMBOL_CATALOG.hk!.some(e => e.symbol === '00700.HK')).toBe(true)
     expect(SYMBOL_CATALOG.cn!.some(e => e.symbol === '600519.SH')).toBe(true)
+    expect(SYMBOL_CATALOG.cn!.some(e => e.symbol === '510050.SH')).toBe(true)
   })
 })

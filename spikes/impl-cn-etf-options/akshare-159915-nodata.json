@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "code": "NO_DATA",
+    "message": "159915 is szse_static_only: statics via contracts, quotes not available in akshare"
+  }
+}

@@ -58,7 +58,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\refresh-trading-web-
 
 # 只重挂宿主核心包（工具 prepare 崩溃后）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\refresh-trading-web-profile.ps1
+
+# ETF 期权网关（T 板链/IV 需要；名册 / 到期月不依赖它）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-options-gateway.ps1
 ```
+
+`trading-web` 若仍挂 npm 上的 `@dshtrading/cn@^0.1.4`，本地 `connector-options`
+不会进 profile。只 junction `api` / `cn` 也不够：profile 里会留下 0.1.4 连接器
+实拷，和仓库 0.1.5 各 apply 一次，boot 报
+`service "tradingCnMarketData" has been registered at <Include>`（各市场同症，
+与 issue #81 同族）。把本仓全部 `@dshtrading/*` junction 进 profile（会先停
+3081，**不**跑 `dsh plugin install`），再把 `cordis` 等宿主核心包挂到 `.local`：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\link-trading-web-workspace.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\refresh-trading-web-profile.ps1
+.\start-trading-web.bat
+```
+
+不要跑无 `--dsh` 的 `sync-profile-overrides.mjs`：缺本地宿主时它曾回落 macOS
+`/opt/homebrew`。现在会优先仓库 `.local`。
 
 看谁占着端口：
 

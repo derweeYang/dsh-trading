@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling==1.30.1"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dsh-options"
+version = "0.0.0.dev0"
+description = "Options data kernel for the experimental tool-options plugin: underlyings, contracts, chain, daily"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "DeepSeek" }]
+dependencies = [
+  "numpy>=2.0,<3",
+  "pandas>=2.2,<3",
+  "pyarrow>=18,<21",
+  "akshare>=1.16",
+]
+
+[project.scripts]
+dsh-options = "dsh_options.cli:main"
+
+[dependency-groups]
+test = ["pytest>=8.0"]
+
+# 默认安装 test 组,避免 `uv sync` 后 pytest 落到系统环境的 PATH 解析
+[tool.uv]
+default-groups = ["test"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+markers = ["network: requires outbound network access (skipped by default)"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dsh_options"]

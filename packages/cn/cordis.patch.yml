@@ -44,6 +44,13 @@
       name: '@dshtrading/connector-hithink/dataplane'
       config:
         enabled: true
+    # ETF 期权只读面：独立 tradingCnOptions，不进行情注册表。
+    - id: dsh-trading-cn-dataplane-options
+      name: '@dshtrading/connector-options/dataplane'
+      config:
+        enabled: true
+        gatewayUrl: http://127.0.0.1:8090
+        source: akshare
 
 
 

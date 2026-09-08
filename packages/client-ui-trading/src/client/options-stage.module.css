@@ -1,0 +1,145 @@
+/* OptionsStage —— CN ETF 期权 T 型报价板（2026-09-08 第一期只读面）。
+   token 与 quote-stage / derivatives-stage 同族（--dsw-futu-*）。 */
+
+.root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 2px;
+}
+
+/* 到期月胶囊条：本地算，网关未起也画得出来 */
+.expiryBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.expiryPill {
+  appearance: none;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  color: var(--dsw-futu-text-secondary, #4a5060);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.expiryPill:hover {
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.expiryPill[data-active='true'] {
+  background: var(--dsw-futu-accent-subtle, rgba(59, 130, 246, 0.12));
+  border-color: var(--dsw-futu-accent, #3b82f6);
+  color: var(--dsw-futu-accent, #3b82f6);
+}
+
+.expiryHint,
+.notice,
+.disclaimer {
+  font-size: 12px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.notice {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 0;
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.meta {
+  display: inline-flex;
+  gap: 4px;
+  color: var(--dsw-futu-text-secondary, #4a5060);
+}
+
+.meta label {
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.disclaimer {
+  margin-left: auto;
+}
+
+.tableWrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  border-radius: 8px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th,
+.table td {
+  padding: 4px 8px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.sideHead {
+  text-align: center;
+  font-weight: 600;
+  color: var(--dsw-futu-text-secondary, #4a5060);
+  border-bottom: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+}
+
+.strikeHead {
+  text-align: center;
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+}
+
+.colHead th {
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  border-bottom: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+}
+
+.row:nth-child(even) {
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+}
+
+.row:hover {
+  background: var(--dsw-futu-accent-subtle, rgba(59, 130, 246, 0.08));
+}
+
+.last {
+  font-weight: 600;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.iv {
+  color: var(--dsw-futu-text-secondary, #4a5060);
+}
+
+.strikeCell {
+  text-align: center;
+  font-weight: 600;
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  border-left: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  border-right: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+}

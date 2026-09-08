@@ -12,7 +12,7 @@
  * auth cookie），未认证一律 401/403。数据面公共端点、无凭证、不缓存（铁律 #5）。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { MarketDataService } from '@dshtrading/api'
+import type { CnOptionsService, MarketDataService } from '@dshtrading/api'
 import type { TradingEventsService, TradingEventStore } from '@dshtrading/eventbus'
 import { createFileChartActivationStore, createFileCustomIndicatorStore } from '@dshtrading/indicators/plugin'
 import { createFileKnowledgeCardStore } from '@dshtrading/knowledge/plugin'
@@ -174,6 +174,10 @@ export function apply(ctx: Context): void {
         const router = webCtx.get('tradingMarketRouter', false) as { newsKey?: () => string | undefined } | undefined
         return router?.newsKey?.()
       },
+      cnOptions: (
+        webCtx.get('tradingCnOptions', false)
+        ?? (ctx as unknown as { get?: (key: string, strict?: boolean) => unknown }).get?.('tradingCnOptions', false)
+      ) as CnOptionsService | undefined,
     })
     const bridge = new TradingBridge(host)
 

@@ -1,0 +1,210 @@
+﻿{
+    "ok":  true,
+    "result":  {
+                   "source":  "akshare",
+                   "underlying":  "510050",
+                   "expiryMonth":  "2609",
+                   "expiryDate":  "2026-09-23",
+                   "snapshotAt":  "2026-09-08T09:37:39+08:00",
+                   "calls":  [
+                                 {
+                                     "code":  "510050C2609M02650",
+                                     "strike":  2.65,
+                                     "last":  0.3806,
+                                     "changePct":  3.26,
+                                     "prevSettle":  0.3686
+                                 },
+                                 {
+                                     "code":  "510050C2609M02700",
+                                     "strike":  2.7,
+                                     "last":  0.0,
+                                     "changePct":  0.0,
+                                     "prevSettle":  0.3182
+                                 },
+                                 {
+                                     "code":  "510050C2609M02750",
+                                     "strike":  2.75,
+                                     "last":  0.279,
+                                     "changePct":  3.79,
+                                     "prevSettle":  0.2688
+                                 },
+                                 {
+                                     "code":  "510050C2609M02800",
+                                     "strike":  2.8,
+                                     "last":  0.2298,
+                                     "changePct":  3.75,
+                                     "prevSettle":  0.2215
+                                 },
+                                 {
+                                     "code":  "510050C2609M02850",
+                                     "strike":  2.85,
+                                     "last":  0.1821,
+                                     "changePct":  5.81,
+                                     "prevSettle":  0.1721
+                                 },
+                                 {
+                                     "code":  "510050C2609M02900",
+                                     "strike":  2.9,
+                                     "last":  0.1337,
+                                     "changePct":  9.05,
+                                     "prevSettle":  0.1226
+                                 },
+                                 {
+                                     "code":  "510050C2609M02950",
+                                     "strike":  2.95,
+                                     "last":  0.0897,
+                                     "changePct":  10.74,
+                                     "prevSettle":  0.081
+                                 },
+                                 {
+                                     "code":  "510050C2609M03000",
+                                     "strike":  3.0,
+                                     "last":  0.0518,
+                                     "changePct":  13.6,
+                                     "prevSettle":  0.0456
+                                 },
+                                 {
+                                     "code":  "510050C2609M03100",
+                                     "strike":  3.1,
+                                     "last":  0.0116,
+                                     "changePct":  17.17,
+                                     "prevSettle":  0.0099
+                                 },
+                                 {
+                                     "code":  "510050C2609M03200",
+                                     "strike":  3.2,
+                                     "last":  0.0028,
+                                     "changePct":  12.0,
+                                     "prevSettle":  0.0025
+                                 },
+                                 {
+                                     "code":  "510050C2609M03300",
+                                     "strike":  3.3,
+                                     "last":  0.0018,
+                                     "changePct":  12.5,
+                                     "prevSettle":  0.0016
+                                 },
+                                 {
+                                     "code":  "510050C2609M03400",
+                                     "strike":  3.4,
+                                     "last":  0.0011,
+                                     "changePct":  10.0,
+                                     "prevSettle":  0.001
+                                 },
+                                 {
+                                     "code":  "510050C2609M03500",
+                                     "strike":  3.5,
+                                     "last":  0.001,
+                                     "changePct":  11.11,
+                                     "prevSettle":  0.0009
+                                 },
+                                 {
+                                     "code":  "510050C2609M03600",
+                                     "strike":  3.6,
+                                     "last":  0.0009,
+                                     "changePct":  12.5,
+                                     "prevSettle":  0.0008
+                                 }
+                             ],
+                   "puts":  [
+                                {
+                                    "code":  "510050P2609M02650",
+                                    "strike":  2.65,
+                                    "last":  0.0004,
+                                    "changePct":  0.0,
+                                    "prevSettle":  0.0004
+                                },
+                                {
+                                    "code":  "510050P2609M02700",
+                                    "strike":  2.7,
+                                    "last":  0.0,
+                                    "changePct":  0.0,
+                                    "prevSettle":  0.0008
+                                },
+                                {
+                                    "code":  "510050P2609M02750",
+                                    "strike":  2.75,
+                                    "last":  0.0011,
+                                    "changePct":  10.0,
+                                    "prevSettle":  0.001
+                                },
+                                {
+                                    "code":  "510050P2609M02800",
+                                    "strike":  2.8,
+                                    "last":  0.0014,
+                                    "changePct":  -6.67,
+                                    "prevSettle":  0.0015
+                                },
+                                {
+                                    "code":  "510050P2609M02850",
+                                    "strike":  2.85,
+                                    "last":  0.0024,
+                                    "changePct":  -14.29,
+                                    "prevSettle":  0.0028
+                                },
+                                {
+                                    "code":  "510050P2609M02900",
+                                    "strike":  2.9,
+                                    "last":  0.0046,
+                                    "changePct":  -16.36,
+                                    "prevSettle":  0.0055
+                                },
+                                {
+                                    "code":  "510050P2609M02950",
+                                    "strike":  2.95,
+                                    "last":  0.0109,
+                                    "changePct":  -12.8,
+                                    "prevSettle":  0.0125
+                                },
+                                {
+                                    "code":  "510050P2609M03000",
+                                    "strike":  3.0,
+                                    "last":  0.0239,
+                                    "changePct":  -13.41,
+                                    "prevSettle":  0.0276
+                                },
+                                {
+                                    "code":  "510050P2609M03100",
+                                    "strike":  3.1,
+                                    "last":  0.0833,
+                                    "changePct":  -10.43,
+                                    "prevSettle":  0.093
+                                },
+                                {
+                                    "code":  "510050P2609M03200",
+                                    "strike":  3.2,
+                                    "last":  0.1742,
+                                    "changePct":  -5.84,
+                                    "prevSettle":  0.185
+                                },
+                                {
+                                    "code":  "510050P2609M03300",
+                                    "strike":  3.3,
+                                    "last":  0.2769,
+                                    "changePct":  -2.22,
+                                    "prevSettle":  0.2832
+                                },
+                                {
+                                    "code":  "510050P2609M03400",
+                                    "strike":  3.4,
+                                    "last":  0.3809,
+                                    "changePct":  -0.29,
+                                    "prevSettle":  0.382
+                                },
+                                {
+                                    "code":  "510050P2609M03500",
+                                    "strike":  3.5,
+                                    "last":  0.0,
+                                    "changePct":  0.0,
+                                    "prevSettle":  0.4821
+                                },
+                                {
+                                    "code":  "510050P2609M03600",
+                                    "strike":  3.6,
+                                    "last":  0.0,
+                                    "changePct":  0.0,
+                                    "prevSettle":  0.5824
+                                }
+                            ]
+               }
+}

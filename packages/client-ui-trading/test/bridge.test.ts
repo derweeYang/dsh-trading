@@ -676,3 +676,137 @@ describe('TradingBridge.derivativesHistory（issue #54 衍生品页签趋势卡�
       .rejects.toBeInstanceOf(BridgeProtocolError)
   })
 })
+
+describe('TradingBridge CN ETF options', () => {
+  it('未挂 tradingCnOptions → TRADING_NOT_IMPLEMENTED', async () => {
+    const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: fakeService() }))
+    await expect(dispatchBridgeRequest(bridge, 'GET', '/options/chain', new URLSearchParams({
+      underlying: '510050.SH',
+      expiryMonth: '2609',
+    }))).rejects.toMatchObject({ code: 'TRADING_NOT_IMPLEMENTED' })
+  })
+
+  it('缺 underlying / expiryMonth → 400', async () => {
+    const bridge = new TradingBridge({
+      ...fakeHost({}),
+      getCnOptions: () => ({
+        listUnderlyings: async () => [],
+        getOptionExpiries: async () => {
+          throw new Error('should not run')
+        },
+        getOptionChain: async () => {
+          throw new Error('should not run')
+        },
+        getImpliedVol: async () => {
+          throw new Error('should not run')
+        },
+        getStrategy: async () => {
+          throw new Error('should not run')
+        },
+      }),
+    })
+    await expect(dispatchBridgeRequest(bridge, 'GET', '/options/chain', new URLSearchParams({ expiryMonth: '2609' })))
+      .rejects.toBeInstanceOf(BridgeProtocolError)
+    await expect(dispatchBridgeRequest(bridge, 'GET', '/options/chain', new URLSearchParams({ underlying: '510050' })))
+      .rejects.toBeInstanceOf(BridgeProtocolError)
+  })
+
+  it('GET /options/underlyings 透传名册', async () => {
+    const bridge = new TradingBridge({
+      ...fakeHost({}),
+      getCnOptions: () => ({
+        listUnderlyings: async () => [{
+          underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF',
+          multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board',
+        }],
+        getOptionExpiries: async () => {
+          throw new Error('unused')
+        },
+        getOptionChain: async () => {
+          throw new Error('unused')
+        },
+        getImpliedVol: async () => {
+          throw new Error('unused')
+        },
+        getStrategy: async () => {
+          throw new Error('unused')
+        },
+      }),
+    })
+    const { status, payload } = await dispatchBridgeRequest(bridge, 'GET', '/options/underlyings', new URLSearchParams())
+    expect(status).toBe(200)
+    expect(payload).toMatchObject({ ok: true, underlyings: [{ underlying: '510050' }] })
+  })
+
+  it('GET /options/chain 透传服务结果', async () => {
+    const bridge = new TradingBridge({
+      ...fakeHost({}),
+      getCnOptions: () => ({
+        listUnderlyings: async () => [],
+        getOptionExpiries: async (query) => ({
+          underlying: '510050',
+          source: query.source ?? 'synth',
+          months: [{ expiryMonth: '2609', expiryDate: '2026-09-23' }],
+        }),
+        getOptionChain: async (query) => ({
+          underlying: '510050',
+          expiryMonth: query.expiryMonth ?? '',
+          source: 'synth',
+          calls: [{ code: '510050C2609M02850', strike: 2.85 }],
+          puts: [],
+        }),
+        getImpliedVol: async () => {
+          throw new Error('unused')
+        },
+        getStrategy: async () => {
+          throw new Error('unused')
+        },
+      }),
+    })
+    const { status, payload } = await dispatchBridgeRequest(
+      bridge,
+      'GET',
+      '/options/chain',
+      new URLSearchParams({ underlying: '510050.SH', expiryMonth: '2609', source: 'synth' }),
+    )
+    expect(status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      chain: { underlying: '510050', calls: [{ code: '510050C2609M02850' }] },
+    })
+  })
+
+  it('GET /options/expiries 透传四季月', async () => {
+    const bridge = new TradingBridge({
+      ...fakeHost({}),
+      getCnOptions: () => ({
+        listUnderlyings: async () => [],
+        getOptionExpiries: async (query) => ({
+          underlying: '510050',
+          source: query.source ?? 'akshare',
+          months: [{ expiryMonth: '2609', expiryDate: '2026-09-23' }],
+        }),
+        getOptionChain: async () => {
+          throw new Error('unused')
+        },
+        getImpliedVol: async () => {
+          throw new Error('unused')
+        },
+        getStrategy: async () => {
+          throw new Error('unused')
+        },
+      }),
+    })
+    const { status, payload } = await dispatchBridgeRequest(
+      bridge,
+      'GET',
+      '/options/expiries',
+      new URLSearchParams({ underlying: '510050.SH' }),
+    )
+    expect(status).toBe(200)
+    expect(payload).toMatchObject({
+      ok: true,
+      expiries: { underlying: '510050', months: [{ expiryMonth: '2609', expiryDate: '2026-09-23' }] },
+    })
+  })
+})

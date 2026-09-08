@@ -1,0 +1,8 @@
+=== underlyings ===
+unauthorized
+[http=401 bytes=12]
+=== expiries?underlying=510050 ===
+unauthorized
+[http=401 bytes=12]
+=== chain?underlying=510050&expiryMonth=2609 (first 800 chars) ===
+unauthorized

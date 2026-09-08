@@ -1,0 +1,29 @@
+---
+description: Frontend is workbuddy; backend is Cursor/Claude. Do not implement client UI.
+alwaysApply: true
+---
+
+# Frontend / backend agent split
+
+Owner rule (2026-09-08): **workbuddy** owns visible UI; **Cursor / Claude** own backend.
+
+## Cursor / Claude may change
+
+- `@dshtrading/api` contracts and Context service keys
+- connectors, kits, market bundles, router, base (when a gate/market regex must change)
+- Python kernels (`python/**`) and local HTTP gateways
+- `packages/client-ui-*/src/` **node half only** (HTTP bridge routes, host plugin `apply`)
+- Agent tools, skills, spikes, Agent Notes, docs that describe the wire
+
+## Cursor / Claude must not change
+
+- `packages/client-ui-*/src/client/**` — React stages, CSS, quote tabs, T-board, locales UI copy
+- Visual layout, mockups, or “just add a tab” in QuoteStage
+
+## Handoff
+
+Publish a stable JSON wire + route (example: `GET /dshtrading/api/options/chain`) and types in `@dshtrading/api`. Workbuddy consumes that. Do not implement `OptionsStage` or edit QuoteStage tabs here.
+
+If a task needs both sides, do the backend seam first and stop; say what workbuddy should mount.
+
+See `.agents/notes/implemented/process/2026-09-08-frontend-backend-agent-split.md`.

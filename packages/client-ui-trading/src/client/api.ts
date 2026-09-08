@@ -4,7 +4,9 @@
  * carries the auth cookie by default).
  */
 import type { AccountBalance, DerivativesData, DerivativesHistory, Kline, MarketId, MarketInfo, Order, Orderbook, Position, TickerOutcome, TradeFill, TradeTick } from './types.ts'
-import type { FundamentalsPackage } from '@dshtrading/api'
+import type {
+  FundamentalsPackage, OptionChain, OptionExpiryCalendar, OptionUnderlying,
+} from '@dshtrading/api'
 import type { CustomIndicatorRecord, IndicatorInstance } from '@dshtrading/indicators'
 import type { KnowledgeCard } from '@dshtrading/knowledge'
 import type { CustomStrategyRecord, CustomScreenerRecord } from '@dshtrading/strategies'
@@ -109,6 +111,69 @@ export async function fetchRecentTrades(market: MarketId, symbol: string, limit 
     return Array.isArray(wire.trades) ? wire.trades : []
   } catch {
     return null
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* CN ETF 期权（2026-09-08 第一期只读面；T 板用，契约见 docs/options-bridge.md） */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 期权取数结果。与其余 fetch（失败一律 null）不同，期权面要按错误码分诊：
+ * NOT_IMPLEMENTED → 页签隐藏；NETWORK → 提示起网关；NO_DATA → 空态 + 原文。
+ */
+export type OptionsOutcome<T> = { ok: true; data: T } | { ok: false; code: string; message: string }
+
+function optionsFailure(err: unknown): { ok: false; code: string; message: string } {
+  if (err instanceof BridgeError) {
+    return { ok: false, code: err.code ?? `HTTP_${err.status}`, message: err.message }
+  }
+  return { ok: false, code: 'TRADING_UNKNOWN', message: err instanceof Error ? err.message : String(err) }
+}
+
+/**
+ * 注册标的名册（连接器静态表，不打网关）——T 板页签显隐判据。
+ * 未挂 connector-options → TRADING_NOT_IMPLEMENTED，UI 隐藏「期权」页签。
+ */
+export async function fetchOptionsUnderlyings(): Promise<OptionsOutcome<readonly OptionUnderlying[]>> {
+  try {
+    const wire = await getJson<{ ok: boolean; underlyings: readonly OptionUnderlying[] }>(
+      '/dshtrading/api/options/underlyings',
+    )
+    return { ok: true, data: wire.underlyings ?? [] }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/** 标准四季月（当月/次月/+3/+6），本地算不打网关 → 网关未起也能画出到期胶囊。 */
+export async function fetchOptionsExpiries(underlying: string): Promise<OptionsOutcome<OptionExpiryCalendar>> {
+  try {
+    const query = new URLSearchParams({ underlying })
+    const wire = await getJson<{ ok: boolean; expiries: OptionExpiryCalendar }>(
+      `/dshtrading/api/options/expiries?${query.toString()}`,
+    )
+    if (wire.expiries === undefined) return optionsFailure(new Error('expiries missing in wire'))
+    return { ok: true, data: wire.expiries }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/** T 型报价链（需要网关 127.0.0.1:8090）。expiryMonth 为 YYMM。 */
+export async function fetchOptionsChain(
+  underlying: string,
+  expiryMonth: string,
+): Promise<OptionsOutcome<OptionChain>> {
+  try {
+    const query = new URLSearchParams({ underlying, expiryMonth })
+    const wire = await getJson<{ ok: boolean; chain: OptionChain }>(
+      `/dshtrading/api/options/chain?${query.toString()}`,
+    )
+    if (wire.chain === undefined) return optionsFailure(new Error('chain missing in wire'))
+    return { ok: true, data: wire.chain }
+  } catch (err) {
+    return optionsFailure(err)
   }
 }
 

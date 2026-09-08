@@ -35,5 +35,11 @@ Status: implemented
 
 - Windows 从源码启动的权威步骤是 `docs/windows-local-dev.md` + 根目录 `start-trading-web.bat`。
 - 工具调用崩 `prepare` 时先跑 `scripts/refresh-trading-web-profile.ps1`，再重启实例；只 `dsh plugin install` 会重新物化影子拷贝。
+- `service "tradingXxxMarketData" has been registered at <Include>` 与 issue #81
+  同族：profile 里 0.1.4 连接器实拷 + workspace 0.1.5 junction + 仓库 pnpm
+  `cordis` 不是宿主那一份，isolate 失效后第二家 dataplane 撞 Include。处理：
+  `link-trading-web-workspace.ps1` 挂上本仓全部 `@dshtrading/*`（只挂 api 不够），
+  再 refresh（CORE_PKGS 含 `cordis` / `cordis-plugin-*`）。脚本删 junction 用
+  `Directory.Delete`，不用 `Remove-Item -Recurse`（PowerShell 5.1 会误删源树）。
 - 换端口：`start-trading-web.bat 3082`。token 以当次黑窗口打印值为准。
 - 本机 Cursor 若再出现 `tool_calls` 协议失败，先怀疑 episodic-memory ABI，不要当成 trading-web 回归。
