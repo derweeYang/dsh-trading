@@ -25,10 +25,7 @@ GREEK_KEYS = (
 )
 MARGIN_NOTE = "标准义务仓逐腿加总；未含组合策略保证金与强平；券商可在交易所标准上上浮。"
 DISCLAIMER = "未含组合策略保证金与强平路径"
-ENTRY_NOTE = (
-    "buy negative, sell positive; already × qty × multiplier "
-    "(underlying qty is shares)"
-)
+ENTRY_NOTE = "buy negative, sell positive; already × qty × multiplier (underlying qty is shares)"
 
 
 def _required(params: dict[str, Any], name: str, fields: tuple[str, ...]) -> None:
@@ -201,9 +198,7 @@ def leg_expiry_pnl(
     return sign * (intrinsic - premium) * qty * multiplier
 
 
-def build_payoff(
-    legs: list[dict[str, Any]], spot: float, tick: float
-) -> list[dict[str, float]]:
+def build_payoff(legs: list[dict[str, Any]], spot: float, tick: float) -> list[dict[str, float]]:
     """Build an expiry payoff grid containing spot and every option strike."""
     strikes = [
         float(leg["strike"])
@@ -254,7 +249,8 @@ def handle_strategy(request: dict[str, Any], cache_dir: Path) -> dict[str, Any]:
     request : dict
         ``{source, underlying, legs?, template?, templateParams?,
         priceField?, asOf?, rate?, dividendYield?, spot?,
-        premiumOverrides?, cacheDir, vizDir?, chartKinds?}``。
+        premiumOverrides?, cacheDir, vizDir?, chartKinds?,
+        holdingQty?}``。
     cache_dir : Path
         缓存根(CLI 必填;本命令不读盘,链/IV 走既有快照路径)。
 
@@ -269,6 +265,7 @@ def handle_strategy(request: dict[str, Any], cache_dir: Path) -> dict[str, Any]:
     _validate_akshare_asof(source, request)
     _validate_chart_kinds(request)
     multiplier = int(reg["multiplier"])
+    _apply_holding_qty(request, multiplier)
     tick = float(reg["tickSize"])
     raw_legs = _collect_legs(request, multiplier)
     if not raw_legs:
@@ -286,9 +283,7 @@ def handle_strategy(request: dict[str, Any], cache_dir: Path) -> dict[str, Any]:
 
     spot = _resolve_spot(request, month_state, ok_months)
     header = _header_from_iv(request, source, month_state, ok_months)
-    settle_quotes, settle_error = _load_settles(
-        request, month_state, cache_dir, raw_legs
-    )
+    settle_quotes, settle_error = _load_settles(request, month_state, cache_dir, raw_legs)
     resolved = _resolve_option_legs(
         raw_legs,
         month_state,
@@ -389,6 +384,37 @@ def _validate_chart_kinds(request: dict[str, Any]) -> None:
         or not set(kinds_raw) <= set(STRATEGY_CHART_KINDS)
     ):
         raise OptionsError("BAD_REQUEST", f"chartKinds must be a non-empty subset of {allowed}")
+
+
+_HOLDING_TEMPLATES = ("covered_call", "collar")
+
+
+def _apply_holding_qty(request: dict[str, Any], multiplier: int) -> None:
+    """阶段 4 互联:``holdingQty``(真实持仓 ETF 份额)预填备兑类模板。
+
+    qty 取 ``floor(holdingQty / multiplier)`` 张并写入 templateParams——现货腿
+    (qty×multiplier)与期权腿(qty)自动匹配;不足 1 张报错。仅 covered_call /
+    collar 有效,其余模板显式拒绝(防误把持仓当垂直/跨式参数)。
+    """
+    if "holdingQty" not in request:
+        return
+    raw = request["holdingQty"]
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool) or raw <= 0:
+        raise OptionsError("BAD_REQUEST", "holdingQty must be a positive number of ETF shares")
+    template = request.get("template")
+    if template not in _HOLDING_TEMPLATES:
+        raise OptionsError(
+            "BAD_REQUEST",
+            f"holdingQty only applies to {_HOLDING_TEMPLATES} templates, got {template!r}",
+        )
+    qty = int(raw // multiplier)
+    if qty < 1:
+        raise OptionsError(
+            "BAD_REQUEST",
+            f"holdingQty {raw} covers less than one contract (multiplier {multiplier})",
+        )
+    params = request.get("templateParams") or {}
+    request["templateParams"] = {**params, "qty": qty}
 
 
 def _collect_legs(request: dict[str, Any], multiplier: int) -> list[dict[str, Any]]:
@@ -551,9 +577,7 @@ def _resolve_spot(
     for month in ok_months:
         return float(month_state[month]["iv"]["spot"])
     if request.get("source") == "synth":
-        expired = [
-            month for month, state in month_state.items() if state["status"] == "expired"
-        ]
+        expired = [month for month, state in month_state.items() if state["status"] == "expired"]
         if expired:
             as_of = request.get("asOf")
             snap = pricing._snapshot_synth(
@@ -606,11 +630,7 @@ def _load_settles(
 ) -> tuple[dict[str, dict[str, Any]], OptionsError | None]:
     quotes: dict[str, dict[str, Any]] = {}
     settle_error: OptionsError | None = None
-    wanted = [
-        month
-        for month, state in month_state.items()
-        if state["status"] in ("ok", "expired")
-    ]
+    wanted = [month for month, state in month_state.items() if state["status"] in ("ok", "expired")]
     needed = [leg for leg in raw_legs if leg["kind"] == "option"]
     for month in wanted:
         month_quotes: dict[str, dict[str, Any]] = {}
@@ -637,9 +657,7 @@ def _load_settles(
                         "prevSettle": float(row["price"]),
                     }
         month_legs = [leg for leg in needed if str(leg["expiryMonth"]) == month]
-        need_fallback = (not iv_ok) or any(
-            not _has_settle(leg, month_quotes) for leg in month_legs
-        )
+        need_fallback = (not iv_ok) or any(not _has_settle(leg, month_quotes) for leg in month_legs)
         if need_fallback:
             if request.get("source") == "synth":
                 snap_error = _fill_synth_settles(request, month, month_quotes)
@@ -800,21 +818,13 @@ def _settle_for(
     return None
 
 
-def _cover_plan(
-    legs: list[dict[str, Any]], multiplier: int
-) -> dict[int, tuple[int, int]]:
+def _cover_plan(legs: list[dict[str, Any]], multiplier: int) -> dict[int, tuple[int, int]]:
     remaining = sum(
-        int(leg["qty"])
-        for leg in legs
-        if leg["kind"] == "underlying" and leg["side"] == "buy"
+        int(leg["qty"]) for leg in legs if leg["kind"] == "underlying" and leg["side"] == "buy"
     )
     plan: dict[int, tuple[int, int]] = {}
     for index, leg in enumerate(legs):
-        if not (
-            leg["kind"] == "option"
-            and leg["side"] == "sell"
-            and leg.get("optionType") == "C"
-        ):
+        if not (leg["kind"] == "option" and leg["side"] == "sell" and leg.get("optionType") == "C"):
             continue
         covered, uncovered = margin.cover_short_calls(
             long_shares=remaining, short_call_qty=int(leg["qty"]), multiplier=multiplier
@@ -897,11 +907,7 @@ def _strategy_charts(
     if not isinstance(viz_raw, str) or not viz_raw:
         return []
     kinds_raw = request.get("chartKinds")
-    kinds = (
-        strategy_charts.CHART_KINDS
-        if kinds_raw is None
-        else tuple(dict.fromkeys(kinds_raw))
-    )
+    kinds = strategy_charts.CHART_KINDS if kinds_raw is None else tuple(dict.fromkeys(kinds_raw))
     return strategy_charts.write_strategy_charts(
         viz_dir=Path(viz_raw),
         underlying=underlying,

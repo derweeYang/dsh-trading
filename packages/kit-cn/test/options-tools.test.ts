@@ -4,6 +4,7 @@ import {
   createGetOptionChainTool,
   createGetOptionExpiriesTool,
   createGetOptionPriceTool,
+  createGetOptionStrategyTool,
   createGetOptionUnderlyingDailyTool,
   createGetOptionVolAnalyticsTool,
   createOptionParityCheckTool,
@@ -67,6 +68,29 @@ describe('cn_get_option_chain', () => {
     const text = await tool.execute({ underlying: '510050.SH' })
     expect(String(text)).toContain('2609')
     expect(String(text)).toContain('2026-09-23')
+  })
+
+  it('cn_get_option_strategy 透传 holdingQty（阶段 4 备兑现货腿预填）；缺席整键省略', async () => {
+    const requests: unknown[] = []
+    const tool = createGetOptionStrategyTool({
+      service: {
+        ...fakeService(emptyChain()),
+        getStrategy: async (request) => {
+          requests.push(request)
+          return {
+            underlying: '510050', source: 'synth', multiplier: 10000, spot: 2.9,
+            legs: [], entry: { debitCredit: 0, note: '' }, payoff: [],
+            greeks: { status: 'insufficient', net: {}, legs: [] },
+            margin: { perLeg: [], totalInitial: 0, totalMaintenance: 0, note: '' },
+          }
+        },
+      },
+    })
+    await tool.execute({ underlying: '510050.SH', template: 'covered_call', holdingQty: 25000 })
+    expect(requests[0]).toMatchObject({ underlying: '510050.SH', template: 'covered_call', holdingQty: 25000 })
+
+    await tool.execute({ underlying: '510050.SH' })
+    expect('holdingQty' in (requests[1] as Record<string, unknown>)).toBe(false)
   })
 
   it('cn-risk-checklist mentions ETF option obligation margin', async () => {

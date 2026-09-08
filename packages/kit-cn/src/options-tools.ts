@@ -190,6 +190,10 @@ export function createGetOptionStrategyTool(options: OptionToolOptions = {}) {
         type: 'number',
         description: 'Continuous risk-free rate',
       },
+      holdingQty: {
+        type: 'number',
+        description: 'Real ETF share holding for covered_call/collar templates: prefills the stock leg (qty = floor(holdingQty/multiplier) contracts, both legs auto-matched)',
+      },
     },
     output: {
       schema: { type: 'string' },
@@ -202,6 +206,7 @@ export function createGetOptionStrategyTool(options: OptionToolOptions = {}) {
         template?: unknown
         source?: unknown
         rate?: unknown
+        holdingQty?: unknown
       }
       const template = typeof args.template === 'string' ? args.template : undefined
       const allowed = ['covered_call', 'collar', 'vertical', 'straddle', 'butterfly'] as const
@@ -214,6 +219,7 @@ export function createGetOptionStrategyTool(options: OptionToolOptions = {}) {
         ...optionalField('template', typed),
         ...optionalField('source', asSource(args.source)),
         ...optionalField('rate', rate),
+        ...optionalField('holdingQty', typeof args.holdingQty === 'number' ? args.holdingQty : undefined),
       })
       return JSON.stringify(result)
     },

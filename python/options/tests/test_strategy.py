@@ -270,6 +270,45 @@ def test_collar_covers_the_short_call(tmp_path):
     assert any(leg.get("covered") for leg in out["legs"] if leg.get("optionType") == "C")
 
 
+def test_holding_qty_prefills_covered_call_legs_from_real_position(tmp_path):
+    """阶段 4 互联:holdingQty=25000 份 → 2 张备兑,现货/期权两腿自动匹配。"""
+    out = _strategy(
+        tmp_path,
+        template="covered_call",
+        templateParams={"expiryMonth": "2612", "strike": 3.0},
+        holdingQty=25000,
+    )
+    stock = next(leg for leg in out["legs"] if leg["kind"] == "underlying")
+    call = next(leg for leg in out["legs"] if leg["kind"] == "option")
+    assert stock["qty"] == 20000
+    assert call["qty"] == 2
+
+
+def test_holding_qty_below_one_contract_is_bad_request(tmp_path):
+    with pytest.raises(OptionsError, match="less than one contract"):
+        _strategy(
+            tmp_path,
+            template="covered_call",
+            templateParams={"expiryMonth": "2612", "strike": 3.0},
+            holdingQty=9999,
+        )
+
+
+def test_holding_qty_rejected_for_non_holding_template(tmp_path):
+    with pytest.raises(OptionsError, match="only applies to"):
+        _strategy(
+            tmp_path,
+            template="vertical",
+            templateParams={
+                "expiryMonth": "2612",
+                "optionType": "C",
+                "longStrike": 2.9,
+                "shortStrike": 3.1,
+            },
+            holdingQty=25000,
+        )
+
+
 def test_bull_call_vertical_max_profit_and_short_leg_margin(tmp_path):
     out = _strategy(
         tmp_path,
@@ -317,9 +356,7 @@ def test_call_butterfly_charges_margin_on_two_short_mids(tmp_path):
         },
     )
     shorts = [
-        row
-        for row in out["margin"]["perLeg"]
-        if row.get("qty") == 2 or row.get("side") == "sell"
+        row for row in out["margin"]["perLeg"] if row.get("qty") == 2 or row.get("side") == "sell"
     ]
     assert out["margin"]["totalInitial"] > 0.0
     assert all(not row.get("covered") for row in shorts)

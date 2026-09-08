@@ -4,6 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { MarketDataService, NewsAggregator } from '@dshtrading/api'
+import { createMemoryHoldingsStore } from '@dshtrading/holdings'
 import { createMemoryCustomStrategyStore } from '@dshtrading/strategies'
 import {
   BridgeProtocolError,
@@ -836,5 +837,181 @@ describe('TradingBridge CN ETF options 交易端点（阶段 3）', () => {
       ok: true,
       positions: [{ symbol: '510050C2609M02850', optionType: 'C', quantity: 2 }],
     })
+  })
+})
+
+describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve / 持仓关联）', () => {
+  const ROSTER = [
+    { underlying: '510050', exchange: 'SSE' as const, name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' as const },
+    { underlying: '159915', exchange: 'SZSE' as const, name: '创业板ETF易方达', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' as const },
+  ]
+
+  function linkedHost(opts: {
+    chain?: { underlying: string; spot?: number }
+    tickerPrice?: number
+    holdings?: Array<{ symbol: string; size: number }>
+  } = {}): BridgeHost {
+    const chain = opts.chain ?? { underlying: '510050' }
+    const cnOptions: import('@dshtrading/api').CnOptionsService = {
+      listUnderlyings: async () => ROSTER,
+      getOptionExpiries: async () => {
+        throw new Error('unused')
+      },
+      getOptionChain: async () => ({
+        underlying: chain.underlying, expiryMonth: '2609', source: 'synth',
+        ...(chain.spot !== undefined ? { spot: chain.spot } : {}),
+        calls: [{ code: '510050C2609M02850', strike: 2.85 }], puts: [],
+      }),
+      getImpliedVol: async () => {
+        throw new Error('unused')
+      },
+      getStrategy: async () => {
+        throw new Error('unused')
+      },
+      getVolAnalytics: async () => {
+        throw new Error('unused')
+      },
+      getUnderlyingDaily: async () => {
+        throw new Error('unused')
+      },
+      getPrice: async () => {
+        throw new Error('unused')
+      },
+      getParityCheck: async () => {
+        throw new Error('unused')
+      },
+    }
+    return {
+      ...fakeHost({ tradingCnMarketData: fakeService({
+        getTicker: async (symbol: string) => ({ symbol, price: opts.tickerPrice ?? 2.912, timestamp: 1 }),
+      }) }),
+      getCnOptions: () => cnOptions,
+      ...(opts.holdings === undefined ? {} : {
+        holdingsStore: createMemoryHoldingsStore({
+          holdings: opts.holdings.map((h, i) => ({
+            id: `h-${i}`, market: 'cn' as const, symbol: h.symbol, side: 'long' as const,
+            size: h.size, account: '默认账户', kind: 'real' as const,
+          })),
+        }),
+      }),
+    }
+  }
+
+  it('GET /options/resolve：长代码 → underlying + contract 要素 + link（strike 5 位编码 ÷1000）', async () => {
+    const bridge = new TradingBridge(linkedHost())
+    const { status, payload } = await dispatchBridgeRequest(
+      bridge, 'GET', '/options/resolve', new URLSearchParams({ symbol: '510050c2609m02850' }),
+    )
+    expect(status).toBe(200)
+    expect(payload).toEqual({
+      ok: true,
+      input: '510050C2609M02850',
+      underlying: '510050',
+      link: { underlying: '510050', spotSymbol: '510050.SH', exchange: 'SSE', callPrefix: '510050C', putPrefix: '510050P' },
+      contract: { code: '510050C2609M02850', optionType: 'C', strike: 2.85, expiryMonth: '2609' },
+    })
+  })
+
+  it('GET /options/resolve：现货符号 → link，无 contract 键；名册外 6 位码 → link 缺席；非 CN 格式 → 400', async () => {
+    const bridge = new TradingBridge(linkedHost())
+    const { payload: spot } = await dispatchBridgeRequest(
+      bridge, 'GET', '/options/resolve', new URLSearchParams({ symbol: '510050.sh' }),
+    )
+    expect(spot).toEqual({
+      ok: true,
+      input: '510050.SH',
+      underlying: '510050',
+      link: { underlying: '510050', spotSymbol: '510050.SH', exchange: 'SSE', callPrefix: '510050C', putPrefix: '510050P' },
+    })
+
+    const { payload: unknown6 } = await dispatchBridgeRequest(
+      bridge, 'GET', '/options/resolve', new URLSearchParams({ symbol: '600519.SH' }),
+    )
+    expect(unknown6).toMatchObject({ ok: true, underlying: '600519' })
+    expect('link' in (unknown6 as Record<string, unknown>)).toBe(false)
+
+    await expect(dispatchBridgeRequest(
+      bridge, 'GET', '/options/resolve', new URLSearchParams({ symbol: 'AAPL' }),
+    )).rejects.toBeInstanceOf(BridgeProtocolError)
+    await expect(dispatchBridgeRequest(
+      bridge, 'GET', '/options/resolve', new URLSearchParams(),
+    )).rejects.toBeInstanceOf(BridgeProtocolError)
+  })
+
+  it('GET /options/chain：CN 行情可用 → spot 回填为现货最新价（ATM 高亮）', async () => {
+    const bridge = new TradingBridge(linkedHost({ tickerPrice: 2.95 }))
+    const { payload } = await dispatchBridgeRequest(
+      bridge, 'GET', '/options/chain', new URLSearchParams({ underlying: '510050.SH', expiryMonth: '2609' }),
+    )
+    expect(payload).toMatchObject({ ok: true, chain: { underlying: '510050', spot: 2.95 } })
+  })
+
+  it('GET /options/chain：行情服务缺席 / SYNTH 标的 → 保留链自带 spot，不阻塞 T 板', async () => {
+    // 行情未挂（getMarketService 全空）→ python 链自带 spot 2.9 原样保留
+    const host = linkedHost({ chain: { underlying: '510050', spot: 2.9 } })
+    const noMarket: BridgeHost = { ...host, getMarketService: () => undefined }
+    const { payload } = await dispatchBridgeRequest(
+      new TradingBridge(noMarket), 'GET', '/options/chain', new URLSearchParams({ underlying: '510050', expiryMonth: '2609' }),
+    )
+    expect(payload).toMatchObject({ chain: { spot: 2.9 } })
+
+    // ticker 抛错 → 同样保留
+    const broken: BridgeHost = {
+      ...host,
+      getMarketService: () => fakeService({
+        getTicker: async () => {
+          throw new Error('market closed')
+        },
+      }),
+    }
+    const { payload: kept } = await dispatchBridgeRequest(
+      new TradingBridge(broken), 'GET', '/options/chain', new URLSearchParams({ underlying: '510050', expiryMonth: '2609' }),
+    )
+    expect(kept).toMatchObject({ chain: { spot: 2.9 } })
+  })
+
+  it('GET /options/underlyings：heldQty 从台账聚合同标的份额（多账户/裸码求和）；无持仓 → 键缺席', async () => {
+    const bridge = new TradingBridge(linkedHost({
+      holdings: [
+        { symbol: '510050.SH', size: 20000 },
+        { symbol: '510050', size: 5000 },
+        { symbol: '600519.SH', size: 100 }, // 非期权标的：不影响名册
+      ],
+    }))
+    const { payload } = await dispatchBridgeRequest(bridge, 'GET', '/options/underlyings', new URLSearchParams())
+    expect(payload).toMatchObject({
+      ok: true,
+      underlyings: [
+        { underlying: '510050', heldQty: 25000 },
+        { underlying: '159915' },
+      ],
+    })
+    const rows = (payload as { underlyings: Array<Record<string, unknown>> }).underlyings
+    expect('heldQty' in rows[1]!).toBe(false)
+  })
+
+  it('POST /options/strategy：holdingQty 正数透传（备兑现货腿预填）；非正数 → 400', async () => {
+    const getStrategy = vi.fn(async (req: import('@dshtrading/api').OptionStrategyRequest) => ({
+      underlying: req.underlying, source: 'synth', multiplier: 10000, spot: 2.9,
+      legs: [], entry: { debitCredit: 0, note: '' }, payoff: [], greeks: { status: 'insufficient', net: {}, legs: [] },
+      margin: { perLeg: [], totalInitial: 0, totalMaintenance: 0, note: '' },
+    }))
+    const bridge = new TradingBridge({
+      ...linkedHost(),
+      getCnOptions: () => ({
+        ...linkedHost().getCnOptions!(),
+        getStrategy: getStrategy as never,
+      }),
+    })
+    await dispatchBridgeRequest(
+      bridge, 'POST', '/options/strategy', new URLSearchParams(),
+      { underlying: '510050.SH', template: 'covered_call', holdingQty: 25000 },
+    )
+    expect(getStrategy).toHaveBeenCalledWith(expect.objectContaining({ holdingQty: 25000 }))
+
+    await expect(dispatchBridgeRequest(
+      bridge, 'POST', '/options/strategy', new URLSearchParams(),
+      { underlying: '510050.SH', template: 'covered_call', holdingQty: -1 },
+    )).rejects.toMatchObject({ status: 400 })
   })
 })

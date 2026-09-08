@@ -82,6 +82,8 @@ export interface OptionUnderlying {
   readonly tickSize: number
   /** sse_board 有 T 板；szse_static_only 只有静态表；iquant_board 走迅投研。 */
   readonly quotesSource: 'sse_board' | 'szse_static_only' | 'iquant_board' | 'synth'
+  /** 阶段 4 互联：桥侧从 holdings 聚合的持仓份额（现货腿预填/备兑覆盖参考；无持仓缺省）。 */
+  readonly heldQty?: number
 }
 
 /** 合约静态（规范主键 = 长代码，如 510050C2609M02850）。 */
@@ -150,6 +152,11 @@ export interface OptionStrategyRequest {
   readonly legs?: readonly unknown[]
   readonly source?: OptionSource
   readonly rate?: number
+  /**
+   * 阶段 4 互联：真实持仓份额（ETF 份）。仅 covered_call / collar 有效——python 内核
+   * 据此预填现货腿（qty = floor(holdingQty / multiplier) 张，不足 1 张报错）。
+   */
+  readonly holdingQty?: number
 }
 
 /** 策略组合一腿（python strategy `_public_leg` 形状；认购/认沽由 optionType）。 */

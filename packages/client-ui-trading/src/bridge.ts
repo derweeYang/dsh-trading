@@ -14,7 +14,7 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionOrder, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionOrder, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
 import { aggregateNews as aggregateCnNews, fetchCnFundamentalsPackage } from '@dshtrading/kit-cn'
 import type { ChartActivationStore, CustomIndicatorRecord, CustomIndicatorStore, IndicatorInstance } from '@dshtrading/indicators'
 import { clampActivationParams, createMemoryChartActivationStore, createMemoryCustomIndicatorStore, resolveIndicatorSpec, sanitizeInstance, symbolScopeKey, withHiddenScopes } from '@dshtrading/indicators'
@@ -131,6 +131,13 @@ export const MAX_SYMBOLS = 32
 /** 单次 K 线 limit 封顶（保护公共端点；连接器可在此基础上进一步收紧）。 */
 export const MAX_KLINE_LIMIT = 1000
 
+/**
+ * 期权长代码 / 现货符号（阶段 4 互联 resolve 用；与 connector-options rest.ts 的
+ * LONG_CODE / SPOT_CODE 及 python synth.LONG_CODE_RE 保持一致——同步测试锁行为）。
+ */
+const OPTION_LONG_CODE = /^(\d{6})([CP])(\d{4})M(\d{5})$/
+const OPTION_SPOT_CODE = /^(\d{6})(?:\.(?:SH|SZ))?$/
+
 /** 宿主面：桥对 cordis ctx 的最小依赖（便于单测注入假件）。 */
 export interface BridgeHost {
   /** 取市场行情服务；未安装/未激活返回 undefined。 */
@@ -210,6 +217,24 @@ export interface FundamentalsWire {
 export interface OptionUnderlyingsWire {
   ok: true
   underlyings: readonly OptionUnderlying[]
+}
+
+/** 现货 ↔ 期权双向规范化结果（阶段 4 互联，GET /options/resolve）。 */
+export interface OptionResolveWire {
+  ok: true
+  input: string
+  /** 规范 6 位 ETF 代码（名册主键）。 */
+  underlying: string
+  /** 名册命中时给出现货跳转符号与长代码前缀。 */
+  link?: UnderlyingLink
+  /** 输入本身是期权长代码时解析出的合约要素。 */
+  contract?: {
+    code: string
+    optionType: 'C' | 'P'
+    /** 行权价（长代码 5 位编码 ÷1000，如 02850 → 2.85）。 */
+    strike: number
+    expiryMonth: string
+  }
 }
 
 export interface OptionExpiriesWire {
@@ -685,10 +710,35 @@ export class TradingBridge {
 
   /**
    * ETF 期权标的名册（workbuddy T 板显隐）。source 缺省走连接器默认值。
+   * 阶段 4 互联：从统一资产台账聚合各标的持仓份额（heldQty，备兑覆盖参考）。
    */
   async optionUnderlyings(source?: string): Promise<OptionUnderlyingsWire> {
     const typed = source === 'synth' || source === 'akshare' || source === 'iquant' ? source : undefined
-    return { ok: true, underlyings: await this.requireCnOptions().listUnderlyings(typed) }
+    const rows = await this.requireCnOptions().listUnderlyings(typed)
+    return { ok: true, underlyings: await this.#withHeldQty(rows) }
+  }
+
+  /** 名册行回填 heldQty：cn 持仓按 symbol 去交易所后缀聚合同标的份额；聚合失败不阻塞名册。 */
+  async #withHeldQty(rows: readonly OptionUnderlying[]): Promise<readonly OptionUnderlying[]> {
+    const store = this.host.holdingsStore
+    if (store === undefined || rows.length === 0) return rows
+    let holdings: readonly Holding[]
+    try {
+      holdings = (await store.snapshot()).holdings
+    } catch {
+      return rows
+    }
+    const held = new Map<string, number>()
+    for (const item of holdings) {
+      if (item.market !== 'cn' || typeof item.symbol !== 'string') continue
+      const bare = item.symbol.replace(/\.(SH|SZ)$/i, '')
+      if (!/^\d{6}$/.test(bare)) continue
+      held.set(bare, (held.get(bare) ?? 0) + item.size)
+    }
+    return rows.map((row) => {
+      const qty = held.get(row.underlying)
+      return qty === undefined ? row : { ...row, heldQty: qty }
+    })
   }
 
   /**
@@ -710,6 +760,7 @@ export class TradingBridge {
 
   /**
    * T 型报价链。underlying 必填（510050.SH / 510050 / 长代码）；expiryMonth 必填 YYMM。
+   * 阶段 4 现价拼接：SSE/SZSE 标的从 CN 行情服务拉最新价回填 chain.spot（ATM 高亮用）。
    */
   async optionChain(underlying: string, expiryMonth: string, source?: string): Promise<OptionChainWire> {
     const trimmed = underlying.trim()
@@ -717,14 +768,38 @@ export class TradingBridge {
     const month = expiryMonth.trim()
     if (month === '') throw new BridgeProtocolError(400, 'options chain: expiryMonth is required')
     const typed = source === 'synth' || source === 'akshare' || source === 'iquant' ? source : undefined
-    return {
-      ok: true,
-      chain: await this.requireCnOptions().getOptionChain({
-        underlying: trimmed,
-        expiryMonth: month,
-        ...(typed === undefined ? {} : { source: typed }),
-      }),
+    const chain = await this.requireCnOptions().getOptionChain({
+      underlying: trimmed,
+      expiryMonth: month,
+      ...(typed === undefined ? {} : { source: typed }),
+    })
+    return { ok: true, chain: await this.#withSpot(chain) }
+  }
+
+  /** 现价拼接：名册查交易所 → 现货符号 → tradingCnMarketData ticker 覆盖 spot；任一步失败保留原链。 */
+  async #withSpot(chain: OptionChain): Promise<OptionChain> {
+    if (!/^\d{6}$/.test(chain.underlying)) return chain
+    let rows: readonly OptionUnderlying[]
+    try {
+      rows = await this.requireCnOptions().listUnderlyings('akshare')
+    } catch {
+      return chain
     }
+    const exchange = rows.find((row) => row.underlying === chain.underlying)?.exchange
+    const spotSymbol = exchange === 'SSE' ? `${chain.underlying}.SH`
+      : exchange === 'SZSE' ? `${chain.underlying}.SZ`
+      : undefined // SYNTH 无现货行情
+    const market = spotSymbol === undefined ? undefined : this.host.getMarketService('cn')
+    if (spotSymbol === undefined || market === undefined) return chain
+    try {
+      const ticker = await market.getTicker(spotSymbol)
+      if (typeof ticker.price === 'number' && Number.isFinite(ticker.price)) {
+        return { ...chain, spot: ticker.price }
+      }
+    } catch {
+      // 行情拉不到（非交易时段/未挂 provider）→ 保留 python 链自带 spot，不阻塞 T 板
+    }
+    return chain
   }
 
   async optionImpliedVol(
@@ -762,7 +837,57 @@ export class TradingBridge {
     if (typeof input.underlying !== 'string' || input.underlying.trim() === '') {
       throw new BridgeProtocolError(400, 'options strategy: underlying is required')
     }
+    // 阶段 4 互联：holdingQty = 真实持仓份额（covered_call/collar 现货腿预填）；非正数直接 400。
+    if (input.holdingQty !== undefined
+      && (typeof input.holdingQty !== 'number' || !Number.isFinite(input.holdingQty) || input.holdingQty <= 0)) {
+      throw new BridgeProtocolError(400, 'options strategy: holdingQty must be a positive number of ETF shares')
+    }
     return { ok: true, strategy: await this.requireCnOptions().getStrategy(input) }
+  }
+
+  /**
+   * 现货 ↔ 期权长代码双向规范化（阶段 4 互联：标的双向跳转）。纯本地解析
+   * （正则与 connector-options rest.ts / python synth.parse_long_code 对齐），
+   * 名册命中才给 link（spotSymbol + 长/认沽前缀）；长代码输入另给 contract 要素。
+   */
+  async optionResolve(symbol: string): Promise<OptionResolveWire> {
+    const raw = symbol.trim().toUpperCase()
+    if (raw === '') throw new BridgeProtocolError(400, 'options resolve: symbol is required')
+    const longMatch = raw.match(OPTION_LONG_CODE)
+    const spotMatch = longMatch === null ? raw.match(OPTION_SPOT_CODE) : null
+    if (longMatch === null && spotMatch === null) {
+      throw new BridgeProtocolError(400, `options resolve: not a CN ETF underlying or option long code: ${symbol}`)
+    }
+    const underlying = (longMatch ?? spotMatch)![1]!
+    let exchange: 'SSE' | 'SZSE' | 'SYNTH' | undefined
+    try {
+      exchange = (await this.requireCnOptions().listUnderlyings('akshare'))
+        .find((row) => row.underlying === underlying)?.exchange
+    } catch {
+      exchange = undefined
+    }
+    const link: UnderlyingLink | undefined = exchange === undefined ? undefined : {
+      underlying,
+      spotSymbol: exchange === 'SSE' ? `${underlying}.SH` : exchange === 'SZSE' ? `${underlying}.SZ` : underlying,
+      exchange,
+      callPrefix: `${underlying}C`,
+      putPrefix: `${underlying}P`,
+    }
+    return {
+      ok: true,
+      input: raw,
+      underlying,
+      ...(link === undefined ? {} : { link }),
+      ...(longMatch === null ? {} : {
+        contract: {
+          code: raw,
+          optionType: longMatch[2] as 'C' | 'P',
+          expiryMonth: longMatch[3]!,
+          // 长代码 5 位行权价编码 ÷1000（02850 → 2.85），与 python synth.parse_long_code 同式。
+          strike: Number(longMatch[4]) / 1000,
+        },
+      }),
+    }
   }
 
   /**
@@ -1706,6 +1831,9 @@ export async function dispatchBridgeRequest(
       }
       case '/options/underlyings': {
         return { status: 200, payload: await bridge.optionUnderlyings(search.get('source') ?? undefined) }
+      }
+      case '/options/resolve': {
+        return { status: 200, payload: await bridge.optionResolve(search.get('symbol') ?? '') }
       }
       case '/options/expiries': {
         return {
