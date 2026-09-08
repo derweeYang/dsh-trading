@@ -8,9 +8,9 @@ import {
 
 describe('symbol-catalog', () => {
   it('searches symbols by prefix from static catalog', () => {
-    const btc = searchSymbols('crypto', 'BTC')
-    expect(btc.length).toBeGreaterThan(0)
-    expect(btc[0]?.symbol).toBe('BTCUSDT')
+    const maotai = searchSymbols('cn', '600519')
+    expect(maotai.length).toBeGreaterThan(0)
+    expect(maotai[0]?.symbol).toBe('600519.SH')
   })
 
   it('searches symbols by chinese name from static catalog', () => {
@@ -33,29 +33,29 @@ describe('symbol-catalog', () => {
   })
 
   it('merges dynamic catalog and allows searching new symbols', () => {
-    setDynamicCatalog('crypto', [
-      { symbol: 'NEWCOINUSDT', name: 'NewCoin' },
-      { symbol: 'BTCUSDT', name: 'BTC/USDT' },
+    setDynamicCatalog('cn', [
+      { symbol: '301999.SZ', name: '测试新股' },
+      { symbol: '600519.SH', name: '茅台(动态覆盖尝试)' },
     ])
-    const merged = getMergedCatalog('crypto')
-    const hasNewCoin = merged.some(e => e.symbol === 'NEWCOINUSDT')
-    expect(hasNewCoin).toBe(true)
-    const btc = merged.find(e => e.symbol === 'BTCUSDT')
-    expect(btc?.name).toBe('比特币')
-    const results = searchSymbols('crypto', 'NEWCOIN')
-    expect(results.some(e => e.symbol === 'NEWCOINUSDT')).toBe(true)
+    const merged = getMergedCatalog('cn')
+    const hasNewStock = merged.some(e => e.symbol === '301999.SZ')
+    expect(hasNewStock).toBe(true)
+    const maotai = merged.find(e => e.symbol === '600519.SH')
+    expect(maotai?.name).toBe('贵州茅台')
+    const results = searchSymbols('cn', '301999')
+    expect(results.some(e => e.symbol === '301999.SZ')).toBe(true)
   })
 
   it('searchAllMarkets searches across all markets with market tag', () => {
-    const results = searchAllMarkets('AAPL')
+    const results = searchAllMarkets('茅台')
     expect(results.length).toBeGreaterThan(0)
-    expect(results[0]?.market).toBe('us')
-    expect(results[0]?.symbol).toBe('AAPL')
+    expect(results[0]?.market).toBe('cn')
+    expect(results[0]?.symbol).toBe('600519.SH')
   })
 
   it('empty query returns empty array', () => {
-    expect(searchSymbols('crypto', '')).toEqual([])
-    expect(searchSymbols('crypto', '   ')).toEqual([])
+    expect(searchSymbols('cn', '')).toEqual([])
+    expect(searchSymbols('cn', '   ')).toEqual([])
     expect(searchAllMarkets('')).toEqual([])
   })
 })

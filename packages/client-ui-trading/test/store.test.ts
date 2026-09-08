@@ -15,6 +15,7 @@ vi.stubGlobal('localStorage', {
 import {
   createObservable,
   createWatchlistStore,
+  inferMarket,
   rowsFor,
   sameInstrument,
 } from '../src/client/store.ts'
@@ -38,41 +39,41 @@ describe('createObservable', () => {
 describe('createWatchlistStore', () => {
   it('未定制 → 种子列表；add/remove 定制后持久化', () => {
     const store = createWatchlistStore()
-    expect(store.isCustomized('crypto')).toBe(false)
-    expect(store.listFor('crypto').map(row => row.symbol)).toContain('BTCUSDT')
+    expect(store.isCustomized('cn')).toBe(false)
+    expect(store.listFor('cn').map(row => row.symbol)).toContain('600519')
 
-    store.add('crypto', { market: 'crypto', symbol: 'TONUSDT' })
-    expect(store.isCustomized('crypto')).toBe(true)
-    expect(store.listFor('crypto').some(row => row.symbol === 'TONUSDT')).toBe(true)
+    store.add('cn', { market: 'cn', symbol: '600036', name: '招商银行' })
+    expect(store.isCustomized('cn')).toBe(true)
+    expect(store.listFor('cn').some(row => row.symbol === '600036')).toBe(true)
 
-    store.add('crypto', { market: 'crypto', symbol: 'TONUSDT' })
-    expect(store.listFor('crypto').filter(row => row.symbol === 'TONUSDT')).toHaveLength(1)
+    store.add('cn', { market: 'cn', symbol: '600036', name: '招商银行' })
+    expect(store.listFor('cn').filter(row => row.symbol === '600036')).toHaveLength(1)
 
-    store.remove('crypto', 'TONUSDT')
-    expect(store.listFor('crypto').some(row => row.symbol === 'TONUSDT')).toBe(false)
+    store.remove('cn', '600036')
+    expect(store.listFor('cn').some(row => row.symbol === '600036')).toBe(false)
   })
 
   it('重载后从 localStorage 恢复（持久化契约）', () => {
     const first = createWatchlistStore()
-    first.add('us', { market: 'us', symbol: 'TSLA', name: '特斯拉' })
+    first.add('cn', { market: 'cn', symbol: '300750', name: '宁德时代' })
     const second = createWatchlistStore()
-    expect(second.listFor('us').some(row => row.symbol === 'TSLA')).toBe(true)
+    expect(second.listFor('cn').some(row => row.symbol === '300750')).toBe(true)
   })
 
   it('未定制状态下直接 remove 种子标的：物化定制列表并持久化', () => {
     const store = createWatchlistStore()
-    expect(store.isCustomized('us')).toBe(false)
-    expect(store.listFor('us').map(row => row.symbol)).toContain('AAPL')
+    expect(store.isCustomized('cn')).toBe(false)
+    expect(store.listFor('cn').map(row => row.symbol)).toContain('600519')
 
-    // 未定制状态下直接删除 AAPL
-    store.remove('us', 'AAPL')
-    expect(store.isCustomized('us')).toBe(true)
-    expect(store.listFor('us').map(row => row.symbol)).toEqual(['MSFT', 'NVDA', 'GOOGL'])
+    // 未定制状态下直接删除 600519（贵州茅台）
+    store.remove('cn', '600519')
+    expect(store.isCustomized('cn')).toBe(true)
+    expect(store.listFor('cn').map(row => row.symbol)).toEqual(['000001', '601318', '510050'])
 
     // 从 localStorage 恢复验证持久化
     const reloaded = createWatchlistStore()
-    expect(reloaded.isCustomized('us')).toBe(true)
-    expect(reloaded.listFor('us').map(row => row.symbol)).toEqual(['MSFT', 'NVDA', 'GOOGL'])
+    expect(reloaded.isCustomized('cn')).toBe(true)
+    expect(reloaded.listFor('cn').map(row => row.symbol)).toEqual(['000001', '601318', '510050'])
   })
 
   it('删光自选标的后保持空列表，不复活种子', () => {
@@ -94,14 +95,22 @@ describe('createWatchlistStore', () => {
   })
 
   it('rowsFor：定制列表优先（含空数组），仅缺键回落种子', () => {
-    expect(rowsFor({}, 'hk').map(row => row.symbol)).toContain('00700')
-    expect(rowsFor({ hk: [] }, 'hk')).toEqual([])
-    expect(rowsFor({ hk: [{ market: 'hk', symbol: '00001', name: '长和' }] }, 'hk'))
-      .toEqual([{ market: 'hk', symbol: '00001', name: '长和' }])
+    expect(rowsFor({}, 'cn').map(row => row.symbol)).toContain('600519')
+    expect(rowsFor({ cn: [] }, 'cn')).toEqual([])
+    expect(rowsFor({ cn: [{ market: 'cn', symbol: '000001', name: '平安银行' }] }, 'cn'))
+      .toEqual([{ market: 'cn', symbol: '000001', name: '平安银行' }])
   })
 
   it('sameInstrument：market+symbol 二元组判定', () => {
-    expect(sameInstrument({ market: 'us', symbol: 'AAPL' }, { market: 'us', symbol: 'AAPL' })).toBe(true)
-    expect(sameInstrument({ market: 'us', symbol: 'AAPL' }, { market: 'crypto', symbol: 'AAPL' })).toBe(false)
+    expect(sameInstrument({ market: 'cn', symbol: '600519' }, { market: 'cn', symbol: '600519' })).toBe(true)
+    expect(sameInstrument({ market: 'cn', symbol: '600519' }, { market: 'cn', symbol: '000001' })).toBe(false)
+  })
+
+  it('inferMarket：市场收敛后恒 cn（历史 crypto/us/hk 词汇一律归一）', () => {
+    expect(inferMarket('600519.SH')).toBe('cn')
+    expect(inferMarket('BTCUSDT')).toBe('cn')
+    expect(inferMarket('AAPL')).toBe('cn')
+    expect(inferMarket('00700')).toBe('cn')
+    expect(inferMarket(undefined)).toBe('cn')
   })
 })
