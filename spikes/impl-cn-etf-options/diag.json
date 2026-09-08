@@ -1,0 +1,121 @@
+{
+ "tablists": [
+  {
+   "label": "市场与自选",
+   "tabs": [
+    {
+     "t": "自选",
+     "active": false
+    },
+    {
+     "t": "加密货币",
+     "active": false
+    },
+    {
+     "t": "美股",
+     "active": false
+    },
+    {
+     "t": "A股",
+     "active": true
+    },
+    {
+     "t": "港股",
+     "active": false
+    }
+   ]
+  },
+  {
+   "label": "stage",
+   "tabs": [
+    {
+     "t": "行情",
+     "active": true
+    },
+    {
+     "t": "策略",
+     "active": false
+    },
+    {
+     "t": "知识库",
+     "active": false
+    }
+   ]
+  },
+  {
+   "label": "spot or options lens",
+   "tabs": [
+    {
+     "t": "Spot",
+     "active": true
+    },
+    {
+     "t": "Options",
+     "active": false
+    }
+   ]
+  },
+  {
+   "label": "quote section",
+   "tabs": [
+    {
+     "t": "图表",
+     "active": true
+    },
+    {
+     "t": "基本面",
+     "active": false
+    },
+    {
+     "t": "新闻",
+     "active": false
+    },
+    {
+     "t": "公告",
+     "active": false
+    }
+   ]
+  },
+  {
+   "label": "interval",
+   "tabs": [
+    {
+     "t": "5分",
+     "active": false
+    },
+    {
+     "t": "30分",
+     "active": false
+    },
+    {
+     "t": "日K",
+     "active": true
+    },
+    {
+     "t": "周K",
+     "active": false
+    },
+    {
+     "t": "月K",
+     "active": false
+    }
+   ]
+  }
+ ],
+ "hasOpt": false,
+ "hasOptions": true,
+ "hasSpot": false,
+ "hasSpotEn": true,
+ "optStage": false,
+ "lensTabs": [
+  {
+   "t": "Spot",
+   "active": true
+  },
+  {
+   "t": "Options",
+   "active": false
+  }
+ ],
+ "bodyLen": 890
+}

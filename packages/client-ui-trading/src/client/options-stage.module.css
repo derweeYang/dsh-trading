@@ -143,3 +143,126 @@
   border-left: 1px solid var(--dsw-futu-border-default, #e3e6ea);
   border-right: 1px solid var(--dsw-futu-border-default, #e3e6ea);
 }
+
+/* ETF ↔ 期权 联动操作条（2026-09-08 期权升格互联核心） */
+.actionBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.underlyingChip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  appearance: none;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  border-radius: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dsw-futu-text-secondary, #4a5060);
+}
+
+.underlyingChip:hover {
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  border-color: var(--dsw-futu-accent, #3b82f6);
+}
+
+.underlyingChip label {
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.underlyingName {
+  font-weight: 600;
+}
+
+.underlyingCode {
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.tradeSpotBtn {
+  appearance: none;
+  border: 1px solid var(--dsw-futu-accent, #3b82f6);
+  background: var(--dsw-futu-accent-subtle, rgba(59, 130, 246, 0.12));
+  color: var(--dsw-futu-accent, #3b82f6);
+  border-radius: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tradeSpotBtn:hover {
+  background: var(--dsw-futu-accent, #3b82f6);
+  color: #fff;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.legTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dsw-futu-text-secondary, #4a5060);
+}
+
+.legTag strong {
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  font-variant-numeric: tabular-nums;
+}
+
+.legClear {
+  appearance: none;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 2px;
+}
+
+.legClear:hover {
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.sendLegBtn {
+  appearance: none;
+  border: none;
+  background: var(--dsw-futu-accent, #3b82f6);
+  color: #fff;
+  border-radius: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sendLegBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* T 表合约单元可点选为待下单合约 */
+.selectable {
+  cursor: pointer;
+}
+
+.selectable:hover {
+  background: var(--dsw-futu-accent-subtle, rgba(59, 130, 246, 0.15));
+}
+
+.cellSelected {
+  background: var(--dsw-futu-accent-subtle, rgba(59, 130, 246, 0.22)) !important;
+  box-shadow: inset 0 0 0 1px var(--dsw-futu-accent, #3b82f6);
+}
