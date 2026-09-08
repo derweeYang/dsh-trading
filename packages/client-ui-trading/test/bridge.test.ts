@@ -1014,4 +1014,53 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
       { underlying: '510050.SH', template: 'covered_call', holdingQty: -1 },
     )).rejects.toMatchObject({ status: 400 })
   })
+
+  it('GET /options/vol-analytics：参数规范化透传（months 拆分 / 数值转换 / source 枚举），报告原样返回', async () => {
+    const report = { underlying: '510050', iv_percentile: { w252: 0.62 }, term_structure: [] }
+    const getVolAnalytics = vi.fn(async (query: import('@dshtrading/api').OptionVolAnalyticsQuery) => {
+      // query 是 readonly 对象，回显前键集由调用方断言
+      return { ...report, _echoMonths: query.expiryMonths }
+    })
+    const bridge = new TradingBridge({
+      ...linkedHost(),
+      getCnOptions: () => ({
+        ...linkedHost().getCnOptions!(),
+        getVolAnalytics: getVolAnalytics as never,
+      }),
+    })
+    const { status, payload } = await dispatchBridgeRequest(
+      bridge, 'GET', '/options/vol-analytics', new URLSearchParams({
+        underlying: '510050.SH',
+        expiryMonths: '2609, 2612 ,',
+        asOf: '2026-09-08',
+        rate: '0.02',
+        dividendYield: '0.01',
+        source: 'synth',
+      }),
+    )
+    expect(status).toBe(200)
+    expect(getVolAnalytics).toHaveBeenCalledWith({
+      underlying: '510050.SH',
+      expiryMonths: ['2609', '2612'],
+      asOf: '2026-09-08',
+      rate: 0.02,
+      dividendYield: 0.01,
+      source: 'synth',
+    })
+    expect(payload).toMatchObject({ ok: true, volAnalytics: { iv_percentile: { w252: 0.62 } } })
+
+    // 最小调用：可选键缺席 → 整键省略（exactOptionalPropertyTypes 纪律）
+    await dispatchBridgeRequest(bridge, 'GET', '/options/vol-analytics', new URLSearchParams({ underlying: '510050' }))
+    expect(getVolAnalytics).toHaveBeenLastCalledWith({ underlying: '510050' })
+
+    // 非法 source 静默丢弃（透传缝 python 默认）；显式 rate 非数值 → 400 不静默换默认
+    await dispatchBridgeRequest(bridge, 'GET', '/options/vol-analytics', new URLSearchParams({ underlying: '510050', source: 'bogus' }))
+    expect(getVolAnalytics).toHaveBeenLastCalledWith({ underlying: '510050' })
+    await expect(dispatchBridgeRequest(
+      bridge, 'GET', '/options/vol-analytics', new URLSearchParams({ underlying: '510050', rate: 'abc' }),
+    )).rejects.toMatchObject({ status: 400 })
+    await expect(dispatchBridgeRequest(
+      bridge, 'GET', '/options/vol-analytics', new URLSearchParams(),
+    )).rejects.toMatchObject({ status: 400 })
+  })
 })

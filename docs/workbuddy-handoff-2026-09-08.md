@@ -94,9 +94,9 @@
   把推荐的腿填进下单面板（preview 态，用户手动确认才 POST /options/order）。
 - **纪律**：所有 LLM 输出标注「技术分析，非投资建议」；实盘仍走双闸，
   LLM 永远不能绕过（它只能预填，不能下单）。
-- **已知 gap**（后端待办，需要时提）：桥暂无 `/options/vol-analytics` 端点
-  （IV 分位/期限结构目前在 agent 工具面）；若总览页要直接渲染 IV 分位排序，
-  后端加一个透传端点即可（服务缝 getVolAnalytics 已就绪）。
+- **已补齐**：桥已有 `GET /options/vol-analytics`（IV 分位/期限结构/HV 报告
+  透传，契约见 options-bridge.md「vol-analytics」节）；总览页 IV 分位排序直接
+  读 `volAnalytics.iv_percentile`，显示前对缺键容错。
 
 ### C3. T 板增强（阶段 4 数据已备）
 

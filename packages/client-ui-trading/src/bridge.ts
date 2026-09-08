@@ -14,7 +14,7 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionOrder, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionOrder, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
 import { aggregateNews as aggregateCnNews, fetchCnFundamentalsPackage } from '@dshtrading/kit-cn'
 import type { ChartActivationStore, CustomIndicatorRecord, CustomIndicatorStore, IndicatorInstance } from '@dshtrading/indicators'
 import { clampActivationParams, createMemoryChartActivationStore, createMemoryCustomIndicatorStore, resolveIndicatorSpec, sanitizeInstance, symbolScopeKey, withHiddenScopes } from '@dshtrading/indicators'
@@ -250,6 +250,12 @@ export interface OptionChainWire {
 export interface OptionImpliedVolWire {
   ok: true
   impliedVol: OptionImpliedVolResult
+}
+
+/** vol_analytics 内核报告透传 wire（报告 JSON 不解释，形状由 python handler 定义）。 */
+export interface OptionVolAnalyticsWire {
+  ok: true
+  volAnalytics: KernelReport
 }
 
 export interface OptionStrategyWire {
@@ -843,6 +849,44 @@ export class TradingBridge {
       throw new BridgeProtocolError(400, 'options strategy: holdingQty must be a positive number of ETF shares')
     }
     return { ok: true, strategy: await this.requireCnOptions().getStrategy(input) }
+  }
+
+  /**
+   * 波动率分析（IV 期限结构 / skew / 分位 / HV，python vol_analytics 透传）。
+   * 报告 JSON 不解释——形状由 python handler 定义，桥只做参数规范化：
+   * 显式给出但解析失败的数值 → 400（不静默吞掉换默认值）；缺席则整键省略。
+   */
+  async optionVolAnalytics(
+    underlying: string,
+    expiryMonthsRaw: string | null,
+    asOfRaw: string | null,
+    rateRaw: string | null,
+    dividendYieldRaw: string | null,
+    source?: string,
+  ): Promise<OptionVolAnalyticsWire> {
+    const trimmed = underlying.trim()
+    if (trimmed === '') throw new BridgeProtocolError(400, 'options vol-analytics: underlying is required')
+    const months = (expiryMonthsRaw ?? '')
+      .split(',').map(m => m.trim()).filter(m => m !== '')
+    const asOf = (asOfRaw ?? '').trim()
+    const rate = rateRaw === null || rateRaw.trim() === '' ? undefined : Number(rateRaw)
+    if (rate !== undefined && !Number.isFinite(rate)) {
+      throw new BridgeProtocolError(400, 'options vol-analytics: rate must be a finite number')
+    }
+    const dividendYield = dividendYieldRaw === null || dividendYieldRaw.trim() === '' ? undefined : Number(dividendYieldRaw)
+    if (dividendYield !== undefined && !Number.isFinite(dividendYield)) {
+      throw new BridgeProtocolError(400, 'options vol-analytics: dividendYield must be a finite number')
+    }
+    const typed = source === 'synth' || source === 'akshare' || source === 'iquant' ? source : undefined
+    const query: OptionVolAnalyticsQuery = {
+      underlying: trimmed,
+      ...(months.length === 0 ? {} : { expiryMonths: months }),
+      ...(asOf === '' ? {} : { asOf }),
+      ...(rate === undefined ? {} : { rate }),
+      ...(dividendYield === undefined ? {} : { dividendYield }),
+      ...(typed === undefined ? {} : { source: typed }),
+    }
+    return { ok: true, volAnalytics: await this.requireCnOptions().getVolAnalytics(query) }
   }
 
   /**
@@ -1863,6 +1907,19 @@ export async function dispatchBridgeRequest(
             search.get('rate') ?? '',
             search.get('source') ?? undefined,
             search.get('priceField') ?? undefined,
+          ),
+        }
+      }
+      case '/options/vol-analytics': {
+        return {
+          status: 200,
+          payload: await bridge.optionVolAnalytics(
+            search.get('underlying') ?? '',
+            search.get('expiryMonths'),
+            search.get('asOf'),
+            search.get('rate'),
+            search.get('dividendYield'),
+            search.get('source') ?? undefined,
           ),
         }
       }

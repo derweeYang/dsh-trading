@@ -16,6 +16,7 @@
 | GET | `/dshtrading/api/options/expiries?underlying=&source=` | 标准四季月（当月/次月/+3/+6，第四个周三；**不打网关**） |
 | GET | `/dshtrading/api/options/chain?underlying=&expiryMonth=&source=` | T 型报价（阶段 4 起桥侧回填 `spot`） |
 | GET | `/dshtrading/api/options/implied-vol?underlying=&expiryMonth=&rate=&source=&priceField=` | 链截面 IV |
+| GET | `/dshtrading/api/options/vol-analytics?underlying=&expiryMonths=&asOf=&rate=&dividendYield=&source=` | 波动率分析（期限结构/skew/IV 分位/HV，透传） |
 | POST | `/dshtrading/api/options/strategy` | 多腿模板 / 保证金（JSON body；阶段 4 起支持 `holdingQty`） |
 | POST | `/dshtrading/api/options/order` | 期权下单（阶段 3 交易面） |
 | DELETE | `/dshtrading/api/options/order?id=` | 期权撤单（阶段 3） |
@@ -88,6 +89,24 @@ POST /options/strategy
 `floor(holdingQty / 10000)` 张同时预填现货腿与期权腿（两腿自动匹配）；不足
 1 张或配错模板 → `TRADING_UNSUPPORTED_SYMBOL` + message。响应的
 `legs[].qty` 就是匹配后的张数（现货腿是份额）。
+
+### vol-analytics（波动率分析，报告透传）
+
+```json
+GET /options/vol-analytics?underlying=510050&expiryMonths=2609,2612&rate=0.02&source=akshare
+{
+  "ok": true,
+  "volAnalytics": { "underlying": "510050", "iv_percentile": { "w252": 0.62 }, "...": "python vol_analytics 报告原样" }
+}
+```
+
+- `underlying` 必填；`expiryMonths` 逗号分隔 YYMM（缺省 = 标准四季月全集）；
+  `asOf`（YYYY-MM-DD）/ `rate` / `dividendYield` / `source` 可选。
+- `volAnalytics` 是 python 内核报告 **JSON 透传不解释**（形状由
+  `python/options` 的 `vol_analytics` handler 定义；agent 工具
+  `cn_get_option_vol_analytics` 同源）。总览页 IV 分位排序直接读
+  `iv_percentile`；显示前对缺键容错。
+- 显式给出但非法的数值（如 `rate=abc`）→ 400，不静默换默认值。
 
 ## 阶段 3 交易面
 
