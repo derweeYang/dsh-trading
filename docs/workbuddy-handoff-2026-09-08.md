@@ -74,29 +74,28 @@
 
 ### C1. 标的总览页（找时机）
 
-9 只标的一屏强弱榜，按可操作信号排序而非固定顺序：
+**只拉一条**：`GET /dshtrading/api/options/overview?sort=strength`。
+不要再拼 `/tickers` + `/klines` + `/positions`——桥已聚合。形状见
+`docs/options-bridge.md`「overview」。
 
-- **每格数据**：现货价+日涨跌（`GET /tickers` 批量）、5 日累计涨跌与量比
-  （`GET /klines?market=cn&interval=1d&limit=5` + 20 日均量对照）、底仓标记
-  （heldQty>0 徽章）、持仓张数（`GET /options/positions` 聚合）。
-- **T-5 量价矩阵**（推荐形态）：行=9 标的，列=近 5 个交易日，格子色深=当日
-  涨跌幅、格子内小点/边框=量能异动（当日成交额 / 5 日均额 >1.5 标记放量）；
-  行尾汇总列：5 日累计 ±%、量价背离警示（价升量缩=虚涨、价跌量增=加速）。
-- 排序键默认「5 日强弱分」（动量 × 量能确认），可切 IV 分位、持仓优先。
-- 点击行 → 进入该标的 T 板（resolve 拿 underlying）。
+- 行：`last` / `changePct` / `return5d` / `volumeRatio` / `strengthScore` /
+  `heldQty` / `optionQty` / `divergence`（`weak_rally` 虚涨、`accelerating_sell` 加速）。
+- **T-5**：`days[]`（`changePct` 色深，`volumeSurge` 边框）。缺键按行容错。
+- 排序：`sort=strength|iv|holdings`。IV 排序必须带 `includeIv=1`（才打网关）。
+- 点击行 → `GET /options/resolve?symbol=` 拿 `link` 进 T 板。
+- SYNTH 名册行后端已剔除。类型用 `@dshtrading/api` 的 `OptionOverview`。
 
 ### C2. LLM 推荐策略交互
 
-- **入口**：总览页「扫描标的」+ T 板「AI 组合建议」。按钮预填 prompt
-  （标的、现价、5 日量价、底仓张数）发给 agent——agent 侧工具已齐
-  （cn_get_option_chain / iv / vol_analytics / strategy，holdingQty 已支持）。
+- **入口**：总览「扫描标的」→ `fillComposer(overview.scanAllPrompt)`；
+  行内 / T 板「AI 组合建议」→ `fillComposer(row.scanPrompt)`。prompt 已含
+  标的、现价、5 日量价、底仓、不下单纪律。
+- agent 工具已齐（`cn_get_option_chain` / `iv` / `vol_analytics` / `strategy`，
+  `holdingQty` 已支持）。
 - **呈现**：agent 回复经 toolview 渲染；策略卡片给「加载到 T 板」动作——
-  把推荐的腿填进下单面板（preview 态，用户手动确认才 POST /options/order）。
-- **纪律**：所有 LLM 输出标注「技术分析，非投资建议」；实盘仍走双闸，
-  LLM 永远不能绕过（它只能预填，不能下单）。
-- **已补齐**：桥已有 `GET /options/vol-analytics`（IV 分位/期限结构/HV 报告
-  透传，契约见 options-bridge.md「vol-analytics」节）；总览页 IV 分位排序直接
-  读 `volAnalytics.iv_percentile`，显示前对缺键容错。
+  把推荐的腿填进下单面板（preview 态，用户手动确认才 `POST /options/order`）。
+- **纪律**：LLM 只能预填，不能下单；实盘仍走双闸。
+- 总览 IV 分位读 `row.ivPercentile`（`includeIv=1`），不要再解析 vol-analytics 原文。
 
 ### C3. T 板增强（阶段 4 数据已备）
 
@@ -107,7 +106,9 @@ heldQty 徽章 + 「按底仓备兑」快捷键（holdingQty=heldQty 调 strateg
 
 ## 交接完成标准
 
-- [ ] A1-A3 全部落地，`npx vitest run` 全绿（311+ 用例零失败）
-- [ ] `pnpm i18n:check`、typecheck-gate 通过
-- [ ] B 的交易面 + 互联接线完成，dry-run 下单回执可见（premiumAmount 正确）
+- [x] A1-A3 全部落地（`feat/etf-options` 已快进含市场收敛与必红测试改 cn 词汇）
+- [x] B 的交易面 + 互联接线（T 板下单 / ATM / 备兑 / 持仓条已在 client 半）
+- [ ] C1 总览页挂 `GET /options/overview`（后端已交缝）
+- [ ] C2 `fillComposer(scanPrompt / scanAllPrompt)` + 策略卡片加载到 T 板
+- [ ] `pnpm i18n:check`、typecheck-gate（C1/C2 词典一并过）
 - [ ] 视觉冒烟截图（trading-web profile）

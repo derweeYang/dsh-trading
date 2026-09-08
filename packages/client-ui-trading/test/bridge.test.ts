@@ -1063,4 +1063,96 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
       bridge, 'GET', '/options/vol-analytics', new URLSearchParams(),
     )).rejects.toMatchObject({ status: 400 })
   })
+
+  it('GET /options/overview：聚合现货/日K/底仓/持仓，默认 strength 排序；SYNTH 不进表', async () => {
+    const getVolAnalytics = vi.fn(async () => ({ iv_percentile: { w252: 0.8 } }))
+    const klines = Array.from({ length: 20 }, (_, i) => ({
+      openTime: 1 + i,
+      open: 2 + i * 0.01,
+      high: 2.1 + i * 0.01,
+      low: 1.9,
+      close: 2 + i * 0.02,
+      volume: i < 15 ? 100 : 40,
+      closeTime: Date.UTC(2026, 8, i + 1, 7),
+    }))
+    const base = linkedHost({ holdings: [{ symbol: '510050.SH', size: 20000 }] })
+    const bridge = new TradingBridge({
+      ...base,
+      getMarketService: () => fakeService({
+        getTicker: async (symbol) => ({ symbol, price: 2.91, changePercent: 0.4, timestamp: 1 }),
+        getKlines: async () => klines,
+      }),
+      getCnOptions: () => ({
+        ...base.getCnOptions!(),
+        listUnderlyings: async () => [
+          { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
+          { underlying: '159915', exchange: 'SZSE', name: '创业板ETF易方达', multiplier: 10000, tickSize: 0.0001, quotesSource: 'szse_static_only' },
+          { underlying: '910050', exchange: 'SYNTH', name: 'synth50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'synth' },
+        ],
+        getVolAnalytics,
+      }),
+      getCnOptionsTrade: () => ({
+        placeOptionOrder: async () => { throw new Error('unused') },
+        cancelOptionOrder: async () => { throw new Error('unused') },
+        listOptionPositions: async () => ([
+          { symbol: '510050C2609M02850', underlying: '510050', optionType: 'C' as const, strike: 2.85, expiryMonth: '2609', quantity: 2 },
+        ]),
+      }),
+    })
+    const { payload } = await dispatchBridgeRequest(bridge, 'GET', '/options/overview', new URLSearchParams())
+    const overview = (payload as { overview: { rows: Array<Record<string, unknown>>; sort: string; scanAllPrompt: string } }).overview
+    expect(overview.sort).toBe('strength')
+    expect(overview.rows.map((row) => row.underlying)).toEqual(['510050', '159915'])
+    expect(overview.rows[0]).toMatchObject({
+      last: 2.91,
+      heldQty: 20000,
+      optionQty: 2,
+      spotSymbol: '510050.SH',
+    })
+    expect(overview.rows[0]?.days).toHaveLength(5)
+    expect(overview.rows[0]?.scanPrompt).toContain('not investment advice')
+    expect(overview.scanAllPrompt).toContain('510050')
+    expect(getVolAnalytics).not.toHaveBeenCalled()
+
+    const withIv = await dispatchBridgeRequest(
+      bridge, 'GET', '/options/overview', new URLSearchParams({ includeIv: '1', sort: 'iv' }),
+    )
+    const ivOverview = (withIv.payload as { overview: { sort: string; rows: Array<{ ivPercentile?: number }> } }).overview
+    expect(ivOverview.sort).toBe('iv')
+    expect(ivOverview.rows[0]?.ivPercentile).toBe(0.8)
+    expect(getVolAnalytics).toHaveBeenCalled()
+  })
+
+  it('GET /options/overview：未挂期权服务 → NOT_IMPLEMENTED；行情失败不整页失败', async () => {
+    const empty = new TradingBridge(fakeHost({}))
+    await expect(dispatchBridgeRequest(empty, 'GET', '/options/overview', new URLSearchParams()))
+      .rejects.toMatchObject({ code: 'TRADING_NOT_IMPLEMENTED' })
+
+    const broken = new TradingBridge({
+      ...fakeHost({
+        tradingCnMarketData: fakeService({
+          getTicker: async () => { throw new Error('quote down') },
+          getKlines: async () => { throw new Error('kline down') },
+        }),
+      }),
+      getCnOptions: () => ({
+        listUnderlyings: async () => ([
+          { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
+        ]),
+        getOptionExpiries: async () => { throw new Error('unused') },
+        getOptionChain: async () => { throw new Error('unused') },
+        getImpliedVol: async () => { throw new Error('unused') },
+        getStrategy: async () => { throw new Error('unused') },
+        getVolAnalytics: async () => { throw new Error('unused') },
+        getUnderlyingDaily: async () => { throw new Error('unused') },
+        getPrice: async () => { throw new Error('unused') },
+        getParityCheck: async () => { throw new Error('unused') },
+      }),
+    })
+    const { payload } = await dispatchBridgeRequest(broken, 'GET', '/options/overview', new URLSearchParams())
+    expect(payload).toMatchObject({
+      ok: true,
+      overview: { rows: [{ underlying: '510050', days: [] }] },
+    })
+  })
 })

@@ -422,6 +422,58 @@ export interface UnderlyingLink {
   readonly putPrefix: string
 }
 
+/** 期权总览排序键（C1：默认 5 日强弱，可切 IV 分位 / 持仓优先）。 */
+export type OptionOverviewSort = 'strength' | 'iv' | 'holdings'
+
+/** T-5 量价矩阵一格（近 5 个交易日；色深用 changePct，放量边框用 volumeSurge）。 */
+export interface OptionOverviewDay {
+  /** 交易日 YYYY-MM-DD（由 K 线 closeTime 推出，UTC 日界；CN 日 K 收盘即当日）。 */
+  readonly date: string
+  /** 当日涨跌幅（百分比，相对前收；首日相对开盘）。 */
+  readonly changePct: number
+  /** 当日成交量 / 近 5 日均量 > 1.5。 */
+  readonly volumeSurge: boolean
+}
+
+/**
+ * 9 标的期权总览一行（桥侧聚合，不打期权网关除非 includeIv）。
+ * 行情/IV 缺席时对应键缺席，UI 按行容错，不整页失败。
+ */
+export interface OptionOverviewRow {
+  readonly underlying: string
+  readonly name: string
+  readonly exchange: 'SSE' | 'SZSE' | 'SYNTH'
+  readonly spotSymbol?: string
+  readonly link?: UnderlyingLink
+  readonly last?: number
+  readonly changePct?: number
+  /** 近 5 个交易日累计涨跌幅（百分比）。 */
+  readonly return5d?: number
+  /** 近 5 日均量 / 近 20 日均量。 */
+  readonly volumeRatio?: number
+  /** 5 日动量 × 量能确认（return5d × volumeRatio）；默认排序键。 */
+  readonly strengthScore?: number
+  readonly days: readonly OptionOverviewDay[]
+  /** 价升量缩 = weak_rally；价跌量增 = accelerating_sell。 */
+  readonly divergence?: 'weak_rally' | 'accelerating_sell'
+  readonly heldQty?: number
+  /** 该标的期权持仓张数合计（权利+义务取绝对值后相加）。 */
+  readonly optionQty?: number
+  /** ATM IV 分位 0–1（includeIv=1 且报告有 iv_percentile 时）。 */
+  readonly ivPercentile?: number
+  /** C2：填进 composer 的扫描 prompt（技术分析，非投资建议）。 */
+  readonly scanPrompt: string
+}
+
+export interface OptionOverview {
+  readonly source: OptionSource | string
+  readonly sort: OptionOverviewSort
+  readonly asOf: string
+  readonly rows: readonly OptionOverviewRow[]
+  /** C2：总览「扫描标的」预填（全表摘要）。 */
+  readonly scanAllPrompt: string
+}
+
 /** 股票市场标的基本面与财务估值快照（CN）。 */
 export interface StockFundamentals {
   /** 标的规范符号（如 600519.SH）。 */

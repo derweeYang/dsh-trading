@@ -17,6 +17,7 @@
 | GET | `/dshtrading/api/options/chain?underlying=&expiryMonth=&source=` | T 型报价（阶段 4 起桥侧回填 `spot`） |
 | GET | `/dshtrading/api/options/implied-vol?underlying=&expiryMonth=&rate=&source=&priceField=` | 链截面 IV |
 | GET | `/dshtrading/api/options/vol-analytics?underlying=&expiryMonths=&asOf=&rate=&dividendYield=&source=` | 波动率分析（期限结构/skew/IV 分位/HV，透传） |
+| GET | `/dshtrading/api/options/overview?source=&sort=strength\|iv\|holdings&includeIv=0\|1` | 九标的总览（C1：现货/T-5/底仓/持仓聚合；`includeIv=1` 才打网关） |
 | POST | `/dshtrading/api/options/strategy` | 多腿模板 / 保证金（JSON body；阶段 4 起支持 `holdingQty`） |
 | POST | `/dshtrading/api/options/order` | 期权下单（阶段 3 交易面） |
 | DELETE | `/dshtrading/api/options/order?id=` | 期权撤单（阶段 3） |
@@ -107,6 +108,47 @@ GET /options/vol-analytics?underlying=510050&expiryMonths=2609,2612&rate=0.02&so
   `cn_get_option_vol_analytics` 同源）。总览页 IV 分位排序直接读
   `iv_percentile`；显示前对缺键容错。
 - 显式给出但非法的数值（如 `rate=abc`）→ 400，不静默换默认值。
+
+### overview（九标的总览，C1/C2）
+
+```json
+GET /options/overview?sort=strength&includeIv=0
+{
+  "ok": true,
+  "overview": {
+    "source": "akshare",
+    "sort": "strength",
+    "asOf": "2026-09-08T09:00:00.000Z",
+    "scanAllPrompt": "Scan these China ETF option underlyings… not investment advice.",
+    "rows": [{
+      "underlying": "510050",
+      "name": "华夏上证50ETF",
+      "exchange": "SSE",
+      "spotSymbol": "510050.SH",
+      "last": 2.91,
+      "changePct": 0.4,
+      "return5d": 1.2,
+      "volumeRatio": 0.8,
+      "strengthScore": 0.96,
+      "days": [{ "date": "2026-09-04", "changePct": 0.3, "volumeSurge": false }],
+      "divergence": "weak_rally",
+      "heldQty": 20000,
+      "optionQty": 2,
+      "scanPrompt": "Scan China ETF option underlying 510050…"
+    }]
+  }
+}
+```
+
+- 名册来自 `listUnderlyings`；**SYNTH 行不进表**。现货 / 日 K 走 `tradingCnMarketData`，
+  单行失败键缺席，不整页失败。未挂 `connector-options` → `TRADING_NOT_IMPLEMENTED`。
+- `sort`：`strength`（默认，5 日动量 × 量能比）、`iv`（需 `includeIv=1`）、`holdings`
+  （`heldQty` 再 `optionQty`）。
+- `includeIv=1` 才打 `vol_analytics`；IV 失败该行无 `ivPercentile`。默认不打网关。
+- `days` 最多 5 格：`changePct` 做色深，`volumeSurge`（当日量 / 5 日均量 > 1.5）做边框。
+- `scanPrompt` / `scanAllPrompt` 给 C2：`fillComposer` 原样预填。文案含
+  「technical analysis / not investment advice / do not place live orders」。
+  点行进 T 板仍用 `GET /options/resolve`。
 
 ## 阶段 3 交易面
 

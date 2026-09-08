@@ -14,7 +14,17 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionOrder, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
+import {
+  OVERVIEW_KLINE_LIMIT,
+  applyTicker,
+  buildOverviewMetrics,
+  composeScanAllPrompt,
+  composeScanPrompt,
+  extractIvPercentile,
+  sortOverviewRows,
+  spotSymbolOf,
+} from './option-overview.ts'
 import { aggregateNews as aggregateCnNews, fetchCnFundamentalsPackage } from '@dshtrading/kit-cn'
 import type { ChartActivationStore, CustomIndicatorRecord, CustomIndicatorStore, IndicatorInstance } from '@dshtrading/indicators'
 import { clampActivationParams, createMemoryChartActivationStore, createMemoryCustomIndicatorStore, resolveIndicatorSpec, sanitizeInstance, symbolScopeKey, withHiddenScopes } from '@dshtrading/indicators'
@@ -272,6 +282,11 @@ export interface OptionOrderWire {
 export interface OptionPositionsWire {
   ok: true
   positions: readonly OptionPosition[]
+}
+
+export interface OptionOverviewWire {
+  ok: true
+  overview: OptionOverview
 }
 
 /** GUI 期权下单体（与 GuiOrderBody 同语义：默认请求实盘，服务缝闸门兜底）。 */
@@ -980,6 +995,117 @@ export class TradingBridge {
   /** GUI 期权持仓（只读透传，不走闸门）。 */
   async optionPositions(): Promise<OptionPositionsWire> {
     return { ok: true, positions: await this.#requireCnOptionsTrade().listOptionPositions() }
+  }
+
+  /**
+   * C1 九标的总览：名册 + 现货 ticker/日 K + 底仓 + 期权持仓聚合。
+   * includeIv=1 才打 vol_analytics（网关）；失败按行缺席，不整页失败。
+   */
+  async optionOverview(
+    source?: string,
+    sortRaw?: string,
+    includeIvRaw?: string,
+  ): Promise<OptionOverviewWire> {
+    const typed = source === 'synth' || source === 'akshare' || source === 'iquant' ? source : undefined
+    const sort: OptionOverviewSort = sortRaw === 'iv' || sortRaw === 'holdings' ? sortRaw : 'strength'
+    const includeIv = includeIvRaw === '1' || includeIvRaw === 'true'
+    const roster = await this.#withHeldQty(await this.requireCnOptions().listUnderlyings(typed))
+    const rows = roster.filter((row) => row.exchange !== 'SYNTH')
+    let positions: readonly OptionPosition[] = []
+    try {
+      positions = await this.#requireCnOptionsTrade().listOptionPositions()
+    } catch {
+      positions = []
+    }
+    const qtyByUnderlying = new Map<string, number>()
+    for (const pos of positions) {
+      qtyByUnderlying.set(pos.underlying, (qtyByUnderlying.get(pos.underlying) ?? 0) + Math.abs(pos.quantity))
+    }
+    const built = await Promise.all(rows.map((row) => this.#overviewRow(row, qtyByUnderlying.get(row.underlying), includeIv, typed)))
+    const sorted = sortOverviewRows(built, sort)
+    return {
+      ok: true,
+      overview: {
+        source: typed ?? 'akshare',
+        sort,
+        asOf: new Date().toISOString(),
+        rows: sorted,
+        scanAllPrompt: composeScanAllPrompt(sorted),
+      },
+    }
+  }
+
+  async #overviewRow(
+    row: OptionUnderlying,
+    optionQty: number | undefined,
+    includeIv: boolean,
+    source: 'akshare' | 'iquant' | 'synth' | undefined,
+  ): Promise<OptionOverviewRow> {
+    const spotSymbol = spotSymbolOf(row.underlying, row.exchange)
+    const link: UnderlyingLink | undefined = spotSymbol === undefined ? undefined : {
+      underlying: row.underlying,
+      spotSymbol,
+      exchange: row.exchange,
+      callPrefix: `${row.underlying}C`,
+      putPrefix: `${row.underlying}P`,
+    }
+    let ticker: Ticker | undefined
+    let klines: readonly Kline[] = []
+    const market = this.host.getMarketService('cn')
+    if (spotSymbol !== undefined && market !== undefined) {
+      try {
+        ticker = await market.getTicker(spotSymbol)
+      } catch {
+        ticker = undefined
+      }
+      try {
+        klines = await market.getKlines(spotSymbol, '1d', OVERVIEW_KLINE_LIMIT)
+      } catch {
+        klines = []
+      }
+    }
+    const metrics = buildOverviewMetrics(klines)
+    const quote = applyTicker(metrics, ticker)
+    let ivPercentile: number | undefined
+    if (includeIv) {
+      try {
+        const report = await this.requireCnOptions().getVolAnalytics({
+          underlying: row.underlying,
+          ...(source === undefined ? {} : { source }),
+        })
+        ivPercentile = extractIvPercentile(report)
+      } catch {
+        ivPercentile = undefined
+      }
+    }
+    const scanPrompt = composeScanPrompt({
+      underlying: row.underlying,
+      name: row.name,
+      ...quote,
+      ...(metrics.return5d === undefined ? {} : { return5d: metrics.return5d }),
+      ...(metrics.volumeRatio === undefined ? {} : { volumeRatio: metrics.volumeRatio }),
+      ...(row.heldQty === undefined ? {} : { heldQty: row.heldQty }),
+      ...(optionQty === undefined ? {} : { optionQty }),
+      ...(ivPercentile === undefined ? {} : { ivPercentile }),
+      ...(metrics.divergence === undefined ? {} : { divergence: metrics.divergence }),
+    })
+    return {
+      underlying: row.underlying,
+      name: row.name,
+      exchange: row.exchange,
+      days: metrics.days,
+      scanPrompt,
+      ...(spotSymbol === undefined ? {} : { spotSymbol }),
+      ...(link === undefined ? {} : { link }),
+      ...quote,
+      ...(metrics.return5d === undefined ? {} : { return5d: metrics.return5d }),
+      ...(metrics.volumeRatio === undefined ? {} : { volumeRatio: metrics.volumeRatio }),
+      ...(metrics.strengthScore === undefined ? {} : { strengthScore: metrics.strengthScore }),
+      ...(metrics.divergence === undefined ? {} : { divergence: metrics.divergence }),
+      ...(row.heldQty === undefined ? {} : { heldQty: row.heldQty }),
+      ...(optionQty === undefined ? {} : { optionQty }),
+      ...(ivPercentile === undefined ? {} : { ivPercentile }),
+    }
   }
 
   /**
@@ -1925,6 +2051,16 @@ export async function dispatchBridgeRequest(
       }
       case '/options/positions': {
         return { status: 200, payload: await bridge.optionPositions() }
+      }
+      case '/options/overview': {
+        return {
+          status: 200,
+          payload: await bridge.optionOverview(
+            search.get('source') ?? undefined,
+            search.get('sort') ?? undefined,
+            search.get('includeIv') ?? undefined,
+          ),
+        }
       }
       case '/orderbook': {
         const market = search.get('market') ?? ''
