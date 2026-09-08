@@ -55,14 +55,14 @@ describe('buildDryRunReceipt', () => {
 
   it('keeps the simulation alive when the reference quote fails', async () => {
     const receipt = JSON.parse(
-      await buildDryRunReceipt('hk', args({ symbol: '00700' }), {
+      await buildDryRunReceipt('cn', args({ symbol: '600519' }), {
         getTicker: async () => {
           throw new Error('boom')
         },
       }),
     )
     expect(receipt.dryRun).toBe(true)
-    expect(receipt.symbol).toBe('00700')
+    expect(receipt.symbol).toBe('sh600519')
     expect(receipt.reference).toMatchObject({ source: 'tencent-quote', unavailable: 'boom' })
   })
 })
@@ -89,22 +89,13 @@ describe('cn_place_order tool (工厂直测，不经宿主)', () => {
     await expect(tool.execute({ symbol: '600519', side: 'HOLD', type: 'MARKET', quantity: 100 })).rejects.toThrow(/invalid arguments/)
     await expect(tool.execute({ symbol: '600519', side: 'BUY', type: 'LIMIT', quantity: 100 })).rejects.toThrow(/LIMIT orders require/)
   })
-})
-
-describe('hk_place_order tool', () => {
-  it('market split: hk config mounts hk_* tools and normalizes hk codes', async () => {
-    const tool = createPlaceOrderTool({ marketData: { getTicker: async () => TICKER }, config: config({ market: 'hk' }) })
-    expect(tool.name).toBe('hk_place_order')
-    const output = await tool.execute({ symbol: '700', side: 'SELL', type: 'MARKET', quantity: 100 })
-    expect(JSON.parse(String(output))).toMatchObject({ status: 'filled', dryRun: true, market: 'hk', symbol: '00700' })
-  })
 
   it('live path (liveTrading=true, dryRun=false) is TRADING_NOT_IMPLEMENTED — Tencent has no trading API', async () => {
     const tool = createPlaceOrderTool({
       marketData: { getTicker: async () => TICKER },
-      config: config({ market: 'hk', liveTrading: true, dryRun: false }),
+      config: config({ liveTrading: true, dryRun: false }),
     })
-    await expect(tool.execute({ symbol: '00700', side: 'BUY', type: 'MARKET', quantity: 100, dryRun: false }))
+    await expect(tool.execute({ symbol: '600519', side: 'BUY', type: 'MARKET', quantity: 100, dryRun: false }))
       .rejects.toMatchObject({ code: 'TRADING_NOT_IMPLEMENTED' })
   })
 })

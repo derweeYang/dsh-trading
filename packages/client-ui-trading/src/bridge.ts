@@ -14,11 +14,8 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, DerivativesData, DerivativesHistory, FundamentalsPackage, Interval, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, FundamentalsPackage, Interval, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick } from '@dshtrading/api'
 import { aggregateNews as aggregateCnNews, fetchCnFundamentalsPackage } from '@dshtrading/kit-cn'
-import { aggregateNews as aggregateHkNews, fetchHkFundamentalsPackage } from '@dshtrading/kit-hk'
-import { aggregateNews as aggregateUsNews, fetchUsFundamentalsPackage } from '@dshtrading/kit-us'
-import { aggregateNews as aggregateCryptoNews, fetchCryptoFundamentalsPackage } from '@dshtrading/kit-crypto'
 import type { ChartActivationStore, CustomIndicatorRecord, CustomIndicatorStore, IndicatorInstance } from '@dshtrading/indicators'
 import { clampActivationParams, createMemoryChartActivationStore, createMemoryCustomIndicatorStore, resolveIndicatorSpec, sanitizeInstance, symbolScopeKey, withHiddenScopes } from '@dshtrading/indicators'
 import type { KnowledgeCard, KnowledgeCardStore } from '@dshtrading/knowledge'
@@ -45,16 +42,13 @@ import type { FxFetchLike } from '@dshtrading/holdings/fx'
 import { createFxService } from '@dshtrading/holdings/fx'
 
 /** 本桥支持的市场（与连接器服务键一一对应）。 */
-export type MarketId = 'crypto' | 'us' | 'cn' | 'hk'
+export type MarketId = 'cn'
 
-export const MARKET_IDS: readonly MarketId[] = ['crypto', 'us', 'cn', 'hk']
+export const MARKET_IDS: readonly MarketId[] = ['cn']
 
 /** market → Context 服务键（@dshtrading/api 的 Context 增强）。 */
 export const MARKET_SERVICE_KEYS: Record<MarketId, string> = {
-  crypto: 'tradingCryptoMarketData',
-  us: 'tradingUsMarketData',
   cn: 'tradingCnMarketData',
-  hk: 'tradingHkMarketData',
 }
 
 /** 注册表服务的最小形状（鸭式，与 @dshtrading/router 的 MarketDataRegistryLike 同构）。 */
@@ -102,8 +96,6 @@ export function createBridgeHost(services: {
   fetchFxRates?: FxRatesFetcher | undefined
   /** 新闻注册表（issue #37）。 */
   newsRegistry?: TradingNewsRegistryLike | undefined
-  /** CryptoPanic API token 取值函数（从 router settings 获取；可选）。 */
-  newsKey?: (() => string | undefined) | undefined
   /** CN ETF 期权只读服务（host 面 tradingCnOptions；缺席 → 桥返回 NOT_IMPLEMENTED）。 */
   cnOptions?: CnOptionsService | undefined
 }): BridgeHost {
@@ -126,7 +118,6 @@ export function createBridgeHost(services: {
     holdingsStore: services.holdingsStore ?? createFallbackHoldingsStore(),
     fetchFxRates: services.fetchFxRates,
     newsRegistry: services.newsRegistry,
-    newsKey: services.newsKey,
     getCnOptions: () => services.cnOptions,
   }
 }
@@ -134,7 +125,7 @@ export function createBridgeHost(services: {
 /** 单次批量报价的 symbols 封顶（保护公共端点，超出部分直接拒绝）。 */
 export const MAX_SYMBOLS = 32
 
-/** 单次 K 线 limit 封顶（与 Binance/Bybit 单请求上限对齐；OKX 超出 300 的部分由连接器 after 游标翻页补足）。 */
+/** 单次 K 线 limit 封顶（保护公共端点；连接器可在此基础上进一步收紧）。 */
 export const MAX_KLINE_LIMIT = 1000
 
 /** 宿主面：桥对 cordis ctx 的最小依赖（便于单测注入假件）。 */
@@ -171,8 +162,6 @@ export interface BridgeHost {
   getTradeService?(market: MarketId): TradeService | undefined
   /** 新闻注册表（可选，issue #37）：各市场 Kit 注册的新闻聚合器。 */
   newsRegistry?: TradingNewsRegistryLike | undefined
-  /** CryptoPanic API token 取值函数（从 router settings 获取；可选，issue #37）。 */
-  newsKey?: (() => string | undefined) | undefined
   /** CN ETF 期权只读服务；未挂 connector-options → undefined。 */
   getCnOptions?(): CnOptionsService | undefined
 }
@@ -210,16 +199,6 @@ export interface SymbolsWire {
 export interface FundamentalsWire {
   ok: true
   fundamentals: StockFundamentals
-}
-
-export interface DerivativesWire {
-  ok: true
-  derivatives: DerivativesData
-}
-
-export interface DerivativesHistoryWire {
-  ok: true
-  history: DerivativesHistory
 }
 
 export interface OptionUnderlyingsWire {
@@ -654,46 +633,6 @@ export class TradingBridge {
     }
   }
 
-  /**
-   * 衍生品指标快照（GUI「衍生品」面板，issue #38）：单 symbol 透传注册表解析出的
-   * 行情服务。连接器未实现可选 getDerivatives（现货/股票数据源）→ 业务错误
-   * TRADING_NOT_IMPLEMENTED（HTTP 200 + ok:false），前端直接隐藏面板（不降级）。
-   */
-  async derivatives(market: string, symbol: string): Promise<DerivativesWire> {
-    if (!isMarketId(market)) throw new BridgeProtocolError(400, `unknown market ${JSON.stringify(market)}`)
-    const trimmed = symbol.trim()
-    if (trimmed === '') throw new BridgeProtocolError(400, 'derivatives: symbol is required')
-    const service = this.host.getMarketService(market)
-    if (service === undefined) throw new BridgeProtocolError(400, `market ${market} is not installed`)
-    if (typeof service.getDerivatives !== 'function') {
-      throw Object.assign(
-        new Error(`market ${market} provider does not implement derivatives — spot market`),
-        { code: 'TRADING_NOT_IMPLEMENTED' },
-      )
-    }
-    return { ok: true, derivatives: await service.getDerivatives(trimmed) }
-  }
-
-  /**
-   * 衍生品历史序列（GUI「衍生品」页签趋势卡，issue #54）：单 symbol 透传。
-   * 连接器未实现可选 getDerivativesHistory → TRADING_NOT_IMPLEMENTED 业务错误
-   * （HTTP 200 + ok:false），前端隐藏趋势卡、保留快照读数（与快照同纪律）。
-   */
-  async derivativesHistory(market: string, symbol: string): Promise<DerivativesHistoryWire> {
-    if (!isMarketId(market)) throw new BridgeProtocolError(400, `unknown market ${JSON.stringify(market)}`)
-    const trimmed = symbol.trim()
-    if (trimmed === '') throw new BridgeProtocolError(400, 'derivatives history: symbol is required')
-    const service = this.host.getMarketService(market)
-    if (service === undefined) throw new BridgeProtocolError(400, `market ${market} is not installed`)
-    if (typeof service.getDerivativesHistory !== 'function') {
-      throw Object.assign(
-        new Error(`market ${market} provider does not implement derivatives history`),
-        { code: 'TRADING_NOT_IMPLEMENTED' },
-      )
-    }
-    return { ok: true, history: await service.getDerivativesHistory(trimmed) }
-  }
-
   private requireCnOptions(): CnOptionsService {
     const service = this.host.getCnOptions?.()
     if (service === undefined) {
@@ -789,7 +728,7 @@ export class TradingBridge {
 
   /**
    * 盘口快照（GUI「盘口」竖栏，issue #39）：单 symbol 透传。连接器未实现可选
-   * getOrderbook（yahoo/stooq/腾讯 r_hk）→ TRADING_NOT_IMPLEMENTED 业务错误，
+   * getOrderbook → TRADING_NOT_IMPLEMENTED 业务错误，
    * 前端竖栏显示「该市场未提供盘口」。
    */
   async orderbook(market: string, symbol: string): Promise<OrderbookWire> {
@@ -1088,11 +1027,7 @@ export class TradingBridge {
   async news(market: string, symbol: string | null, rawLimit: string | null): Promise<NewsWire> {
     if (!isMarketId(market)) throw new BridgeProtocolError(400, `unknown market ${JSON.stringify(market)}`)
     const aggregator = this.host.newsRegistry?.get(market)
-      ?? (market === 'cn' ? aggregateCnNews
-        : market === 'hk' ? aggregateHkNews
-        : market === 'us' ? aggregateUsNews
-        : market === 'crypto' ? aggregateCryptoNews
-        : undefined)
+      ?? (market === 'cn' ? aggregateCnNews : undefined)
 
     if (aggregator === undefined) {
       throw Object.assign(
@@ -1108,7 +1043,6 @@ export class TradingBridge {
       symbol: symbol ?? undefined,
       limit: limit ?? 20,
       windowHours: 24,
-      cryptoPanicKey: this.host.newsKey?.(),
     })
 
     return { ok: true, items: result.items, unavailable: result.unavailable }
@@ -1345,18 +1279,13 @@ export class TradingBridge {
   /** 按市场拉 kit 基本面数据包；kit 未覆盖或上游失败 → undefined（不算错误）。 */
   async #fetchPkg(market: MarketId, symbol: string): Promise<FundamentalsPackage | undefined> {
     try {
-      const pkg = market === 'cn' ? await fetchCnFundamentalsPackage(symbol)
-        : market === 'hk' ? await fetchHkFundamentalsPackage(symbol)
-        : market === 'us' ? await fetchUsFundamentalsPackage(symbol)
-        : market === 'crypto' ? await fetchCryptoFundamentalsPackage(symbol)
-        : undefined
+      const pkg = market === 'cn' ? await fetchCnFundamentalsPackage(symbol) : undefined
       // 骨架包（全部上游失败时 kit 仍返回 market/symbol + 空数组）不算数据：
       // 只有携带实质下钻（matrix/stock/profile 详情/股东等任一）才压过快照，
       // 否则快照字段会被空骨架挤到 stock 子对象里丢掉顶层估值字段。
       if (pkg === undefined) return undefined
       const hasSubstance = pkg.matrix !== undefined
         || pkg.stock !== undefined
-        || pkg.crypto !== undefined
         || pkg.profile?.description !== undefined
         || pkg.profile?.industry !== undefined
         || (pkg.shareholders?.length ?? 0) > 0
@@ -1687,16 +1616,6 @@ export async function dispatchBridgeRequest(
         const market = search.get('market') ?? ''
         const symbol = search.get('symbol') ?? ''
         return { status: 200, payload: await bridge.fundamentals(market, symbol) }
-      }
-      case '/derivatives': {
-        const market = search.get('market') ?? ''
-        const symbol = search.get('symbol') ?? ''
-        return { status: 200, payload: await bridge.derivatives(market, symbol) }
-      }
-      case '/derivatives/history': {
-        const market = search.get('market') ?? ''
-        const symbol = search.get('symbol') ?? ''
-        return { status: 200, payload: await bridge.derivativesHistory(market, symbol) }
       }
       case '/options/underlyings': {
         return { status: 200, payload: await bridge.optionUnderlyings(search.get('source') ?? undefined) }

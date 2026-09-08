@@ -3,24 +3,21 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { composePresets, connectorRowsOf, installFromLoader, installPresets, isUnmodifiedManaged, MARKETS, stamp, inject, Config } from '../src/presets.js'
-import { getPresetContribution as crypto } from '../../crypto/src/index.js'
-import { getPresetContribution as us } from '../../us/src/index.js'
 import { getPresetContribution as cn } from '../../cn/src/index.js'
-import { getPresetContribution as hk } from '../../hk/src/index.js'
 
 const dirs: string[] = []
 async function root() { const dir = await mkdtemp(join(tmpdir(), 'trading-roles-')); dirs.push(dir); return join(dir, 'presets') }
 afterEach(async () => { await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))) })
-const contributions = () => Promise.all([crypto(), us(), cn(), hk()])
+const contributions = () => Promise.all([cn()])
 
 it('uses native loader stable-tree intercept and accepts empty config', () => {
   expect(inject).toEqual({ loader: { await: true } })
   expect(Config({})).toEqual({})
 })
 
-it('composes all 16 installed-market subsets deterministically, preserving connector realms for trader and master', async () => {
+it('composes all installed-market subsets deterministically, preserving connector realms for trader and master', async () => {
   const all = await contributions()
-  for (let mask = 0; mask < 16; mask++) {
+  for (let mask = 0; mask < 2; mask++) {
     const subset = all.filter((_, i) => mask & (1 << i))
     const result = composePresets(subset)
     expect(result.map(p => p.id)).toEqual(['trader', 'instrument-researcher', 'risk-reviewer', 'master'])
@@ -35,7 +32,7 @@ it('composes all 16 installed-market subsets deterministically, preserving conne
       }
       expect(text).toContain('knowledge_search')
       expect(text).toContain('*_get_fundamentals')
-      expect(text).toContain('cn_get_news / hk_get_news include announcements')
+      expect(text).toContain('cn_get_news includes announcements')
       expect(text).toContain('Never predict')
       expect(text).toContain('Never cite sell-side ratings or target prices')
       expect(text).toContain('scarcity')
@@ -90,9 +87,7 @@ it('composes all 16 installed-market subsets deterministically, preserving conne
       } else if (preset.id === 'instrument-researcher') {
         expect(text).toContain('skills: ["company-analysis"]')
         for (const contribution of subset) {
-          expect(text).toContain(contribution.market === 'crypto'
-            ? 'skills: ["crypto-instrument-analysis","knowledge-curation","trading-notes-setup"]'
-            : 'skills: ["knowledge-curation","trading-notes-setup"]')
+          expect(text).toContain('skills: ["knowledge-curation","trading-notes-setup"]')
         }
         expect(text).not.toContain('risk-checklist') // ordering discipline stays out of the research role
       } else if (preset.id === 'risk-reviewer') {
@@ -113,8 +108,7 @@ it('installs four roles idempotently and removes stale market rows after uninsta
   expect((await installPresets(all, path)).every(r => r.wrote.length === 0)).toBe(true)
   await installPresets([all[0]], path)
   const trader = await readFile(join(path, 'trader/agent.cordis.yml'), 'utf8')
-  expect(trader).toContain('@dshtrading/connector-binance')
-  expect(trader).not.toContain('@dshtrading/connector-yahoo')
+  expect(trader).toContain('@dshtrading/connector-tencent')
   expect(isUnmodifiedManaged(trader)).toBe(true)
   expect((await readdir(path)).sort()).toEqual(['instrument-researcher', 'master', 'risk-reviewer', 'trader'])
   const master = await readFile(join(path, 'master/preset.yml'), 'utf8')
@@ -147,20 +141,20 @@ async function legacy(path: string, id: string, edited = false, extra = false) {
 }
 it('archives only intact managed legacy defaults outside roster; preserves edits and extra user files', async () => {
   const path = await root()
-  await legacy(path, 'crypto-trader')
+  await legacy(path, 'cn-trader')
   await legacy(path, 'us-trader', true)
-  await legacy(path, 'cn-trader', false, true)
+  await legacy(path, 'hk-trader', false, true)
   await installPresets(await contributions(), path)
-  expect(await readdir(path)).not.toContain('crypto-trader')
-  expect(await readFile(join(`${path}.legacy-backup`, 'crypto-trader/agent.cordis.yml'), 'utf8')).toBe(stamp('[]\n'))
-  expect(await readdir(path)).toEqual(expect.arrayContaining(['us-trader', 'cn-trader']))
+  expect(await readdir(path)).not.toContain('cn-trader')
+  expect(await readFile(join(`${path}.legacy-backup`, 'cn-trader/agent.cordis.yml'), 'utf8')).toBe(stamp('[]\n'))
+  expect(await readdir(path)).toEqual(expect.arrayContaining(['us-trader', 'hk-trader']))
 })
 it('does not overwrite an existing legacy backup or migrate when replacement is customized', async () => {
   const path = await root()
-  await legacy(path, 'crypto-trader')
-  await legacy(`${path}.legacy-backup`, 'crypto-trader', true)
+  await legacy(path, 'cn-trader')
+  await legacy(`${path}.legacy-backup`, 'cn-trader', true)
   await installPresets([], path)
-  expect(await readdir(path)).toContain('crypto-trader')
+  expect(await readdir(path)).toContain('cn-trader')
   await legacy(path, 'us-trader')
   await writeFile(join(path, 'trader/preset.yml'), 'name: custom\n')
   await installPresets([], path)
@@ -177,21 +171,21 @@ it('refuses symlink targets without writing through them', async () => {
 })
 it('uses effective enabled loader rows, not installed package reachability; honors common root', async () => {
   const path = await root()
-  const imported = vi.fn(async () => ({ getPresetContribution: crypto }))
+  const imported = vi.fn(async () => ({ getPresetContribution: cn }))
   await installFromLoader({ entries: () => [
-    { disabled: false, options: { name: '@dshtrading/crypto', config: { presetRoot: path } } },
-    { disabled: true, options: { name: '@dshtrading/us' } },
+    { disabled: false, options: { name: '@dshtrading/cn', config: { presetRoot: path } } },
+    { disabled: true, options: { name: '@dshtrading/base' } },
     { disabled: false, options: { name: '@dshtrading/connector-tencent/dataplane' } },
   ], import: imported })
-  expect(imported).toHaveBeenCalledExactlyOnceWith('@dshtrading/crypto')
+  expect(imported).toHaveBeenCalledExactlyOnceWith('@dshtrading/cn')
   expect(await readdir(path)).toEqual(['instrument-researcher', 'master', 'risk-reviewer', 'trader'])
 })
 it('rejects conflicting roots and unreadable market assets instead of silently dropping a market', async () => {
   const imported = vi.fn(async () => { throw new Error('missing asset') })
   await expect(installFromLoader({ entries: () => [
-    { disabled: false, options: { name: '@dshtrading/crypto', config: { presetRoot: '/a' } } },
-    { disabled: false, options: { name: '@dshtrading/us', config: { presetRoot: '/b' } } },
+    { disabled: false, options: { name: '@dshtrading/cn', config: { presetRoot: '/a' } } },
+    { disabled: false, options: { name: '@dshtrading/cn', config: { presetRoot: '/b' } } },
   ], import: imported })).rejects.toThrow('Conflicting')
   expect(imported).not.toHaveBeenCalled()
-  await expect(installFromLoader({ entries: () => [{ disabled: false, options: { name: '@dshtrading/crypto' } }], import: imported })).rejects.toThrow('missing asset')
+  await expect(installFromLoader({ entries: () => [{ disabled: false, options: { name: '@dshtrading/cn' } }], import: imported })).rejects.toThrow('missing asset')
 })

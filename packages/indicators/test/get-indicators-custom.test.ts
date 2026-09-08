@@ -24,23 +24,23 @@ describe('createGetIndicatorsTool 自定义指标支持（issue #33）', () => {
       id: 'my_close', title: '收盘复制', pane: 'sub', params: [],
       computeSource: CUSTOM_SOURCE, createdAt: 1,
     }])
-    const tool = createGetIndicatorsTool({ marketData: fakeMarketData(), market: 'us', customStore: store })
-    const out = String(await tool.execute({ symbol: 'AAPL', interval: '1d', indicators: 'my_close' }))
+    const tool = createGetIndicatorsTool({ marketData: fakeMarketData(), market: 'cn', customStore: store })
+    const out = String(await tool.execute({ symbol: '600519.SH', interval: '1d', indicators: 'my_close' }))
     expect(out).toContain('close_copy')       // 自定义定义的输出 key
     expect(out).toContain('latest=139.5')     // 最新收盘价 100.5 + 39
     expect(out).not.toContain('unknown indicator id')
   })
 
   it('未知 id 且无 custom store → 报错并列举预置词汇', async () => {
-    const tool = createGetIndicatorsTool({ marketData: fakeMarketData(), market: 'us' })
-    await expect(tool.execute({ symbol: 'AAPL', interval: '1d', indicators: 'nope' }))
+    const tool = createGetIndicatorsTool({ marketData: fakeMarketData(), market: 'cn' })
+    await expect(tool.execute({ symbol: '600519.SH', interval: '1d', indicators: 'nope' }))
       .rejects.toThrow(/available presets/)
   })
 
   it('custom store 缺记录 → 提示先经 indicator_author 创作', async () => {
     const store = createMemoryCustomIndicatorStore()
-    const tool = createGetIndicatorsTool({ marketData: fakeMarketData(), market: 'us', customStore: store })
-    await expect(tool.execute({ symbol: 'AAPL', interval: '1d', indicators: 'ghost' }))
+    const tool = createGetIndicatorsTool({ marketData: fakeMarketData(), market: 'cn', customStore: store })
+    await expect(tool.execute({ symbol: '600519.SH', interval: '1d', indicators: 'ghost' }))
       .rejects.toThrow(/indicator_author first/)
   })
 })

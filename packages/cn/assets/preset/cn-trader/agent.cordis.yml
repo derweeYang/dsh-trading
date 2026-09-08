@@ -6,10 +6,10 @@
 # 删除已安装目录；升级/重装后再次 apply 即恢复一致，行不可解析时只会得到带原因的
 # broken 行，无进程崩溃（S3 REPORT broken 语义）。
 #
-# **单包双市场多实例模式（手册 §8，本仓新模式）**：connector 行 name 指向
-# @dshtrading/connector-tencent（cn/hk 共用同一插件包），行 id 用市场命名空间的
-# dsh-trading-cn-connector（hk preset 用 dsh-trading-hk-connector——不同 id 即不同
-# 实例，行 id 即命名空间），config.market=cn 分流。provide 服务键 tradingCnMarketData，
+# **connector-tencent 挂载形态**：connector 行 name 指向
+# @dshtrading/connector-tencent，行 id 用市场命名空间的
+# dsh-trading-cn-connector，config.market=cn（原 cn/hk 单包双市场多实例模式，
+# 2026-09-08 市场收敛为 cn-only 时拆除 hk 分流）。provide 服务键 tradingCnMarketData，
 # 组行 isolate 键 = 服务名（官方 standard preset 挂载硬规则；不包组则被
 # dsh-agent-presets 以 published process-global service 拒绝，acceptance「修复 1」）。
 #
@@ -39,7 +39,7 @@
   isolate:
     tradingCnMarketData: true
   config:
-    # 同包双实例：行 id 市场命名空间，name 指向共用插件包，market 分流。
+    # 行 id 市场命名空间，name 指向插件包，market 固定 cn。
     - id: dsh-trading-cn-connector
       name: '@dshtrading/connector-tencent'
       config:

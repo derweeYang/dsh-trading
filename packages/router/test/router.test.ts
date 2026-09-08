@@ -35,71 +35,47 @@ import type { MarketDataService, NewsAggregator, TradeService } from '@dshtradin
 const ENTRY: ConfigType = { markets: { ...DEFAULT_MARKETS } }
 
 describe('dshtrading schema（用户设置一级）', () => {
-  it('默认值 = 现状零变化（crypto=binance / us=yahoo / cn+hk=tencent）', () => {
-    expect(activeProviderOf(ENTRY, 'crypto')).toBe('binance')
-    expect(activeProviderOf(ENTRY, 'us')).toBe('yahoo')
+  it('默认值 = 现状零变化（cn=tencent）', () => {
     expect(activeProviderOf(ENTRY, 'cn')).toBe('tencent')
-    expect(activeProviderOf(ENTRY, 'hk')).toBe('tencent')
-  })
-
-  it('news 默认空对象（无 key，WS2c）：resolved 无 key 不炸、newsKey 为 undefined', () => {
-    const resolve = Config as unknown as (value: unknown) => ConfigType
-    const resolved = resolve({ markets: { ...DEFAULT_MARKETS } })
-    expect(resolved.news?.cryptoPanicKey).toBeUndefined()
   })
 
   it('dict 键开放：新市场（jp）不炸 schema（构造即验证，无 schema 报错）', () => {
-    const cfg: ConfigType = { markets: { ...DEFAULT_MARKETS, jp: { provider: 'yahoo' } } }
-    expect(activeProviderOf(cfg, 'jp')).toBe('yahoo')
+    const cfg: ConfigType = { markets: { ...DEFAULT_MARKETS, jp: { provider: 'eastmoney' } } }
+    expect(activeProviderOf(cfg, 'jp')).toBe('eastmoney')
   })
 
-  it('provider 候选集 = 全仓词汇（binance/okx/bybit/ccxt/yahoo/stooq/alpaca/fmp/finnhub/polygon/ibkr/tencent/eastmoney/tushare/akshare/qmt/futu/longbridge/tiger）', () => {
+  it('provider 候选集 = 全仓词汇（tencent/eastmoney/tushare/akshare/qmt/hithink）', () => {
     expect([...PROVIDER_VOCABULARY].sort()).toEqual([
       'akshare',
-      'alpaca',
-      'binance',
-      'bybit',
-      'ccxt',
       'eastmoney',
-      'finnhub',
-      'fmp',
-      'futu',
       'hithink',
-      'ibkr',
-      'longbridge',
-      'okx',
-      'polygon',
       'qmt',
-      'stooq',
       'tencent',
-      'tiger',
       'tushare',
-      'yahoo',
     ].sort())
-    expect(PROVIDER_VOCABULARY).toContain('binance' as Provider)
-    expect(PROVIDER_VOCABULARY).toContain('ibkr' as Provider)
+    expect(PROVIDER_VOCABULARY).toContain('tencent' as Provider)
     expect(PROVIDER_VOCABULARY).toContain('qmt' as Provider)
-    expect(PROVIDER_VOCABULARY).toContain('tiger' as Provider)
+    expect(PROVIDER_VOCABULARY).toContain('hithink' as Provider)
   })
 
   it('schema 开放字符串：第三方 slug（custom_dex）不被一票否决（2026-08-30 整改 #4）', () => {
     // schemastery Schema 可调用：Config(value) 即校验+解析。
     const resolve = Config as unknown as (value: unknown) => ConfigType
-    const resolved = resolve({ markets: { crypto: { provider: 'custom_dex' } } })
-    expect(resolved.markets.crypto?.provider).toBe('custom_dex')
+    const resolved = resolve({ markets: { cn: { provider: 'custom_dex' } } })
+    expect(resolved.markets.cn?.provider).toBe('custom_dex')
   })
 
   it('运行时校验：未知 slug → warn + 返回清单；已知 slug 静默', () => {
     const warns: string[] = []
     const log = { warn: (...args: unknown[]) => warns.push(args.join(' ')) }
     const unknown = warnUnknownProviders(
-      { markets: { crypto: { provider: 'unknown_dex' }, us: { provider: 'yahoo' } } },
+      { markets: { cn: { provider: 'unknown_dex' } } },
       log,
     )
     expect(unknown).toEqual(['unknown_dex'])
     expect(warns).toHaveLength(1)
     expect(warns[0]).toContain('unknown_dex')
-    expect(warns[0]).toContain('crypto')
+    expect(warns[0]).toContain('cn')
     expect(warnUnknownProviders({ markets: { ...DEFAULT_MARKETS } }, log)).toEqual([])
   })
 })
@@ -119,36 +95,36 @@ describe('MarketDataRegistryService（tradingMarketDataRegistry，2026-08-30 注
 
   it('注册后按路由解析激活项；重复注册同 (market,provider) 不同实例抛错', () => {
     const { registry } = setup()
-    const binance = fakeService('binance')
-    const okx = fakeService('okx')
-    registry.register('crypto', 'binance', binance)
-    registry.register('crypto', 'okx', okx)
-    expect(registry.active('crypto')?.service).toBe(binance) // 默认路由 crypto=binance
-    expect(registry.list('crypto').map((e) => e.provider).sort()).toEqual(['binance', 'okx'])
-    expect(() => registry.register('crypto', 'binance', fakeService('binance-2'))).toThrow(/duplicate market data registration/)
+    const tencent = fakeService('tencent')
+    const eastmoney = fakeService('eastmoney')
+    registry.register('cn', 'tencent', tencent)
+    registry.register('cn', 'eastmoney', eastmoney)
+    expect(registry.active('cn')?.service).toBe(tencent) // 默认路由 cn=tencent
+    expect(registry.list('cn').map((e) => e.provider).sort()).toEqual(['eastmoney', 'tencent'])
+    expect(() => registry.register('cn', 'tencent', fakeService('tencent-2'))).toThrow(/duplicate market data registration/)
   })
 
   it('热切换语义：setSource 换 provider 后 active() 立即解析到新服务（无 watch 无重启）', () => {
     const { registry, setSource } = setup()
-    const binance = fakeService('binance')
-    const okx = fakeService('okx')
-    registry.register('crypto', 'binance', binance)
-    registry.register('crypto', 'okx', okx)
-    expect(registry.active('crypto')?.service).toBe(binance)
-    setSource({ markets: { ...DEFAULT_MARKETS, crypto: { provider: 'okx' } } })
-    expect(registry.active('crypto')?.service).toBe(okx)
-    expect(registry.active('crypto')?.provider).toBe('okx')
+    const tencent = fakeService('tencent')
+    const eastmoney = fakeService('eastmoney')
+    registry.register('cn', 'tencent', tencent)
+    registry.register('cn', 'eastmoney', eastmoney)
+    expect(registry.active('cn')?.service).toBe(tencent)
+    setSource({ markets: { ...DEFAULT_MARKETS, cn: { provider: 'eastmoney' } } })
+    expect(registry.active('cn')?.service).toBe(eastmoney)
+    expect(registry.active('cn')?.provider).toBe('eastmoney')
   })
 
   it('选中了但未注册 → undefined（不静默降级到别家）；注销函数生效', () => {
     const { registry, setSource } = setup()
-    const binance = fakeService('binance')
-    const unregister = registry.register('crypto', 'binance', binance)
-    setSource({ markets: { ...DEFAULT_MARKETS, crypto: { provider: 'okx' } } })
-    expect(registry.active('crypto')).toBeUndefined() // okx 未注册，不回落 binance
+    const tencent = fakeService('tencent')
+    const unregister = registry.register('cn', 'tencent', tencent)
+    setSource({ markets: { ...DEFAULT_MARKETS, cn: { provider: 'eastmoney' } } })
+    expect(registry.active('cn')).toBeUndefined() // eastmoney 未注册，不回落 tencent
     unregister()
     setSource({ markets: { ...DEFAULT_MARKETS } })
-    expect(registry.active('crypto')).toBeUndefined() // binance 已注销
+    expect(registry.active('cn')).toBeUndefined() // tencent 已注销
   })
 
   it('router 无该市场路由：恰好一个注册项 → 零配置可用；多个 → undefined', () => {
@@ -182,34 +158,34 @@ describe('TradeRegistryService（tradingTradeRegistry，2026-09-04 补齐 provid
 
   it('按路由解析激活交易服务；重复注册同 (market,provider) 不同实例抛错', () => {
     const { registry } = setup()
-    const binance = fakeTrade('binance')
-    const okx = fakeTrade('okx')
-    registry.register('crypto', 'binance', binance)
-    registry.register('crypto', 'okx', okx)
-    expect(registry.active('crypto')?.service).toBe(binance)
-    expect(registry.list('crypto').map((e) => e.provider).sort()).toEqual(['binance', 'okx'])
-    expect(() => registry.register('crypto', 'binance', fakeTrade('binance-2'))).toThrow(/duplicate trade registration/)
+    const tencent = fakeTrade('tencent')
+    const eastmoney = fakeTrade('eastmoney')
+    registry.register('cn', 'tencent', tencent)
+    registry.register('cn', 'eastmoney', eastmoney)
+    expect(registry.active('cn')?.service).toBe(tencent)
+    expect(registry.list('cn').map((e) => e.provider).sort()).toEqual(['eastmoney', 'tencent'])
+    expect(() => registry.register('cn', 'tencent', fakeTrade('tencent-2'))).toThrow(/duplicate trade registration/)
   })
 
   it('tradeProvider 显式设置时优先于数据面 provider（数据/交易分离预留语义）', () => {
     const { registry, setSource } = setup()
-    const binance = fakeTrade('binance')
-    const okx = fakeTrade('okx')
-    registry.register('crypto', 'binance', binance)
-    registry.register('crypto', 'okx', okx)
-    setSource({ markets: { ...DEFAULT_MARKETS, crypto: { provider: 'binance', tradeProvider: 'okx' } } })
-    expect(registry.active('crypto')?.service).toBe(okx)
+    const tencent = fakeTrade('tencent')
+    const eastmoney = fakeTrade('eastmoney')
+    registry.register('cn', 'tencent', tencent)
+    registry.register('cn', 'eastmoney', eastmoney)
+    setSource({ markets: { ...DEFAULT_MARKETS, cn: { provider: 'tencent', tradeProvider: 'eastmoney' } } })
+    expect(registry.active('cn')?.service).toBe(eastmoney)
   })
 
   it('选中了但未注册 → undefined（不静默降级）；注销函数生效', () => {
     const { registry, setSource } = setup()
-    const binance = fakeTrade('binance')
-    const unregister = registry.register('crypto', 'binance', binance)
-    setSource({ markets: { ...DEFAULT_MARKETS, crypto: { provider: 'okx' } } })
-    expect(registry.active('crypto')).toBeUndefined()
+    const tencent = fakeTrade('tencent')
+    const unregister = registry.register('cn', 'tencent', tencent)
+    setSource({ markets: { ...DEFAULT_MARKETS, cn: { provider: 'eastmoney' } } })
+    expect(registry.active('cn')).toBeUndefined()
     unregister()
     setSource({ markets: { ...DEFAULT_MARKETS } })
-    expect(registry.active('crypto')).toBeUndefined()
+    expect(registry.active('cn')).toBeUndefined()
   })
 
   it('router 无该市场路由：恰好一个注册项 → 零配置可用；多个 → undefined', () => {
@@ -231,7 +207,7 @@ describe('apply 的 installSettingsSection 接线', () => {
     }) as never
     apply(ctx as never, { markets: { ...DEFAULT_MARKETS } } as never)
     expect(captured.hooks).toBeDefined()
-    const resolved: ConfigType = { markets: { crypto: { provider: 'bybit' } } }
+    const resolved: ConfigType = { markets: { cn: { provider: 'eastmoney' } } }
     expect(() => captured.hooks!.setSource(() => resolved)).not.toThrow()
     expect(() => captured.hooks!.onChange()).not.toThrow()
   })
@@ -240,10 +216,10 @@ describe('apply 的 installSettingsSection 接线', () => {
 describe('MarketRouterService（tradingMarketRouter）', () => {
   it('activeProvider 读源（默认 entry）；setSource 后读新源（settings resolved）', () => {
     const svc = new MarketRouterService(new CordisContext() as never, () => ENTRY)
-    expect(svc.activeProvider('crypto')).toBe('binance')
-    const resolved: ConfigType = { markets: { ...DEFAULT_MARKETS, crypto: { provider: 'okx' } } }
+    expect(svc.activeProvider('cn')).toBe('tencent')
+    const resolved: ConfigType = { markets: { ...DEFAULT_MARKETS, cn: { provider: 'eastmoney' } } }
     svc.setSource(() => resolved)
-    expect(svc.activeProvider('crypto')).toBe('okx')
+    expect(svc.activeProvider('cn')).toBe('eastmoney')
   })
 
   it('watch：provider 变化 diff 通知（next/prev）；未变不通知', () => {
@@ -252,29 +228,21 @@ describe('MarketRouterService（tradingMarketRouter）', () => {
     const events: Array<[string | undefined, string | undefined]> = []
     const dispose = svc.watch((next, prev) => events.push([next, prev]))
     svc.notify()
-    // 首次 diff：四市场各自 undefined→默认值（crypto 的 binance 也在其中）。
-    expect(events.filter(([next]) => next === 'binance')).toHaveLength(1)
-    const cryptoFirst = events.find(([, prev]) => prev === undefined && events[0]?.[0] === 'binance')
-    expect(cryptoFirst).toEqual(['binance', undefined])
+    // 首次 diff：cn 市场 undefined→默认值（tencent）。
+    expect(events.filter(([next]) => next === 'tencent')).toHaveLength(1)
+    const cnFirst = events.find(([, prev]) => prev === undefined && events[0]?.[0] === 'tencent')
+    expect(cnFirst).toEqual(['tencent', undefined])
     events.length = 0
     svc.notify()
     expect(events).toHaveLength(0) // 未变不通知
-    source = { markets: { ...DEFAULT_MARKETS, crypto: { provider: 'okx' } } }
+    source = { markets: { ...DEFAULT_MARKETS, cn: { provider: 'eastmoney' } } }
     svc.notify()
-    expect(events).toContainEqual(['okx', 'binance'])
+    expect(events).toContainEqual(['eastmoney', 'tencent'])
     dispose()
-    source = { markets: { ...DEFAULT_MARKETS, crypto: { provider: 'binance' } } }
+    source = { markets: { ...DEFAULT_MARKETS, cn: { provider: 'tencent' } } }
     svc.notify()
     const before = events.length
     expect(events).toHaveLength(before) // dispose 后不再通知
-  })
-
-  it('newsKey：默认无 key（undefined），setSource 后读 resolved 的 news.cryptoPanicKey（WS2c）', () => {
-    const svc = new MarketRouterService(new CordisContext() as never, () => ENTRY)
-    expect(svc.newsKey()).toBeUndefined()
-    const resolved: ConfigType = { markets: { ...DEFAULT_MARKETS }, news: { cryptoPanicKey: 'sec_xxx' } }
-    svc.setSource(() => resolved)
-    expect(svc.newsKey()).toBe('sec_xxx')
   })
 })
 
@@ -288,35 +256,35 @@ describe('TradingNewsRegistryService（tradingNewsRegistry，Issue #37）', () =
     const registry = new TradingNewsRegistryService(new CordisContext() as never)
     const shared = fakeAggregator('shared')
     const other = fakeAggregator('other')
-    const first = registry.register('us', shared)
-    const second = registry.register('us', shared)
+    const first = registry.register('cn', shared)
+    const second = registry.register('cn', shared)
     first()
     first()
-    expect(registry.get('us')).toBe(shared)
-    const third = registry.register('us', other)
-    expect(registry.get('us')).toBe(other)
+    expect(registry.get('cn')).toBe(shared)
+    const third = registry.register('cn', other)
+    expect(registry.get('cn')).toBe(other)
     third()
-    expect(registry.get('us')).toBe(shared)
+    expect(registry.get('cn')).toBe(shared)
     second()
-    expect(registry.get('us')).toBeUndefined()
+    expect(registry.get('cn')).toBeUndefined()
   })
 
   it('注册聚合器、get 获取、markets 列举及注销清理', () => {
     const registry = new TradingNewsRegistryService(new CordisContext() as never)
-    const cryptoAgg = fakeAggregator('crypto')
-    const usAgg = fakeAggregator('us')
+    const cnAgg = fakeAggregator('cn')
+    const jpAgg = fakeAggregator('jp')
 
-    const unregisterCrypto = registry.register('crypto', cryptoAgg)
-    registry.register('us', usAgg)
+    const unregisterCn = registry.register('cn', cnAgg)
+    registry.register('jp', jpAgg)
 
-    expect(registry.get('crypto')).toBe(cryptoAgg)
-    expect(registry.get('us')).toBe(usAgg)
+    expect(registry.get('cn')).toBe(cnAgg)
+    expect(registry.get('jp')).toBe(jpAgg)
+    expect(registry.get('options')).toBeUndefined()
+    expect(registry.markets().sort()).toEqual(['cn', 'jp'])
+
+    unregisterCn()
     expect(registry.get('cn')).toBeUndefined()
-    expect(registry.markets().sort()).toEqual(['crypto', 'us'])
-
-    unregisterCrypto()
-    expect(registry.get('crypto')).toBeUndefined()
-    expect(registry.markets()).toEqual(['us'])
+    expect(registry.markets()).toEqual(['jp'])
   })
 })
 

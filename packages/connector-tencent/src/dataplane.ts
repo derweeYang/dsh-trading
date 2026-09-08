@@ -1,13 +1,12 @@
 /**
- * Host 面「数据面」行（2026-08-30 注册表模式定稿，架构评审整改 #1）：单包双市场，
- * config.market 分流（cn/hk 各一行）。注册表模式下两个实例各注册 (market, 'tencent')，
- * 激活裁决推迟到消费方按路由当前值惰性解析（GUI 热切换）；无注册表的老部署回退
- * 直接 provide 市场键（cn → tradingCnMarketData / hk → tradingHkMarketData）。
+ * Host 面「数据面」行（2026-08-30 注册表模式定稿，架构评审整改 #1）：cn 单市场。
+ * 注册表模式下实例注册 (cn, 'tencent')，激活裁决推迟到消费方按路由当前值惰性解析
+ * （GUI 热切换）；无注册表的老部署回退直接 provide 市场键（tradingCnMarketData）。
  * 只提供行情服务、不注册任何工具——工具面留在 preset 平面（会话隔离铁律）。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { MarketDataService } from '@dshtrading/api'
-import { TencentMarketDataService, marketDataKey, type Config } from './index.ts'
+import { TRADING_CN_MARKET_DATA_KEY, TencentMarketDataService, type Config } from './index.ts'
 export const inject: string[] = []
 
 /** 注册表服务的最小消费面（鸭式，不定死接口——连接器对 router 包保持零依赖，与 router consult 同纪律）。 */
@@ -25,13 +24,13 @@ const ROUTER_PROVIDER = 'tencent'
 
 export function apply(ctx: Context, config: Config): void {
   const market = config.market
-  const key = marketDataKey(market)
+  const key = TRADING_CN_MARKET_DATA_KEY
   const registry = resolveMarketDataRegistry(ctx)
   if (registry === undefined) {
-    new TencentMarketDataService(ctx, market, {}, key)
+    new TencentMarketDataService(ctx, {}, key)
     return
   }
   const inner = ctx.isolate(key)
-  const service = new TencentMarketDataService(inner, market, {}, key)
+  const service = new TencentMarketDataService(inner, {}, key)
   ctx.effect(() => registry.register(market, ROUTER_PROVIDER, service))
 }

@@ -126,7 +126,7 @@ describe('墓碑闸门（解析与回测）', () => {
     const tombstones = createMemoryBuiltinTombstonesStore()
     await tombstones.add('donchian-breakout')
     const tool = createStrategyBacktestTool({ store, tombstones, marketData: () => fakeService() })
-    await expect(tool.execute({ strategyId: 'donchian-breakout', market: 'crypto', symbol: 'BTCUSDT' }))
+    await expect(tool.execute({ strategyId: 'donchian-breakout', market: 'cn', symbol: '600519.SH' }))
       .rejects.toThrow('strategy_reset')
   })
 })

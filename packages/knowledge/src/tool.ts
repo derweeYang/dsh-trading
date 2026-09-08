@@ -108,7 +108,7 @@ export function createKnowledgeIngestTool(store: KnowledgeCardStore, options: Kn
       },
       tickersJson: {
         type: 'string',
-        description: '可选 JSON 字符串数组，关联标的代码列表，例如 \'["BTCUSDT", "600519.SH"]\'',
+        description: '可选 JSON 字符串数组，关联标的代码列表，例如 \'["600519.SH", "510050.SH"]\'',
       },
       relatedJson: {
         type: 'string',

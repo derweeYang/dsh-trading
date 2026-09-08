@@ -1,16 +1,16 @@
 /**
  * 【模板】交易所连接器插件入口骨架 —— 由生成器展开为新交易所插件后逐项填充。
  *
- * 结构（对照 connector-okx，本仓第一个真实 TradeService 参照系）：
+ * 结构（对照 connector-qmt，本仓当前唯一的真实 TradeService 参照系）：
  *   - Config：互斥激活（enabled 默认 false）+ 三态环境（env=demo|live）+ 铁律 #3
- *     双闸门（dryRun/liveTrading）+ BYOK 三 ref 凭证（demo/live 各一组）。
+ *     双闸门（dryRun/liveTrading）+ BYOK 凭证（demo/live 各一组）。
  *   - 服务：__EXCHANGE__MarketDataService（trading__MARKET_CAP__MarketData）与
  *     __EXCHANGE__TradeService（trading__MARKET_CAP__Trade——第一个真实交易面形态，
  *     数据面-only 的连接器删掉 TradeService 与交易面工具即可）。
  *   - 工具：市场短前缀（__MARKET___get_ticker 等），闸门模式
- *     /^(?:crypto|us|cn|hk)_(?:place|cancel)_order$/ 由 base 拥有，市场工具名必须落在此式内。
- *   - 互斥激活：同一市场同一服务键至多一个连接器 enabled=true（okx/binance 先例，
- *     方案 B 互斥 + C 交易服务分离，详见 docs/okx-integration.md §8.2）。
+ *     /^cn_(?:place|cancel)_order$/ 由 base 拥有，市场工具名必须落在此式内。
+ *   - 互斥激活：同一市场同一服务键至多一个连接器 enabled=true（qmt 先例，
+ *     方案 B 互斥 + C 交易服务分离）。
  *
  * TODO 清单（按实现顺序）：
  *   1. rest.ts：baseUrl/签名/端点/字段解析/错误码映射/单位换算（见该文件头部清单）。
@@ -57,13 +57,13 @@ export * from './rest.js'
 /* 占位常量（生成器按 token 整体替换；模板未展开也可编译）                       */
 /* ------------------------------------------------------------------ */
 
-/** 市场短前缀（工具名前缀 = 闸门模式前缀，如 crypto）。 */
+/** 市场短前缀（工具名前缀 = 闸门模式前缀，如 cn）。 */
 const MARKET = '__MARKET__'
-/** 市场标题（服务键 infix，如 Crypto）。 */
+/** 市场标题（服务键 infix，如 Cn）。 */
 const MARKET_CAP = '__MARKET_CAP__'
 /** 交易所 slug（包名/插件名/行 id 的一部分）。 */
 const EXCHANGE_SLUG = '__EXCHANGE_SLUG__'
-/** 交易所标题（类名/描述，如 Bybit）。 */
+/** 交易所标题（类名/描述，如 Hithink）。 */
 const EXCHANGE = '__EXCHANGE__'
 /** 环境变量 ref 前缀（如 BYBIT）。 */
 const ENV_PREFIX = '__ENV_PREFIX__'
@@ -210,7 +210,7 @@ const SUBSCRIBE_DEFAULT_MS = 5_000
 
 export class __EXCHANGE__MarketDataService extends Service implements MarketDataService {
   // TS 编译期 private 而非 ECMAScript # 私有字段：cordis 跨 realm 代理按类身份校验会炸
-  // （connector-binance 同款纪律，replication 坑清单）。
+  // （connector-qmt 同款纪律，replication 坑清单）。
   private readonly client: ExchangeRestClient
 
   constructor(ctx: Context, options: ExchangeRestOptions = {}, client?: ExchangeRestClient, serviceName: string = TRADING_MARKET_DATA_KEY) {
@@ -329,7 +329,7 @@ export class __EXCHANGE__TradeService extends Service implements TradeService {
   /**
    * 撤单。若交易所按 (symbol, id) 双键定位，api 契约的 cancelOrder(id) 单参形态
    * 不够时扩展第二可选参数（@dshtrading/api R3 先例）。
-   * TODO: 撤单幂等化——交易所的「已终态」错误码视作成功（参照 OKX 51400/51603）。
+   * TODO: 撤单幂等化——通道的「已终态」错误码视作成功（参照 connector-qmt 的处理）。
    */
   async cancelOrder(id: string, symbol?: string): Promise<void> {
     // 服务缝闸门（P0）：撤单是会改变交易所真实状态的实盘动作，与真实下单同门槛
@@ -481,7 +481,7 @@ export function evaluateOrderGate(config: Config, args: PlaceOrderArgs): OrderGa
   return { action: 'live', environment: config.env }
 }
 
-/** 参数校验（模型调用问题抛普通 Error；服务故障才用错误词汇，connector-binance 先例）。 */
+/** 参数校验（模型调用问题抛普通 Error；服务故障才用错误词汇，connector-qmt 先例）。 */
 function validatePlaceOrderArgs(args: PlaceOrderArgs): void {
   if (typeof args.symbol !== 'string' || args.symbol.trim() === '') {
     throw new Error(`${MARKET}_place_order: invalid symbol ${JSON.stringify(args.symbol)} — expected a non-empty exchange symbol`)
@@ -506,7 +506,7 @@ function normalizePlaceOrderArgs(raw: unknown): PlaceOrderArgs {
   return { ...args, symbol }
 }
 
-/** DRY-RUN 回执（connector-binance 同款形状；参照行情来自交易所公共 ticker）。 */
+/** DRY-RUN 回执（connector-qmt 同款形状；参照行情来自通道公共 ticker）。 */
 export interface DryRunReference {
   source: string
   price?: number

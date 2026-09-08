@@ -1,5 +1,5 @@
 /**
- * 腾讯公共行情客户端（dsh-trading cn+hk 双市场切片）——单包双市场的数据面。
+ * 腾讯公共行情客户端（dsh-trading cn 市场切片）——cn 单市场的数据面。
  *
  * 独立于插件 glue：仅依赖 @dshtrading/api 的类型词汇，无 cordis/dsh-tools 运行时依赖，
  * 便于单测与脚本直接消费（fetch 可注入）。
@@ -7,16 +7,15 @@
  * 数据面（2026-08-31 本出口实测，原始证据 spikes/impl-cn-hk/r1-*.raw / r2-*.json）：
  *   - 实时报价：GET https://qt.gtimg.cn/q=<wire>。响应 **GBK 编码**（content-type:
  *     text/html; charset=GBK）——必须 TextDecoder('gbk') 解码，UTF-8 解出中文乱码。
- *     body 形如 `v_sh600519="1~贵州茅台~600519~1297.40~..."`，`~` 分隔。
- *     cn（sh600519/sz000001）与 hk（r_hk00700）**字段布局不同**（详见 parseCnTicker /
- *     parseHkTicker 注释）。
- *   - 日/周/月 K：GET https://web.ifzq.gtimg.cn/appstock/app/{fqkline,hkfqkline}/get
+ *     body 形如 `v_sh600519="1~贵州茅台~600519~1297.40~..."`，`~` 分隔，字段布局
+ *     详见 parseCnTicker 注释。
+ *   - 日/周/月 K：GET https://web.ifzq.gtimg.cn/appstock/app/fqkline/get
  *     ?param=<code>,<tf>,,,<count>,qfq → JSON data.<code>.qfq<day|week|month>。
  *     行字段序是 **开收高低量**（open,close,high,low,volume）——与 OHLC 直觉相反，
- *     解析错序 K 线整体失真。hk 行第 7 个元素起是分红/回购等附加对象，须丢弃。
- *     cn 用 fqkline + sh/sz 前缀；**hk 报价用 r_hk 前缀而 K 线用 hk 前缀**——
- *     r_hk00700 打 K 线端点返回 {"code":0,"msg":"param error"}（实测）。
- *   - 分钟线端点（kline/mkline）在本出口 fetch 失败，未实现（待验证）。
+ *     解析错序 K 线整体失真。
+ *   - 分钟 K（m5/m30）：GET https://ifzq.gtimg.cn/appstock/app/kline/mkline
+ *     ?param=<code>,<tf>,,<count> → JSON data.<code>.m5/m30，行首 6 元素同开收
+ *     高低量布局，时间戳为 `YYYYMMDDHHmm`（Asia/Shanghai 墙钟）。
  *
  * 合规（README 铁律 #5）：腾讯公共行情端点、无 key、无官方授权；个人使用边界自负，
  * 本仓不缓存、不再分发行情数据（详见 README 数据源节）。
@@ -43,17 +42,13 @@ export class TradingServiceError extends Error {
 }
 
 /* ------------------------------------------------------------------ */
-/* 符号规范化（单包双市场的市场分流在此收敛）                                  */
+/* 符号规范化                                                                */
 /* ------------------------------------------------------------------ */
-
-export type TencentMarket = 'cn' | 'hk'
 
 // 规范词汇（docs/symbol-vocabulary.md）：接受 600519.SH / 600519.sh / SH600519 / 裸 6 位。
 const CN_SYMBOL_PATTERN = /^(?:(sh|sz)(\d{6})|(\d{6})(?:\.(sh|sz))?)$/
 // 常见知名上海指数代码（深交所无对应证券，裸 6 位数字时推断为 sh）
 const KNOWN_SH_INDICES = new Set(['000688', '000300', '000016', '000905', '000852'])
-// 规范词汇：接受 00700.HK（规范形）、裸 1-5 位数字（宽容输入）及 HSI/HSTECH/HSCEI 等指数代码。
-const HK_SYMBOL_PATTERN = /^(?:r_hk|hk)?([a-z0-9^]{1,10})(?:\.hk)?$/i
 
 /**
  * 规范化 A 股符号：接受 `600519` / `SH600519` / `sh600519` / `sz000001`，统一为
@@ -92,42 +87,10 @@ export function normalizeCnSymbol(symbol: string): string {
 }
 
 /**
- * 规范化港股符号：接受 `00700` / `700`（1-5 位数字，不足 5 位左补零，统一为 5 位数字
- * 形态 `00700`）及 `HSI` / `HSTECH` / `HSCEI` 等指数符号。wire 形态由客户端按端点再加前缀（报价 `r_hk` / K线 `hk`）。
+ * 输出归一 → 规范形（docs/symbol-vocabulary.md）：cn wire 形 sh600519 → 600519.SH。
+ * 下游永远看到市场规范词汇。
  */
-export function normalizeHkSymbol(symbol: string): string {
-  if (typeof symbol !== 'string' || !symbol.trim()) {
-    throw new TradingServiceError(
-      'TRADING_UNSUPPORTED_SYMBOL',
-      'Symbol must be a non-empty string, e.g. 00700, 700 or HSI',
-    )
-  }
-  const m = HK_SYMBOL_PATTERN.exec(symbol.trim().toLowerCase())
-  if (!m) {
-    throw new TradingServiceError(
-      'TRADING_UNSUPPORTED_SYMBOL',
-      `Symbol ${JSON.stringify(symbol)} is not a valid HK stock code or index (expected 1-5 digits or index symbol, e.g. 700 / 00700 / HSI)`,
-    )
-  }
-  const code = m[1] ?? ''
-  if (/^\d+$/.test(code)) return code.padStart(5, '0')
-  return code.toUpperCase()
-}
-
-/** 按市场规范化符号并返回市场。 */
-export function normalizeSymbol(market: TencentMarket, symbol: string): string {
-  return market === 'hk' ? normalizeHkSymbol(symbol) : normalizeCnSymbol(symbol)
-}
-
-/**
- * 输出归一 → 规范形（docs/symbol-vocabulary.md）：cn wire 形 sh600519 → 600519.SH；
- * hk 5 位形 00700 → 00700.HK，指数形 HSI → HSI.HK。下游永远看到市场规范词汇。
- */
-export function toCanonicalTencentSymbol(market: TencentMarket, wireOrCode: string): string {
-  if (market === 'hk') {
-    const raw = wireOrCode.replace(/^r_hk|^hk/i, '')
-    return `${raw}.HK`
-  }
+export function toCanonicalTencentSymbol(wireOrCode: string): string {
   const m = /^(sh|sz)(\d{6})$/i.exec(wireOrCode)
   return m ? `${m[2]}.${(m[1] ?? '').toUpperCase()}` : wireOrCode
 }
@@ -192,15 +155,14 @@ export function klineDateToEpochMs(date: string): number {
 
 /**
  * 交易所当地墙钟 → epoch ms（Intl 求时区偏移，含夏令时；同 stooq easternWallTimeToEpochMs
- * 的两轮逼近法，泛化时区参数）。cn 报价时间是 `YYYYMMDDHHMMSS`（Asia/Shanghai），
- * hk 报价时间是 `YYYY/MM/DD HH:MM:SS`（Asia/Hong_Kong）。
+ * 的两轮逼近法，泛化时区参数）。cn 报价时间是 `YYYYMMDDHHMMSS`（Asia/Shanghai）。
  */
 export function wallTimeToEpochMs(value: string, timeZone: string): number {
-  // cn 报价时间是紧凑形态 YYYYMMDDHHMMSS；hk 是 YYYY/MM/DD HH:MM:SS——先归一化。
+  // cn 报价时间是紧凑形态 YYYYMMDDHHMMSS——先归一化为 ISO 形再统一解析。
   const compact = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(value)
   const normalized = (compact
     ? `${compact[1]}-${compact[2]}-${compact[3]}T${compact[4]}:${compact[5]}:${compact[6]}`
-    : value.replace(/\//g, '-')
+    : value
   ).replace(/^(\d{4}-\d{2}-\d{2})$/, '$1T00:00:00')
   const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(normalized)
   if (!m) throw new TradingServiceError('TRADING_EXCHANGE_ERROR', `invalid tencent quote timestamp ${JSON.stringify(value)}`)
@@ -247,24 +209,7 @@ export interface CnTickerExtra {
   readonly currency: 'CNY'
 }
 
-/** hk 报价扩展字段。 */
-export interface HkTickerExtra {
-  readonly market: 'hk'
-  readonly name: string
-  readonly prevClose?: number
-  readonly open?: number
-  readonly high?: number
-  readonly low?: number
-  readonly change?: number
-  readonly changePercent?: number
-  /** 52 周最高（f48）。 */
-  readonly week52High?: number
-  /** 52 周最低（f49）。 */
-  readonly week52Low?: number
-  readonly currency: 'HKD'
-}
-
-export type TencentTicker = Ticker & (CnTickerExtra | HkTickerExtra)
+export type TencentTicker = Ticker & CnTickerExtra
 
 /**
  * cn 报价字段布局（v_sh600519，2026-08-31 实测 sh600519，88 字段）：
@@ -288,7 +233,7 @@ function parseCnTicker(fields: string[], timestamp: number): TencentTicker {
     price,
     ...(bid !== undefined && bid > 0 ? { bid } : {}),
     ...(ask !== undefined && ask > 0 ? { ask } : {}),
-    // cn 成交量单位是手（100 股）：统一归一到股，与 hk 对齐。
+    // cn 成交量单位是手（100 股）：统一归一到股。
     ...(volumeLots !== undefined ? { volume: volumeLots * 100 } : {}),
     timestamp,
     prevClose: num(fields[4]),
@@ -299,37 +244,6 @@ function parseCnTicker(fields: string[], timestamp: number): TencentTicker {
     limitDown: num(fields[48]),
     change: num(fields[31]),
     changePercent: num(fields[32]),
-  }
-}
-
-/**
- * hk 报价字段布局（v_r_hk00700，2026-08-31 实测腾讯控股，78 字段——与 cn 布局不同）：
- * 1=名称 2=代码 3=现价 4=昨收 5=今开 6=成交量(**股**，非手) 30=时间 YYYY/MM/DD
- * HH:MM:SS(Asia/Hong_Kong) 31=涨跌 32=涨跌% 33=最高 34=最低 37=成交额(HKD)
- * 46=英文名 48=52周高 49=52周低 75=币种(HKD)。买卖档位字段全 0（r_hk 实时档不可用），
- * bid/ask 置缺省。
- */
-function parseHkTicker(fields: string[], timestamp: number): TencentTicker {
-  const price = num(fields[3])
-  if (price === undefined) {
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'Tencent HK ticker: missing/invalid price field')
-  }
-  return {
-    market: 'hk',
-    currency: 'HKD',
-    name: fields[1] ?? '',
-    symbol: String(fields[2] ?? ''),
-    price,
-    ...(num(fields[6]) !== undefined ? { volume: num(fields[6]) } : {}),
-    timestamp,
-    prevClose: num(fields[4]),
-    open: num(fields[5]),
-    high: num(fields[33]),
-    low: num(fields[34]),
-    change: num(fields[31]),
-    changePercent: num(fields[32]),
-    week52High: num(fields[48]),
-    week52Low: num(fields[49]),
   }
 }
 
@@ -362,7 +276,7 @@ export function parseCnOrderbook(fields: string[], timestamp: number): Orderbook
   return { symbol: '', bids, asks, timestamp }
 }
 
-/** 基本面快照 = api 契约形（币种单位由市场决定：cn=CNY，hk=HKD，展示层标注）。 */
+/** 基本面快照 = api 契约形（币种单位 cn=CNY，展示层标注）。 */
 export type TencentFundamentals = StockFundamentals
 
 /**
@@ -389,34 +303,6 @@ function parseCnFundamentals(fields: string[], timestamp: number): TencentFundam
     ...(num(fields[38]) !== undefined ? { turnoverRate: num(fields[38]) } : {}),
     ...(num(fields[67]) !== undefined ? { fiftyTwoWeekHigh: num(fields[67]) } : {}),
     ...(num(fields[68]) !== undefined ? { fiftyTwoWeekLow: num(fields[68]) } : {}),
-    timestamp,
-  }
-}
-
-/**
- * hk 基本面字段布局（与 parseHkTicker 同一行报价，字段号对齐 kit-hk/fundamentals 实测）：
- * 39=动态PE 44=总市值(亿港元) 45=流通市值(亿港元) 47=股息率(百分比数值) 48=52周高 49=52周低
- * 57=PE(TTM) 58=PB 59=换手率%。
- */
-function parseHkFundamentals(fields: string[], timestamp: number): TencentFundamentals {
-  const peDynamic = num(fields[39])
-  const peTtm = num(fields[57]) ?? peDynamic
-  const totalMarketCapYi = num(fields[44])
-  const floatMarketCapYi = num(fields[45])
-  const dividendYieldPercent = num(fields[47])
-  return {
-    symbol: '',
-    name: fields[1] ?? '',
-    ...(totalMarketCapYi !== undefined ? { marketCap: totalMarketCapYi * 100_000_000 } : {}),
-    ...(floatMarketCapYi !== undefined ? { floatMarketCap: floatMarketCapYi * 100_000_000 } : {}),
-    ...(peTtm !== undefined ? { peTtm } : {}),
-    ...(peDynamic !== undefined ? { peDynamic } : {}),
-    ...(num(fields[58]) !== undefined ? { pb: num(fields[58]) } : {}),
-    // 契约语义是小数（0.015 = 1.5%）；腾讯 wire 给的是百分比数值（1.17 = 1.17%）。
-    ...(dividendYieldPercent !== undefined ? { dividendYield: dividendYieldPercent / 100 } : {}),
-    ...(num(fields[59]) !== undefined ? { turnoverRate: num(fields[59]) } : {}),
-    ...(num(fields[48]) !== undefined ? { fiftyTwoWeekHigh: num(fields[48]) } : {}),
-    ...(num(fields[49]) !== undefined ? { fiftyTwoWeekLow: num(fields[49]) } : {}),
     timestamp,
   }
 }
@@ -448,7 +334,6 @@ export interface TencentRestOptions {
 
 export class TencentRestClient {
   // 纯数据客户端（非 cordis Service 类），可用 # 私有字段（realm 代理风险只涉 Service 基类）。
-  readonly #market: TencentMarket
   readonly #quoteBaseUrl: string
   readonly #klineBaseUrl: string
   readonly #mklineBaseUrl: string
@@ -456,18 +341,13 @@ export class TencentRestClient {
   readonly #timeoutMs: number
   readonly #fetchImpl: typeof fetch
 
-  constructor(market: TencentMarket, options: TencentRestOptions = {}) {
-    this.#market = market
+  constructor(options: TencentRestOptions = {}) {
     this.#quoteBaseUrl = options.quoteBaseUrl ?? DEFAULT_QUOTE_BASE_URL
     this.#klineBaseUrl = options.klineBaseUrl ?? DEFAULT_KLINE_BASE_URL
     this.#mklineBaseUrl = options.mklineBaseUrl ?? DEFAULT_MKLINE_BASE_URL
     this.#searchBaseUrl = options.searchBaseUrl ?? DEFAULT_SEARCH_BASE_URL
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.#fetchImpl = options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init))
-  }
-
-  get market(): TencentMarket {
-    return this.#market
   }
 
   async #requestArrayBuffer(url: string): Promise<Uint8Array> {
@@ -498,24 +378,15 @@ export class TencentRestClient {
     return new Uint8Array(await res.arrayBuffer())
   }
 
-  /** 报价 wire 形态：cn=sh600519；hk=r_hk00700（hk K 线另用 hk 前缀，见文件头注）。 */
-  #quoteWireCode(symbol: string): string {
-    return this.#market === 'hk' ? `r_hk${symbol}` : symbol
-  }
-
-  /** K 线 wire 形态：cn=sh600519；hk=hk00700（r_hk 打 K 线端点是 param error，实测）。 */
-  #klineWireCode(symbol: string): string {
-    return this.#market === 'hk' ? `hk${symbol}` : symbol
-  }
-
   /**
    * 报价行取数（getTicker/getFundamentals 共用）：**GBK 解码**（响应 charset=GBK，
    * UTF-8 直接乱码）；未知代码返回 `v_pv_none="1"` 之类短 body，按
    * TRADING_UNSUPPORTED_SYMBOL 上报。返回 `~` 分隔字段数组 + 行情时间戳。
+   * cn 的 wire 形态即规范化符号本身（sh600519，报价与 K 线端点同形）。
    */
   async #fetchQuoteFields(symbol: string): Promise<{ fields: string[]; timestamp: number; sym: string }> {
-    const sym = normalizeSymbol(this.#market, symbol)
-    const url = `${this.#quoteBaseUrl}/q=${this.#quoteWireCode(sym)}`
+    const sym = normalizeCnSymbol(symbol)
+    const url = `${this.#quoteBaseUrl}/q=${sym}`
     const bytes = await this.#requestArrayBuffer(url)
     const text = new TextDecoder('gbk').decode(bytes)
     const m = /="([^"]*)"/.exec(text)
@@ -532,9 +403,7 @@ export class TencentRestClient {
         `Tencent ticker for ${sym}: payload has ${fields.length} fields, expected >= 35 (unknown/delisted symbol?)`,
       )
     }
-    const timestamp = this.#market === 'hk'
-      ? wallTimeToEpochMs(fields[30] ?? '', 'Asia/Hong_Kong')
-      : wallTimeToEpochMs(fields[30] ?? '', 'Asia/Shanghai')
+    const timestamp = wallTimeToEpochMs(fields[30] ?? '', 'Asia/Shanghai')
     return { fields, timestamp, sym }
   }
 
@@ -543,45 +412,36 @@ export class TencentRestClient {
    */
   async getTicker(symbol: string): Promise<TencentTicker> {
     const { fields, timestamp, sym } = await this.#fetchQuoteFields(symbol)
-    const parsed = this.#market === 'hk' ? parseHkTicker(fields, timestamp) : parseCnTicker(fields, timestamp)
+    const parsed = parseCnTicker(fields, timestamp)
     // 输出一律规范形（响应体 fields[2] 是裸代码，交易所信息在请求时的 wire 前缀里）。
-    return { ...parsed, symbol: toCanonicalTencentSymbol(this.#market, sym) }
+    return { ...parsed, symbol: toCanonicalTencentSymbol(sym) }
   }
 
   /**
-   * 基本面与估值快照：与 getTicker 同一行报价（字段布局见 parseCnFundamentals /
-   * parseHkFundamentals 注释），无额外端点。估值字段缺省（指数/ETF）时整字段省略。
+   * 基本面与估值快照：与 getTicker 同一行报价（字段布局见 parseCnFundamentals 注释），
+   * 无额外端点。估值字段缺省（指数/ETF）时整字段省略。
    */
   async getFundamentals(symbol: string): Promise<TencentFundamentals> {
     const { fields, timestamp, sym } = await this.#fetchQuoteFields(symbol)
-    const parsed = this.#market === 'hk' ? parseHkFundamentals(fields, timestamp) : parseCnFundamentals(fields, timestamp)
-    return { ...parsed, symbol: toCanonicalTencentSymbol(this.#market, sym) }
+    const parsed = parseCnFundamentals(fields, timestamp)
+    return { ...parsed, symbol: toCanonicalTencentSymbol(sym) }
   }
 
   /**
    * 盘口快照（api 可选契约 getOrderbook，issue #39）：与 getTicker 同一行报价的
-   * 五档字段（cn 布局 fields 9-28，见 parseCnOrderbook）。**hk 结构性不支持**——
-   * r_hk 行买卖档位全 0（2026-08-31 实测，parseHkTicker 注释），直接按
-   * TRADING_NOT_IMPLEMENTED 上报，桥层转 ok:false（前端显示「未提供」而非空盘口）。
+   * 五档字段（cn 布局 fields 9-28，见 parseCnOrderbook）。
    */
   async getOrderbook(symbol: string): Promise<Orderbook> {
-    if (this.#market === 'hk') {
-      throw new TradingServiceError(
-        'TRADING_NOT_IMPLEMENTED',
-        'Tencent HK orderbook: r_hk quote row carries no five-level depth (all-zero fields) — orderbook unavailable for hk',
-      )
-    }
     const { fields, timestamp, sym } = await this.#fetchQuoteFields(symbol)
     const parsed = parseCnOrderbook(fields, timestamp)
-    return { ...parsed, symbol: toCanonicalTencentSymbol(this.#market, sym) }
+    return { ...parsed, symbol: toCanonicalTencentSymbol(sym) }
   }
 
   /**
    * K 线（日/周/月走 fqkline 前权 qfq；5m/30m 分钟线走 mkline 端点）。
-   * 港股 mkline 端点不支持分钟线，请求 5m/30m 会抛出 TRADING_UNSUPPORTED_INTERVAL。
    */
   async getKlines(symbol: string, interval: Interval, limit?: number): Promise<Kline[]> {
-    const sym = normalizeSymbol(this.#market, symbol)
+    const sym = normalizeCnSymbol(symbol)
     const mapping = INTERVAL_TO_TENCENT.get(interval)
     if (!mapping) {
       throw new TradingServiceError(
@@ -589,18 +449,11 @@ export class TencentRestClient {
         `Tencent klines: unsupported interval ${String(interval)} — supported: ${INTERVAL_VOCABULARY.join('/')}`,
       )
     }
-    if (mapping.type === 'mkline' && this.#market === 'hk') {
-      throw new TradingServiceError(
-        'TRADING_UNSUPPORTED_INTERVAL',
-        `Tencent klines: Hong Kong market (HKEX) does not support minute intervals (${interval}) via public endpoint`,
-      )
-    }
     const count = typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? Math.min(limit, 800) : 100
-    const wire = this.#klineWireCode(sym)
     const isMinute = mapping.type === 'mkline'
     const url = isMinute
-      ? `${this.#mklineBaseUrl}/appstock/app/kline/mkline?param=${wire},${mapping.tf},,${count}`
-      : `${this.#klineBaseUrl}/${this.#market === 'hk' ? 'appstock/app/hkfqkline/get' : 'appstock/app/fqkline/get'}?param=${wire},${mapping.tf},,,${count},qfq`
+      ? `${this.#mklineBaseUrl}/appstock/app/kline/mkline?param=${sym},${mapping.tf},,${count}`
+      : `${this.#klineBaseUrl}/appstock/app/fqkline/get?param=${sym},${mapping.tf},,,${count},qfq`
 
     const bytes = await this.#requestArrayBuffer(url)
     let payload: { code?: number; msg?: string; data?: Record<string, Record<string, unknown>> }
@@ -615,9 +468,9 @@ export class TencentRestClient {
         `Tencent klines for ${sym}: upstream code=${String(payload.code)} msg=${JSON.stringify(payload.msg ?? '')}`,
       )
     }
-    const market = payload.data?.[wire]
-    // 键回落（2026-08-31 实证，美团 hk03690）：hkfqkline 对无前权事件的代码返回
-    // `day`（未复权）而非 `qfqday`——优先 qfq 键，缺失回落裸键，行结构相同。
+    const market = payload.data?.[sym]
+    // 键回落（2026-08-31 实证）：无前权事件的代码可能返回 `day`（未复权）而非
+    // `qfqday`——优先 qfq 键，缺失回落裸键，行结构相同。
     const raw = isMinute
       ? market?.[mapping.key]
       : (market?.[mapping.key] ?? market?.[mapping.tf])
@@ -684,24 +537,15 @@ export class TencentRestClient {
       const [mkt, code, name, pinyin] = parts
       if (!mkt || !code || !name) continue
 
+      // 只保留 cn 市场前缀（sh/sz/bj），其余市场记录过滤。
+      const lowerMkt = mkt.toLowerCase()
       let canonicalSymbol = ''
-      if (this.#market === 'cn') {
-        const lowerMkt = mkt.toLowerCase()
-        if (lowerMkt === 'sh') {
-          canonicalSymbol = `${code}.SH`
-        } else if (lowerMkt === 'sz') {
-          canonicalSymbol = `${code}.SZ`
-        } else if (lowerMkt === 'bj') {
-          canonicalSymbol = `${code}.BJ`
-        } else {
-          continue
-        }
-      } else if (this.#market === 'hk') {
-        if (mkt.toLowerCase() === 'hk') {
-          canonicalSymbol = /^\d+$/.test(code) ? `${code.padStart(5, '0')}.HK` : `${code.toUpperCase()}.HK`
-        } else {
-          continue
-        }
+      if (lowerMkt === 'sh') {
+        canonicalSymbol = `${code}.SH`
+      } else if (lowerMkt === 'sz') {
+        canonicalSymbol = `${code}.SZ`
+      } else if (lowerMkt === 'bj') {
+        canonicalSymbol = `${code}.BJ`
       } else {
         continue
       }

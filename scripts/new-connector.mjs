@@ -3,23 +3,23 @@
  * 新交易所连接器生成器 —— 从 packages/connector-template 复制并以 token 展开。
  *
  * 用法：
- *   node scripts/new-connector.mjs --slug bybit --title Bybit [--market crypto] [--yes]
+ *   node scripts/new-connector.mjs --slug hithink --title Hithink [--market cn] [--yes]
  *
  * 参数：
  *   --slug  交易所 slug（kebab，包名/插件名/行 id 的一部分；必填）
  *   --title 显示标题（如 Bybit；默认把 slug 首字母大写）
- *   --market 市场短前缀（默认 crypto；工具名/服务键/闸门模式的前缀）
+ *   --market 市场短前缀（默认 cn；工具名/服务键/闸门模式的前缀）
  *   --yes   目标目录已存在时直接覆盖（默认拒绝，防误覆盖）
  *
  * 生成器只做「复制 + token 替换 + 落盘」，不跑 pnpm install/build；展开后按
  * docs/connector-playbook.md 的接线清单继续。未替换的 token 会在收尾时报错终止。
  *
  * Token → 值 映射：
- *   __EXCHANGE_SLUG__  → slug（如 bybit）
+ *   __EXCHANGE_SLUG__  → slug（如 hithink）
  *   __EXCHANGE__       → title（如 Bybit）
  *   __ENV_PREFIX__     → title 的 SCREAMING_SNAKE（如 BYBIT；凭证 ref 前缀）
- *   __MARKET__         → market（如 crypto）
- *   __MARKET_CAP__     → market 首字母大写（如 Crypto；服务键 infix）
+ *   __MARKET__         → market（如 cn）
+ *   __MARKET_CAP__     → market 首字母大写（如 Cn；服务键 infix）
  */
 import { mkdir, readdir, readFile, writeFile, rm, stat } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
@@ -45,14 +45,14 @@ for (let i = 2; i < process.argv.length; i += 1) {
 
 const slug = args.get('slug')
 if (!slug || !/^[a-z0-9][a-z0-9-]*$/.test(slug)) {
-  console.error('usage: node scripts/new-connector.mjs --slug <kebab> --title <Title> [--market crypto] [--yes]')
-  console.error('  --slug  required, lowercase kebab (e.g. bybit)')
+  console.error('usage: node scripts/new-connector.mjs --slug <kebab> --title <Title> [--market cn] [--yes]')
+  console.error('  --slug  required, lowercase kebab (e.g. hithink)')
   process.exit(2)
 }
 const title = String(args.get('title') ?? slug[0].toUpperCase() + slug.slice(1))
-const market = String(args.get('market') ?? 'crypto')
+const market = String(args.get('market') ?? 'cn')
 if (!/^[a-z]{2,}$/.test(market)) {
-  console.error('--market must be a lowercase market prefix (crypto/us/cn/hk)')
+  console.error('--market must be a lowercase market prefix (cn)')
   process.exit(2)
 }
 const envPrefix = title.replace(/[^A-Za-z0-9]/g, '').toUpperCase()

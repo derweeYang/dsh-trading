@@ -14,7 +14,7 @@
  *
  * 兼容性设计（§2.4）：
  * - markets 用 Schema.dict —— 新市场 = 新键，schema 零改；
- * - provider enum = 全仓候选集（binance/okx/yahoo/stooq/tencent），新交易所 = enum 加候选；
+ * - provider enum = 全仓候选集（tencent/eastmoney/akshare 等），新交易所 = enum 加候选；
  * - 数据/交易分离（tradeProvider）字段预留不实现（铁律 #4：两个市场真实需要才做）。
  *
  * @module @dshtrading/router
@@ -55,25 +55,11 @@ export const name = 'dsh-trading-market-router'
  * 无任何连接器激活（fail-soft），不写时拒。
  */
 export const PROVIDER_VOCABULARY = [
-  'binance',
-  'okx',
-  'bybit',
-  'ccxt',
-  'yahoo',
-  'stooq',
-  'alpaca',
-  'fmp',
-  'finnhub',
-  'polygon',
-  'ibkr',
   'tencent',
   'eastmoney',
   'tushare',
   'akshare',
   'qmt',
-  'futu',
-  'longbridge',
-  'tiger',
   'hithink',
 ] as const
 export type Provider = (typeof PROVIDER_VOCABULARY)[number]
@@ -85,25 +71,15 @@ export interface MarketProviderEntry {
   tradeProvider?: string
 }
 
-export interface NewsConfig {
-  /** 可选：CryptoPanic API token（WS2c，#4）。有值时 crypto_get_news 走 CryptoPanic 免费层增强；无值/无效则优雅降级到公共源。 */
-  cryptoPanicKey?: string
-}
-
 export interface Config {
   /** 各市场数据提供方；dict 键开放（新市场 = 新键，schema 零改）。 */
   markets: Record<string, MarketProviderEntry>
   /** 各提供方 API 凭证（apiKey / apiSecret / token / gatewayUrl 等；dict 开放）。 */
   credentials?: Record<string, Record<string, string>>
-  /** 新闻相关设置（WS2c）：默认无 key（公共源）。 */
-  news?: NewsConfig
 }
 
 export const DEFAULT_MARKETS: Record<string, MarketProviderEntry> = {
-  crypto: { provider: 'binance' },
-  us: { provider: 'yahoo' },
   cn: { provider: 'tencent' },
-  hk: { provider: 'tencent' },
 }
 
 const MarketProviderEntrySchema = Schema.object({
@@ -122,8 +98,6 @@ export const Config: Schema<Config> = Schema.object({
   markets: Schema.dict(MarketProviderEntrySchema).default({ ...DEFAULT_MARKETS }),
   // credentials 可选：各 provider 的 API Key/Secret/Token/Gateway 地址字典
   credentials: Schema.dict(Schema.dict(Schema.string())).default({}),
-  // news 可选（WS2c）：默认空对象 = 无 key = 公共源；字段在时 settings UI 可展示/编辑。
-  news: Schema.object({ cryptoPanicKey: Schema.string().default(undefined) }).default({}),
 })
 
 /** settings namespace（kebab-case 品牌化，llm-pi-ai 同款）。 */
@@ -168,11 +142,6 @@ export class MarketRouterService extends Service implements MarketRouterServiceC
   /** 获取某提供方的 API 凭证字典（如 apiKey、apiSecret 等）。 */
   getCredential(provider: string): Record<string, string> | undefined {
     return this.source().credentials?.[provider]
-  }
-
-  /** WS2c：CryptoPanic API token（settings resolved；缺省 undefined = 无 key = 新闻走公共源）。 */
-  newsKey(): string | undefined {
-    return this.source().news?.cryptoPanicKey
   }
 
   /** 订阅激活变化（settings commit 驱动；restart 型当前仅记录，未来 live 用）。 */
@@ -435,7 +404,6 @@ export function apply(ctx: Context, config: Config): void {
   // loader 没写官方 config 合并语义时，dict 无默认 → 这里兜底合并 DEFAULT_MARKETS。
   const effective: Config = {
     markets: { ...DEFAULT_MARKETS, ...(config?.markets ?? {}) },
-    news: config?.news ?? {},
   }
   const service = new MarketRouterService(ctx, () => effective)
   // 注册表与 router 同 fiber 提供：base patch 行零改动。

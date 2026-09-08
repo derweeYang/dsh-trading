@@ -28,7 +28,7 @@ export interface KnowledgeCard {
   readonly takeaways: readonly string[] // 可复用的分析经验
   readonly boundaries: readonly string[] // 适用边界与避坑
   readonly tags: readonly string[] // 受控主题词
-  readonly tickers?: readonly string[] // 可选关联标的（市场规范词汇：BTCUSDT / 600519.SH）
+  readonly tickers?: readonly string[] // 可选关联标的（市场规范词汇：600519.SH / 510050.SH）
   readonly related?: readonly string[] // 显式关联卡片 id
   readonly createdAt: string
   readonly updatedAt: string

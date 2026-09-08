@@ -1,1 +1,0 @@
-../../../packages/kit-crypto/assets/skills/crypto-risk-checklist.md

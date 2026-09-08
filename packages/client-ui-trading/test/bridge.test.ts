@@ -16,7 +16,7 @@ import {
   type BridgeHost,
 } from '../src/bridge.ts'
 
-// 基本面 pkg 下钻（kit-cn/hk/us/crypto）在单测里绝不触网：全局 fetch 桩，
+// 基本面 pkg 下钻（kit-cn）在单测里绝不触网：全局 fetch 桩，
 // kit 层 fetchJsonUpstream 拿到 rejection 后按契约静默降级（snapshot 兜底）。
 vi.stubGlobal('fetch', vi.fn(async () => {
   throw new Error('bridge.test must not hit network')
@@ -45,8 +45,8 @@ function fakeHost(services: Partial<Record<string, MarketDataService>>, provider
 
 describe('TradingBridge.markets', () => {
   it('只列已安装市场并带 provider slug', () => {
-    const bridge = new TradingBridge(fakeHost({ tradingCryptoMarketData: fakeService() }, { crypto: 'binance' }))
-    expect(bridge.markets()).toEqual({ markets: [{ id: 'crypto', provider: 'binance' }] })
+    const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: fakeService() }, { cn: 'tencent' }))
+    expect(bridge.markets()).toEqual({ markets: [{ id: 'cn', provider: 'tencent' }] })
   })
 
   it('零市场安装 → 空清单（headless/无市场包）', () => {
@@ -62,34 +62,34 @@ describe('TradingBridge.tickers', () => {
         return { symbol, price: 7, timestamp: 9 }
       },
     })
-    const bridge = new TradingBridge(fakeHost({ tradingUsMarketData: service }))
-    const wire = await bridge.tickers('us', ['AAPL', 'BAD', 'AAPL'])
-    expect(Object.keys(wire.tickers).sort()).toEqual(['AAPL', 'BAD'])
-    expect(wire.tickers.AAPL).toEqual({ ok: true, ticker: { symbol: 'AAPL', price: 7, timestamp: 9 } })
+    const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: service }))
+    const wire = await bridge.tickers('cn', ['600519.SH', 'BAD', '600519.SH'])
+    expect(Object.keys(wire.tickers).sort()).toEqual(['600519.SH', 'BAD'])
+    expect(wire.tickers['600519.SH']).toEqual({ ok: true, ticker: { symbol: '600519.SH', price: 7, timestamp: 9 } })
     expect(wire.tickers.BAD).toEqual({ ok: false, code: 'TRADING_UNSUPPORTED_SYMBOL', message: 'unknown symbol' })
   })
 
   it('未安装市场 → 400 协议错误；超封顶 → 400；空 symbols → 400', async () => {
     const bridge = new TradingBridge(fakeHost({}))
     await expect(bridge.tickers('cn', ['600519'])).rejects.toThrowError(BridgeProtocolError)
-    await expect(bridge.tickers('crypto', Array.from({ length: MAX_SYMBOLS + 1 }, (_, i) => `S${i}`)))
+    await expect(bridge.tickers('cn', Array.from({ length: MAX_SYMBOLS + 1 }, (_, i) => `S${i}`)))
       .rejects.toThrowError(/too many symbols/)
-    await expect(bridge.tickers('crypto', [''])).rejects.toThrowError(/symbols is required/)
+    await expect(bridge.tickers('cn', [''])).rejects.toThrowError(/symbols is required/)
   })
 })
 
 describe('TradingBridge.klines', () => {
   it('透传 interval 与 limit，返回服务结果', async () => {
     const service = fakeService()
-    const bridge = new TradingBridge(fakeHost({ tradingHkMarketData: service }))
-    const wire = await bridge.klines('hk', '00700', '1w', '40')
+    const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: service }))
+    const wire = await bridge.klines('cn', '600519.SH', '1w', '40')
     expect(wire.klines).toHaveLength(1)
   })
 
   it('非法 limit → 400；未安装市场 → 400', async () => {
-    const bridge = new TradingBridge(fakeHost({ tradingHkMarketData: fakeService() }))
-    await expect(bridge.klines('hk', '00700', '1w', '0')).rejects.toThrowError(/limit/)
-    await expect(bridge.klines('us', 'AAPL', '1d')).rejects.toThrowError(/not installed/)
+    const bridge = new TradingBridge(fakeHost({}))
+    await expect(bridge.klines('cn', '600519.SH', '1w', '0')).rejects.toThrowError(/limit/)
+    await expect(bridge.klines('cn', '600519.SH', '1d')).rejects.toThrowError(/not installed/)
   })
 })
 
@@ -99,27 +99,27 @@ describe('TradingBridge.symbols', () => {
     const service = fakeService({
       listInstruments: async () => {
         callCount++
-        return [{ symbol: 'BTCUSDT', name: 'BTC/USDT' }, { symbol: 'ETHUSDT' }]
+        return [{ symbol: '600519.SH', name: '贵州茅台' }, { symbol: '000001.SZ' }]
       },
     })
-    const bridge = new TradingBridge(fakeHost({ tradingCryptoMarketData: service }))
-    const res1 = await bridge.symbols('crypto')
+    const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: service }))
+    const res1 = await bridge.symbols('cn')
     expect(res1.symbols).toEqual([
-      { symbol: 'BTCUSDT', name: 'BTC/USDT' },
-      { symbol: 'ETHUSDT' },
+      { symbol: '600519.SH', name: '贵州茅台' },
+      { symbol: '000001.SZ' },
     ])
     expect(callCount).toBe(1)
 
     // 第二次调用命中进程内 TTL 缓存
-    const res2 = await bridge.symbols('crypto')
+    const res2 = await bridge.symbols('cn')
     expect(res2.symbols).toHaveLength(2)
     expect(callCount).toBe(1)
   })
 
   it('服务未实现 listInstruments 时静默返回空数组', async () => {
     const service = fakeService()
-    const bridge = new TradingBridge(fakeHost({ tradingUsMarketData: service }))
-    const res = await bridge.symbols('us')
+    const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: service }))
+    const res = await bridge.symbols('cn')
     expect(res.symbols).toEqual([])
   })
 
@@ -130,7 +130,7 @@ describe('TradingBridge.symbols', () => {
 })
 
 describe('TradingBridge.fundamentals（2026-09-02 基本面页签，整改后语义）', () => {
-  // 整改（2026-09-02）：pkg 下钻不再要求连接器实现 getFundamentals（us/crypto 可达）；
+  // 整改（2026-09-02）：pkg 下钻不要求连接器实现 getFundamentals（kit-cn 直接可达）；
   // 快照与 pkg 并行、各自失败只降级自己；双失败才 TRADING_NOT_IMPLEMENTED；
   // 5min TTL + in-flight 去重。kit 下钻在本测试环境走真实网络语义（无网则 catch 降级），
   // 快照路径断言不依赖 pkg 成败。
@@ -149,8 +149,8 @@ describe('TradingBridge.fundamentals（2026-09-02 基本面页签，整改后语
   })
 
   it('连接器未实现 getFundamentals 且 pkg 下钻不可用 → TRADING_NOT_IMPLEMENTED（诚实空态）', async () => {
-    const bridge = new TradingBridge(fakeHost({ tradingUsMarketData: fakeService() }))
-    const search = new URLSearchParams({ market: 'us', symbol: 'AAPL' })
+    const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: fakeService() }))
+    const search = new URLSearchParams({ market: 'cn', symbol: '600519.SH' })
     await expect(dispatchBridgeRequest(bridge, 'GET', '/fundamentals', search))
       .rejects.toMatchObject({ code: 'TRADING_NOT_IMPLEMENTED' })
   })
@@ -184,37 +184,6 @@ describe('TradingBridge.fundamentals（2026-09-02 基本面页签，整改后语
   })
 })
 
-describe('TradingBridge.derivatives（issue #38 衍生品面板）', () => {
-  it('透传注册表解析出服务的 getDerivatives', async () => {
-    const service = fakeService({
-      getDerivatives: async (symbol: string) => ({
-        symbol: `${symbol}-SWAP`, source: 'binance', openInterest: 80_000.5,
-        fundingRate: 0.0001, longShortRatio: 1.1, timestamp: 1234,
-      }),
-    })
-    const bridge = new TradingBridge(fakeHost({ tradingCryptoMarketData: service }))
-    const search = new URLSearchParams({ market: 'crypto', symbol: 'BTCUSDT' })
-    const { status, payload } = await dispatchBridgeRequest(bridge, 'GET', '/derivatives', search)
-    expect(status).toBe(200)
-    expect(payload).toMatchObject({ ok: true, derivatives: { symbol: 'BTCUSDT-SWAP', source: 'binance', openInterest: 80_000.5 } })
-  })
-
-  it('连接器未实现 getDerivatives（现货/股票数据源）→ TRADING_NOT_IMPLEMENTED（前端隐藏面板）', async () => {
-    const bridge = new TradingBridge(fakeHost({ tradingUsMarketData: fakeService() }))
-    const search = new URLSearchParams({ market: 'us', symbol: 'AAPL' })
-    await expect(dispatchBridgeRequest(bridge, 'GET', '/derivatives', search))
-      .rejects.toMatchObject({ code: 'TRADING_NOT_IMPLEMENTED' })
-  })
-
-  it('未知市场 400；缺 symbol 400', async () => {
-    const bridge = new TradingBridge(fakeHost({ tradingCryptoMarketData: fakeService() }))
-    await expect(dispatchBridgeRequest(bridge, 'GET', '/derivatives', new URLSearchParams({ market: 'jp', symbol: 'X' })))
-      .rejects.toBeInstanceOf(BridgeProtocolError)
-    await expect(dispatchBridgeRequest(bridge, 'GET', '/derivatives', new URLSearchParams({ market: 'crypto' })))
-      .rejects.toBeInstanceOf(BridgeProtocolError)
-  })
-})
-
 describe('TradingBridge.orderbook + trades（issue #39 盘口竖栏）', () => {
   it('/orderbook 透传；/trades 透传 limit', async () => {
     const service = fakeService({
@@ -228,24 +197,24 @@ describe('TradingBridge.orderbook + trades（issue #39 盘口竖栏）', () => {
         { id: '2', symbol, price: 100, amount: 2, side: 'buy' as const, timestamp: 1234, ...(limit !== undefined ? {} : {}) },
       ]),
     })
-    const bridge = new TradingBridge(fakeHost({ tradingCryptoMarketData: service }))
-    const { payload: book } = await dispatchBridgeRequest(bridge, 'GET', '/orderbook', new URLSearchParams({ market: 'crypto', symbol: 'BTCUSDT' }))
-    expect(book).toMatchObject({ ok: true, orderbook: { symbol: 'BTCUSDT', bids: [{ price: 99, amount: 5 }, { price: 98, amount: 10 }] } })
-    const { payload: trades } = await dispatchBridgeRequest(bridge, 'GET', '/trades', new URLSearchParams({ market: 'crypto', symbol: 'BTCUSDT', limit: '50' }))
+    const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: service }))
+    const { payload: book } = await dispatchBridgeRequest(bridge, 'GET', '/orderbook', new URLSearchParams({ market: 'cn', symbol: '600519.SH' }))
+    expect(book).toMatchObject({ ok: true, orderbook: { symbol: '600519.SH', bids: [{ price: 99, amount: 5 }, { price: 98, amount: 10 }] } })
+    const { payload: trades } = await dispatchBridgeRequest(bridge, 'GET', '/trades', new URLSearchParams({ market: 'cn', symbol: '600519.SH', limit: '50' }))
     expect(trades).toMatchObject({ ok: true, trades: [{ id: '1' }, { id: '2' }] })
   })
 
   it('未实现 getOrderbook → TRADING_NOT_IMPLEMENTED；缺 symbol 400', async () => {
-    const bridge = new TradingBridge(fakeHost({ tradingUsMarketData: fakeService() }))
-    await expect(dispatchBridgeRequest(bridge, 'GET', '/orderbook', new URLSearchParams({ market: 'us', symbol: 'AAPL' })))
+    const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: fakeService() }))
+    await expect(dispatchBridgeRequest(bridge, 'GET', '/orderbook', new URLSearchParams({ market: 'cn', symbol: '600519.SH' })))
       .rejects.toMatchObject({ code: 'TRADING_NOT_IMPLEMENTED' })
-    await expect(dispatchBridgeRequest(bridge, 'GET', '/trades', new URLSearchParams({ market: 'us', symbol: '' })))
+    await expect(dispatchBridgeRequest(bridge, 'GET', '/trades', new URLSearchParams({ market: 'cn', symbol: '' })))
       .rejects.toBeInstanceOf(BridgeProtocolError)
   })
 
   it('/trades 非法 limit → 400', async () => {
-    const bridge = new TradingBridge(fakeHost({ tradingCryptoMarketData: fakeService() }))
-    await expect(dispatchBridgeRequest(bridge, 'GET', '/trades', new URLSearchParams({ market: 'crypto', symbol: 'BTCUSDT', limit: '0' })))
+    const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: fakeService() }))
+    await expect(dispatchBridgeRequest(bridge, 'GET', '/trades', new URLSearchParams({ market: 'cn', symbol: '600519.SH', limit: '0' })))
       .rejects.toBeInstanceOf(BridgeProtocolError)
   })
 })
@@ -261,33 +230,33 @@ describe('TradingBridge.trade/*（issue #40 交易台：只读 + 强制 dry-run�
       getOrder: async (_symbol, id) => ({
         id, symbol: _symbol, side: 'buy', type: 'limit', status: 'new', quantity: 1, dryRun: false, timestamp: 1,
       }),
-      getPositions: async () => [{ symbol: 'BTCUSDT-SWAP', side: 'long', size: 0.02, entryPrice: 42000, unrealizedPnl: 1.5, timestamp: 1 }],
+      getPositions: async () => [{ symbol: '510050.SH', side: 'long', size: 2, entryPrice: 2.85, unrealizedPnl: 0.01, timestamp: 1 }],
       ...overrides,
     }
   }
 
   function tradeHost(service: import('@dshtrading/api').TradeService | undefined): BridgeHost {
     return {
-      getMarketService: market => market === 'crypto' ? fakeService() : undefined,
-      activeProvider: () => 'okx',
-      getTradeService: market => market === 'crypto' ? service : undefined,
+      getMarketService: market => market === 'cn' ? fakeService() : undefined,
+      activeProvider: () => 'qmt',
+      getTradeService: market => market === 'cn' ? service : undefined,
     }
   }
 
   it('/trade/positions、/trade/orders、/trade/fills、/trade/balances 只读透传', async () => {
     const service = tradeService({
-      getBalances: async () => [{ asset: 'USDT', free: 100, locked: 0 }],
+      getBalances: async () => [{ asset: 'CNY', free: 100000, locked: 0 }],
       listOpenOrders: async () => [],
-      listTradeFills: async () => [{ id: 'f1', symbol: 'BTCUSDT-SWAP', side: 'buy', price: 42000, amount: 0.02, timestamp: 1 }],
+      listTradeFills: async () => [{ id: 'f1', symbol: '510050.SH', side: 'buy', price: 2.85, amount: 2, timestamp: 1 }],
     })
     const bridge = new TradingBridge(tradeHost(service))
-    const { payload: positionWire } = await dispatchBridgeRequest(bridge, 'GET', '/trade/positions', new URLSearchParams({ market: 'crypto' }))
-    expect(positionWire).toMatchObject({ ok: true, positions: [{ symbol: 'BTCUSDT-SWAP', side: 'long' }] })
-    const { payload: balanceWire } = await dispatchBridgeRequest(bridge, 'GET', '/trade/balances', new URLSearchParams({ market: 'crypto' }))
-    expect(balanceWire).toMatchObject({ ok: true, balances: [{ asset: 'USDT', free: 100 }] })
-    const { payload: orderWire } = await dispatchBridgeRequest(bridge, 'GET', '/trade/orders', new URLSearchParams({ market: 'crypto' }))
+    const { payload: positionWire } = await dispatchBridgeRequest(bridge, 'GET', '/trade/positions', new URLSearchParams({ market: 'cn' }))
+    expect(positionWire).toMatchObject({ ok: true, positions: [{ symbol: '510050.SH', side: 'long' }] })
+    const { payload: balanceWire } = await dispatchBridgeRequest(bridge, 'GET', '/trade/balances', new URLSearchParams({ market: 'cn' }))
+    expect(balanceWire).toMatchObject({ ok: true, balances: [{ asset: 'CNY', free: 100000 }] })
+    const { payload: orderWire } = await dispatchBridgeRequest(bridge, 'GET', '/trade/orders', new URLSearchParams({ market: 'cn' }))
     expect(orderWire).toMatchObject({ ok: true, orders: [] })
-    const { payload: fillWire } = await dispatchBridgeRequest(bridge, 'GET', '/trade/fills', new URLSearchParams({ market: 'crypto' }))
+    const { payload: fillWire } = await dispatchBridgeRequest(bridge, 'GET', '/trade/fills', new URLSearchParams({ market: 'cn' }))
     expect(fillWire).toMatchObject({ ok: true, fills: [{ id: 'f1' }] })
   })
 
@@ -299,35 +268,37 @@ describe('TradingBridge.trade/*（issue #40 交易台：只读 + 强制 dry-run�
     const bridge = new TradingBridge(tradeHost(tradeService({ placeOrder: placeOrder as never })))
     const { payload } = await dispatchBridgeRequest(
       bridge, 'POST', '/trade/order',
-      new URLSearchParams({ market: 'crypto' }),
-      { symbol: 'BTCUSDT-SWAP', side: 'buy', type: 'limit', quantity: 0.02, price: 42000 },
+      new URLSearchParams({ market: 'cn' }),
+      { symbol: '510050.SH', side: 'buy', type: 'limit', quantity: 2, price: 2.85 },
     )
-    expect(payload).toMatchObject({ ok: true, order: { dryRun: false, symbol: 'BTCUSDT-SWAP' } })
-    expect(placeOrder).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'BTCUSDT-SWAP', dryRun: false, price: 42000 }))
+    expect(payload).toMatchObject({ ok: true, order: { dryRun: false, symbol: '510050.SH' } })
+    expect(placeOrder).toHaveBeenCalledWith(expect.objectContaining({ symbol: '510050.SH', dryRun: false, price: 2.85 }))
   })
 
   it('limit 单缺价格 → 400；数量非法 → 400；交易服务未注册 → 400', async () => {
     const bridge = new TradingBridge(tradeHost(tradeService()))
     await expect(dispatchBridgeRequest(
-      bridge, 'POST', '/trade/order', new URLSearchParams({ market: 'crypto' }),
-      { symbol: 'BTCUSDT-SWAP', side: 'buy', type: 'limit', quantity: 0.02 },
+      bridge, 'POST', '/trade/order', new URLSearchParams({ market: 'cn' }),
+      { symbol: '510050.SH', side: 'buy', type: 'limit', quantity: 2 },
     )).rejects.toMatchObject({ status: 400 })
     await expect(dispatchBridgeRequest(
-      bridge, 'POST', '/trade/order', new URLSearchParams({ market: 'crypto' }),
-      { symbol: 'BTCUSDT-SWAP', side: 'buy', type: 'market', quantity: -1 },
+      bridge, 'POST', '/trade/order', new URLSearchParams({ market: 'cn' }),
+      { symbol: '510050.SH', side: 'buy', type: 'market', quantity: -1 },
     )).rejects.toMatchObject({ status: 400 })
+    // 交易服务未注册（合法市场、无 TradeService）→ 400
+    const noTrade = new TradingBridge(tradeHost(undefined))
     await expect(dispatchBridgeRequest(
-      bridge, 'GET', '/trade/positions', new URLSearchParams({ market: 'us' }),
+      noTrade, 'GET', '/trade/positions', new URLSearchParams({ market: 'cn' }),
     )).rejects.toMatchObject({ status: 400 })
   })
 
   it('交易服务未注册 → 400 + code TRADING_NO_TRADE_SERVICE（2026-09-04：前端区分服务未挂与凭证缺失）', async () => {
     const bridge = new TradingBridge(tradeHost(undefined))
     await expect(dispatchBridgeRequest(
-      bridge, 'GET', '/trade/positions', new URLSearchParams({ market: 'us' }),
+      bridge, 'GET', '/trade/positions', new URLSearchParams({ market: 'cn' }),
     )).rejects.toMatchObject({ status: 400, code: 'TRADING_NO_TRADE_SERVICE' })
     await expect(dispatchBridgeRequest(
-      bridge, 'GET', '/trade/balances', new URLSearchParams({ market: 'us' }),
+      bridge, 'GET', '/trade/balances', new URLSearchParams({ market: 'cn' }),
     )).rejects.toMatchObject({ status: 400, code: 'TRADING_NO_TRADE_SERVICE' })
   })
 
@@ -336,17 +307,17 @@ describe('TradingBridge.trade/*（issue #40 交易台：只读 + 强制 dry-run�
     const bridge = new TradingBridge(tradeHost(tradeService({ cancelOrder })))
     const { status, payload } = await dispatchBridgeRequest(
       bridge, 'DELETE', '/trade/order',
-      new URLSearchParams({ market: 'crypto', id: 'ord-123', symbol: 'BTCUSDT' }),
+      new URLSearchParams({ market: 'cn', id: 'ord-123', symbol: '510050.SH' }),
     )
     expect(status).toBe(200)
     expect(payload).toEqual({ ok: true, canceled: true })
-    expect(cancelOrder).toHaveBeenCalledWith('ord-123', 'BTCUSDT')
+    expect(cancelOrder).toHaveBeenCalledWith('ord-123', '510050.SH')
   })
 
   it('DELETE /trade/order：缺 market 或缺 id → 400', async () => {
     const bridge = new TradingBridge(tradeHost(tradeService()))
     await expect(dispatchBridgeRequest(
-      bridge, 'DELETE', '/trade/order', new URLSearchParams({ market: 'crypto' }),
+      bridge, 'DELETE', '/trade/order', new URLSearchParams({ market: 'cn' }),
     )).rejects.toMatchObject({ status: 400 })
     await expect(dispatchBridgeRequest(
       bridge, 'DELETE', '/trade/order', new URLSearchParams({ id: 'ord-1' }),
@@ -356,28 +327,28 @@ describe('TradingBridge.trade/*（issue #40 交易台：只读 + 强制 dry-run�
 
 describe('dispatchBridgeRequest', () => {
   const bridge = new TradingBridge(fakeHost({
-    tradingCryptoMarketData: fakeService({
-      listInstruments: async () => [{ symbol: 'BTCUSDT' }],
+    tradingCnMarketData: fakeService({
+      listInstruments: async () => [{ symbol: '600519.SH' }],
     }),
   }))
 
   it('GET /markets → 200', async () => {
     const { status, payload } = await dispatchBridgeRequest(bridge, 'GET', '/markets', new URLSearchParams())
     expect(status).toBe(200)
-    expect(payload).toEqual({ markets: [{ id: 'crypto' }] })
+    expect(payload).toEqual({ markets: [{ id: 'cn' }] })
   })
 
   it('GET /tickers → 200 批量', async () => {
-    const search = new URLSearchParams({ market: 'crypto', symbols: 'BTCUSDT' })
+    const search = new URLSearchParams({ market: 'cn', symbols: '600519.SH' })
     const { payload } = await dispatchBridgeRequest(bridge, 'GET', '/tickers', search)
-    expect(payload).toMatchObject({ tickers: { BTCUSDT: { ok: true } } })
+    expect(payload).toMatchObject({ tickers: { '600519.SH': { ok: true } } })
   })
 
   it('GET /symbols → 200', async () => {
-    const search = new URLSearchParams({ market: 'crypto' })
+    const search = new URLSearchParams({ market: 'cn' })
     const { status, payload } = await dispatchBridgeRequest(bridge, 'GET', '/symbols', search)
     expect(status).toBe(200)
-    expect(payload).toEqual({ symbols: [{ symbol: 'BTCUSDT' }] })
+    expect(payload).toEqual({ symbols: [{ symbol: '600519.SH' }] })
   })
 
   it('未知端点 404；未支持的 HTTP 方法 405（issue #32 起支持 GET/PUT/POST/DELETE）', async () => {
@@ -403,42 +374,42 @@ describe('dispatchBridgeRequest', () => {
 
 describe('createBridgeHost（registry-first，2026-08-30 整改 #1）', () => {
   it('注册表有激活项 → 用注册表服务；路由切换后即刻解析到新服务（热切换）', async () => {
-    const binance = fakeService({ getTicker: async (symbol) => ({ symbol, price: 1, timestamp: 1 }) })
-    const okx = fakeService({ getTicker: async (symbol) => ({ symbol, price: 2, timestamp: 2 }) })
-    let routed: string | undefined = 'binance'
+    const tencent = fakeService({ getTicker: async (symbol) => ({ symbol, price: 1, timestamp: 1 }) })
+    const eastmoney = fakeService({ getTicker: async (symbol) => ({ symbol, price: 2, timestamp: 2 }) })
+    let routed: string | undefined = 'tencent'
     const registry = {
       active: (market: string) => {
-        if (market !== 'crypto' || routed === undefined) return undefined
-        return { provider: routed, service: routed === 'okx' ? okx : binance }
+        if (market !== 'cn' || routed === undefined) return undefined
+        return { provider: routed, service: routed === 'eastmoney' ? eastmoney : tencent }
       },
     }
     const host = createBridgeHost({ registry, legacy: () => undefined })
     const bridge = new TradingBridge(host)
-    expect(host.activeProvider('crypto')).toBe('binance')
-    let wire = await bridge.tickers('crypto', ['BTCUSDT'])
-    expect(wire.tickers.BTCUSDT).toMatchObject({ ok: true, ticker: { price: 1 } })
-    routed = 'okx' // 模拟 settings 变更（无需重启、无需 watch）
-    wire = await bridge.tickers('crypto', ['BTCUSDT'])
-    expect(wire.tickers.BTCUSDT).toMatchObject({ ok: true, ticker: { price: 2 } })
-    expect(host.activeProvider('crypto')).toBe('okx')
+    expect(host.activeProvider('cn')).toBe('tencent')
+    let wire = await bridge.tickers('cn', ['600519.SH'])
+    expect(wire.tickers['600519.SH']).toMatchObject({ ok: true, ticker: { price: 1 } })
+    routed = 'eastmoney' // 模拟 settings 变更（无需重启、无需 watch）
+    wire = await bridge.tickers('cn', ['600519.SH'])
+    expect(wire.tickers['600519.SH']).toMatchObject({ ok: true, ticker: { price: 2 } })
+    expect(host.activeProvider('cn')).toBe('eastmoney')
   })
 
   it('注册表选中但未注册（包未装）→ 400 未安装，不静默降级；activeProvider 回退 router 值', () => {
     const host = createBridgeHost({
       registry: { active: () => undefined },
-      router: { activeProvider: () => 'okx' },
+      router: { activeProvider: () => 'eastmoney' },
       legacy: () => undefined,
     })
-    expect(host.getMarketService('crypto')).toBeUndefined()
-    expect(host.activeProvider('crypto')).toBe('okx') // 用户能看到设置目标
+    expect(host.getMarketService('cn')).toBeUndefined()
+    expect(host.activeProvider('cn')).toBe('eastmoney') // 用户能看到设置目标
   })
 
   it('注册表缺席（老部署）→ 回退 legacy 市场键直读', async () => {
     const legacy = fakeService()
     const host = createBridgeHost({ legacy: () => legacy })
-    const wire = await new TradingBridge(host).tickers('crypto', ['BTCUSDT'])
-    expect(wire.tickers.BTCUSDT).toMatchObject({ ok: true })
-    expect(host.activeProvider('crypto')).toBeUndefined()
+    const wire = await new TradingBridge(host).tickers('cn', ['600519.SH'])
+    expect(wire.tickers['600519.SH']).toMatchObject({ ok: true })
+    expect(host.activeProvider('cn')).toBeUndefined()
   })
 })
 
@@ -497,43 +468,45 @@ describe('watchlist + selection endpoints（issue #32 / P3）', () => {
 
   it('POST /watchlists 追加行（幂等 added）→ GET 可见 → DELETE 移除', async () => {
     const { bridge } = makeWatchlistHost()
-    const add = await dispatchBridgeRequest(bridge, 'POST', '/watchlists', new URLSearchParams(), { market: 'us', symbol: 'AAPL', name: '苹果' })
-    expect(add.payload).toMatchObject({ ok: true, added: true, instrument: { market: 'us', symbol: 'AAPL' } })
-    const dup = await dispatchBridgeRequest(bridge, 'POST', '/watchlists', new URLSearchParams(), { market: 'us', symbol: 'AAPL' })
+    const add = await dispatchBridgeRequest(bridge, 'POST', '/watchlists', new URLSearchParams(), { market: 'cn', symbol: '600519', name: '贵州茅台' })
+    expect(add.payload).toMatchObject({ ok: true, added: true, instrument: { market: 'cn', symbol: '600519' } })
+    const dup = await dispatchBridgeRequest(bridge, 'POST', '/watchlists', new URLSearchParams(), { market: 'cn', symbol: '600519' })
     expect((dup.payload as { added: boolean }).added).toBe(false)
 
     const list = await dispatchBridgeRequest(bridge, 'GET', '/watchlists', new URLSearchParams())
-    expect(list.payload).toMatchObject({ ok: true, watchlists: { us: [{ market: 'us', symbol: 'AAPL', name: '苹果' }] } })
+    expect(list.payload).toMatchObject({ ok: true, watchlists: { cn: [{ market: 'cn', symbol: '600519', name: '贵州茅台' }] } })
 
-    const del = await dispatchBridgeRequest(bridge, 'DELETE', '/watchlists', new URLSearchParams({ market: 'us', symbol: 'AAPL' }))
+    const del = await dispatchBridgeRequest(bridge, 'DELETE', '/watchlists', new URLSearchParams({ market: 'cn', symbol: '600519' }))
     expect(del.payload).toMatchObject({ ok: true, removed: true })
-    await expect(dispatchBridgeRequest(bridge, 'DELETE', '/watchlists', new URLSearchParams({ market: 'us' })))
+    await expect(dispatchBridgeRequest(bridge, 'DELETE', '/watchlists', new URLSearchParams({ market: 'cn' })))
       .rejects.toThrowError(/market and symbol are required/)
   })
 
   it('PUT /watchlists 全量替换 + 形状校验 400', async () => {
     const { bridge } = makeWatchlistHost()
     const put = await dispatchBridgeRequest(bridge, 'PUT', '/watchlists', new URLSearchParams(), {
-      watchlists: { hk: [{ market: 'hk', symbol: '00700', name: '腾讯控股' }] },
+      watchlists: { cn: [{ market: 'cn', symbol: '510050', name: '上证50ETF' }] },
     })
-    expect(put.payload).toMatchObject({ ok: true, watchlists: { hk: [{ symbol: '00700' }] } })
+    expect(put.payload).toMatchObject({ ok: true, watchlists: { cn: [{ symbol: '510050' }] } })
     await expect(dispatchBridgeRequest(bridge, 'PUT', '/watchlists', new URLSearchParams(), {
-      watchlists: { us: [{ symbol: '' }] },
+      watchlists: { cn: [{ symbol: '' }] },
     })).rejects.toThrowError(/string symbol/)
   })
 
   it('POST /watchlists/import：host 为空导入成功；非空拒绝（幂等）', async () => {
     const { bridge } = makeWatchlistHost()
     const first = await dispatchBridgeRequest(bridge, 'POST', '/watchlists/import', new URLSearchParams(), {
-      watchlists: { crypto: [{ market: 'crypto', symbol: 'BTCUSDT', name: 'Bitcoin' }] },
+      watchlists: { cn: [{ market: 'cn', symbol: '510050', name: '上证50ETF' }] },
     })
     expect(first.payload).toMatchObject({ ok: true, imported: true })
     const second = await dispatchBridgeRequest(bridge, 'POST', '/watchlists/import', new URLSearchParams(), {
-      watchlists: { us: [{ market: 'us', symbol: 'AAPL' }] },
+      watchlists: { cn: [{ market: 'cn', symbol: '600519' }] },
     })
     expect(second.payload).toMatchObject({ ok: false, imported: false })
     const list = await dispatchBridgeRequest(bridge, 'GET', '/watchlists', new URLSearchParams())
-    expect((list.payload as { watchlists: { us?: unknown } }).watchlists.us).toBeUndefined()
+    // 第二次导入被幂等拒绝：cn 键仍是首次导入的内容
+    expect((list.payload as { watchlists: { cn?: Array<{ symbol: string }> } }).watchlists.cn)
+      .toEqual([{ market: 'cn', symbol: '510050', name: '上证50ETF' }])
   })
 
   it('PUT/GET /selection：设置与读取；非字符串字段容错', async () => {
@@ -561,8 +534,7 @@ describe('TradingBridge.news（issue #37 新闻聚合；2026-09-02 评审 M3/M6 
     return {
       getMarketService: () => undefined,
       activeProvider: () => undefined,
-      newsRegistry: { register: () => () => {}, get: (market) => market === 'us' ? aggregator : undefined },
-      newsKey: () => undefined,
+      newsRegistry: { register: () => () => {}, get: (market) => market === 'cn' ? aggregator : undefined },
     }
   }
 
@@ -570,45 +542,45 @@ describe('TradingBridge.news（issue #37 新闻聚合；2026-09-02 评审 M3/M6 
 
   it('非法 limit → 400（非整数/越界/未知市场）', async () => {
     const bridge = new TradingBridge(newsHost(async () => ({ items: [], unavailable: [] })))
-    await expect(bridge.news('us', 'AAPL', '0')).rejects.toThrowError(/limit/)
-    await expect(bridge.news('us', 'AAPL', 'abc')).rejects.toThrowError(/limit/)
-    await expect(bridge.news('us', 'AAPL', String(51))).rejects.toThrowError(/limit/)
-    await expect(bridge.news('jp', 'AAPL', null)).rejects.toThrowError(/unknown market/)
+    await expect(bridge.news('cn', '600519.SH', '0')).rejects.toThrowError(/limit/)
+    await expect(bridge.news('cn', '600519.SH', 'abc')).rejects.toThrowError(/limit/)
+    await expect(bridge.news('cn', '600519.SH', String(51))).rejects.toThrowError(/limit/)
+    await expect(bridge.news('jp', '600519.SH', null)).rejects.toThrowError(/unknown market/)
   })
 
   it('有媒体快讯 → registry 聚合器结果透传', async () => {
     let calls = 0
     const aggregator: NewsAggregator = async () => {
       calls++
-      return { items: [item('yahoo', 'Apple beats earnings', '2026-09-02T10:00:00Z')], unavailable: [] }
+      return { items: [item('eastmoney', '茅台快讯', '2026-09-02T10:00:00Z')], unavailable: [] }
     }
     const bridge = new TradingBridge(newsHost(aggregator))
-    const wire = await bridge.news('us', 'AAPL', '10')
+    const wire = await bridge.news('cn', '600519.SH', '10')
     expect(calls).toBe(1)
     expect(wire.ok).toBe(true)
     expect(wire.items).toHaveLength(1)
-    expect(wire.items[0]?.source).toBe('yahoo')
+    expect(wire.items[0]?.source).toBe('eastmoney')
   })
 
-  it('仅剩公告（sec-edgar）→ 原样保留公告，不回退大盘要闻（2026-09-03 owner 裁决）', async () => {
+  it('仅剩公告（东财公告）→ 原样保留公告，不回退大盘要闻（2026-09-03 owner 裁决）', async () => {
     let calls = 0
     const aggregator: NewsAggregator = async (options) => {
       calls++
       if (options?.symbol !== undefined) {
-        return { items: [item('sec-edgar', '8-K filing', '2026-09-01T09:00:00Z')], unavailable: [] }
+        return { items: [item('eastmoney-announcement', '关于回购公司股份的公告', '2026-09-01T09:00:00Z')], unavailable: [] }
       }
       return {
         items: [
-          item('yahoo', 'macro newest', '2026-09-02T12:00:00Z'),
-          item('googlenews', 'macro mid', '2026-09-02T08:00:00Z'),
+          item('eastmoney', 'macro newest', '2026-09-02T12:00:00Z'),
+          item('eastmoney', 'macro mid', '2026-09-02T08:00:00Z'),
         ],
         unavailable: [],
       }
     }
     const bridge = new TradingBridge(newsHost(aggregator))
-    const wire = await bridge.news('us', 'AAPL', '2')
+    const wire = await bridge.news('cn', '600519.SH', '2')
     expect(calls).toBe(1)
-    expect(wire.items.map(it => it.title)).toEqual(['8-K filing'])
+    expect(wire.items.map(it => it.title)).toEqual(['关于回购公司股份的公告'])
   })
 
   it('无任何相关内容 → 空列表透传（前端展示空态，不兜底市场要闻）', async () => {
@@ -618,7 +590,7 @@ describe('TradingBridge.news（issue #37 新闻聚合；2026-09-02 评审 M3/M6 
       return { items: [], unavailable: [] }
     }
     const bridge = new TradingBridge(newsHost(aggregator))
-    const wire = await bridge.news('us', 'AAPL', '10')
+    const wire = await bridge.news('cn', '600519.SH', '10')
     expect(calls).toBe(1)
     expect(wire.items).toEqual([])
     expect(wire.unavailable).toEqual([])
@@ -627,7 +599,7 @@ describe('TradingBridge.news（issue #37 新闻聚合；2026-09-02 评审 M3/M6 
   it('公告源挂掉 → unavailable 注明，不与「暂无公告」混淆', async () => {
     const aggregator: NewsAggregator = async () => ({ items: [], unavailable: ['eastmoney-announcement: HTTP 503'] })
     const bridge = new TradingBridge(newsHost(aggregator))
-    const wire = await bridge.news('us', 'AAPL', null)
+    const wire = await bridge.news('cn', '600519.SH', null)
     expect(wire.unavailable).toEqual(['eastmoney-announcement: HTTP 503'])
     expect(wire.items).toEqual([])
   })
@@ -642,40 +614,6 @@ describe('errorPayload', () => {
   })
 })
 
-
-describe('TradingBridge.derivativesHistory（issue #54 衍生品页签趋势卡）', () => {
-  it('/derivatives/history 透传注册表解析出服务的 getDerivativesHistory', async () => {
-    const service = fakeService({
-      getDerivativesHistory: async (symbol: string) => ({
-        symbol: `${symbol}-SWAP`, source: 'okx',
-        fundingRates: [{ time: 1000, value: 0.0001 }, { time: 2000, value: 0.0002 }],
-        openInterest: [{ time: 1000, value: 795.3 }, { time: 2000, value: 801.5 }],
-      }),
-    })
-    const bridge = new TradingBridge(fakeHost({ tradingCryptoMarketData: service }))
-    const search = new URLSearchParams({ market: 'crypto', symbol: 'BTCUSDT' })
-    const { status, payload } = await dispatchBridgeRequest(bridge, 'GET', '/derivatives/history', search)
-    expect(status).toBe(200)
-    expect(payload).toMatchObject({ ok: true, history: { symbol: 'BTCUSDT-SWAP', source: 'okx' } })
-    const history = (payload as { history: { fundingRates: Array<{ time: number; value: number }> } }).history
-    expect(history.fundingRates).toEqual([{ time: 1000, value: 0.0001 }, { time: 2000, value: 0.0002 }])
-  })
-
-  it('连接器未实现 getDerivativesHistory → TRADING_NOT_IMPLEMENTED（前端隐藏趋势卡）', async () => {
-    const bridge = new TradingBridge(fakeHost({ tradingCryptoMarketData: fakeService() }))
-    const search = new URLSearchParams({ market: 'crypto', symbol: 'BTCUSDT' })
-    await expect(dispatchBridgeRequest(bridge, 'GET', '/derivatives/history', search))
-      .rejects.toMatchObject({ code: 'TRADING_NOT_IMPLEMENTED' })
-  })
-
-  it('未知市场 400；缺 symbol 400', async () => {
-    const bridge = new TradingBridge(fakeHost({ tradingCryptoMarketData: fakeService() }))
-    await expect(dispatchBridgeRequest(bridge, 'GET', '/derivatives/history', new URLSearchParams({ market: 'jp', symbol: 'X' })))
-      .rejects.toBeInstanceOf(BridgeProtocolError)
-    await expect(dispatchBridgeRequest(bridge, 'GET', '/derivatives/history', new URLSearchParams({ market: 'crypto' })))
-      .rejects.toBeInstanceOf(BridgeProtocolError)
-  })
-})
 
 describe('TradingBridge CN ETF options', () => {
   it('未挂 tradingCnOptions → TRADING_NOT_IMPLEMENTED', async () => {

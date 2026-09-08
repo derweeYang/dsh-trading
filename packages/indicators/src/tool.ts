@@ -16,9 +16,9 @@ export interface IndicatorsMarketDataLike {
 
 export interface GetIndicatorsToolOptions {
   marketData: IndicatorsMarketDataLike
-  /** 市场前缀（工具名 <market>_get_indicators），默认 crypto。 */
+  /** 市场前缀（工具名 <market>_get_indicators），默认 cn。 */
   market?: string
-  /** 数据源标签（进输出，供 Agent 溯源），如 'okx'。 */
+  /** 数据源标签（进输出，供 Agent 溯源），如 'tencent'。 */
   providerLabel?: string
   /** 取 K 线根数：需覆盖最长 warm-up（MACD 12/26/9），默认 300。 */
   klineLimit?: number
@@ -42,18 +42,18 @@ function tail(values: ReadonlyArray<number | undefined>, n: number): Array<numbe
 }
 
 export function createGetIndicatorsTool(options: GetIndicatorsToolOptions) {
-  const { marketData, market = 'crypto', providerLabel, klineLimit = 300, customStore } = options
+  const { marketData, market = 'cn', providerLabel, klineLimit = 300, customStore } = options
   return defineTool({
     name: market + '_get_indicators',
     description:
       'Compute technical indicators (MA/EMA/BOLL/MACD/RSI/KDJ) for a symbol over recent klines from the routed market data provider. '
-      + 'symbol uses market-canonical vocabulary (e.g. BTCUSDT). '
+      + 'symbol uses market-canonical vocabulary (e.g. 600519.SH). '
       + 'Returns per-indicator latest value plus the trailing point series (warm-up leading values are null).',
     parameters: {
       symbol: {
         type: 'string',
         required: true,
-        description: 'Instrument symbol in market-canonical vocabulary, e.g. BTCUSDT (crypto) / AAPL (us) / 600519.SH (cn) / 00700.HK (hk)',
+        description: 'Instrument symbol in market-canonical vocabulary, e.g. 600519.SH (cn)',
       },
       interval: {
         type: 'string',
@@ -78,7 +78,7 @@ export function createGetIndicatorsTool(options: GetIndicatorsToolOptions) {
       const args = (raw ?? {}) as { symbol?: unknown; interval?: unknown; indicators?: unknown; points?: unknown }
       const symbol = typeof args.symbol === 'string' ? args.symbol.trim() : ''
       if (!symbol) {
-        throw new Error((market + '_get_indicators: invalid symbol ') + JSON.stringify(args.symbol) + ' — expected a market-canonical symbol like BTCUSDT')
+        throw new Error((market + '_get_indicators: invalid symbol ') + JSON.stringify(args.symbol) + ' — expected a market-canonical symbol like 600519.SH')
       }
       const interval = typeof args.interval === 'string' ? args.interval.trim() : ''
       if (!interval) {

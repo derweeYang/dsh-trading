@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-An Electron shell that turns the dsh-trading Web GUI into an installable desktop app for macOS and Windows. The installer bundles a complete toolchain — a standalone Node.js runtime with npm and pnpm (the version pinned by the repository's `packageManager`), the dsh host, and a preinstalled trading-web profile (official web surface plus the base and crypto/us/cn/hk market bundles, packed from this repository's own packages) — so the app runs with zero preinstalled tooling on a machine that has never seen a development environment.
+An Electron shell that turns the dsh-trading Web GUI into an installable desktop app for macOS and Windows. The installer bundles a complete toolchain — a standalone Node.js runtime with npm and pnpm (the version pinned by the repository's `packageManager`), the dsh host, and a preinstalled trading-web profile (official web surface plus the base and cn market bundle, packed from this repository's own packages) — so the app runs with zero preinstalled tooling on a machine that has never seen a development environment.
 
 ## What it does
 

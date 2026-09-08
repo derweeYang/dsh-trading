@@ -83,32 +83,32 @@ describe('clampActivationParams / resolveIndicatorSpec', () => {
 
 describe('symbolParams 按标的参数覆盖（issue #72）', () => {
   it('sanitizeInstance：保留合法 symbolParams，非法键/值清洗，坏形整体丢弃该字段', () => {
-    expect(sanitizeInstance({ id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'hk:00700.HK': { a1: 20240102, bad: Number.NaN } } }))
-      .toEqual({ id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'hk:00700.HK': { a1: 20240102 } } })
-    expect(sanitizeInstance({ id: 'anchor_px', params: { a1: 0 }, symbolParams: { '': { a1: 1 }, 'hk:x': 'nope' } }))
+    expect(sanitizeInstance({ id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'cn:600519.SH': { a1: 20240102, bad: Number.NaN } } }))
+      .toEqual({ id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'cn:600519.SH': { a1: 20240102 } } })
+    expect(sanitizeInstance({ id: 'anchor_px', params: { a1: 0 }, symbolParams: { '': { a1: 1 }, 'cn:x': 'nope' } }))
       .toEqual({ id: 'anchor_px', params: { a1: 0 } })
     expect(sanitizeInstance({ id: 'anchor_px', params: { a1: 0 } })).toEqual({ id: 'anchor_px', params: { a1: 0 } })
     expect(sanitizeInstance({ id: '', params: {} })).toBeUndefined()
   })
 
   it('effectiveInstanceParams：命中覆盖整体替代，未命中/缺 market 回退全局', () => {
-    const instance = { id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'hk:00700.HK': { a1: 20240102 } } }
-    expect(effectiveInstanceParams(instance, 'hk', '00700.HK')).toEqual({ a1: 20240102 })
-    expect(effectiveInstanceParams(instance, 'hk', '02714.HK')).toEqual({ a1: 0 })
+    const instance = { id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'cn:600519.SH': { a1: 20240102 } } }
+    expect(effectiveInstanceParams(instance, 'cn', '600519.SH')).toEqual({ a1: 20240102 })
+    expect(effectiveInstanceParams(instance, 'cn', '000001.SZ')).toEqual({ a1: 0 })
     expect(effectiveInstanceParams(instance)).toEqual({ a1: 0 })
-    expect(effectiveInstanceParams(instance, 'hk')).toEqual({ a1: 0 })
-    expect(symbolScopeKey('hk', '00700.HK')).toBe('hk:00700.HK')
+    expect(effectiveInstanceParams(instance, 'cn')).toEqual({ a1: 0 })
+    expect(symbolScopeKey('cn', '600519.SH')).toBe('cn:600519.SH')
   })
 
   it('内存 store：symbolParams 随 activate/list/replaceAll 保真深拷贝', async () => {
     const store = createMemoryChartActivationStore()
     const source = { a1: 20240102 }
-    await store.activate({ id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'hk:00700.HK': source } })
+    await store.activate({ id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'cn:600519.SH': source } })
     source.a1 = 99999999 // 改源对象不得影响 store
     const listed = await store.list()
-    expect(listed).toEqual([{ id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'hk:00700.HK': { a1: 20240102 } } }])
-    listed[0]?.symbolParams && (listed[0].symbolParams['hk:00700.HK']!.a1 = 1) // 改读出副本不得影响 store
-    expect((await store.list())[0]?.symbolParams?.['hk:00700.HK']).toEqual({ a1: 20240102 })
+    expect(listed).toEqual([{ id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'cn:600519.SH': { a1: 20240102 } } }])
+    listed[0]?.symbolParams && (listed[0].symbolParams['cn:600519.SH']!.a1 = 1) // 改读出副本不得影响 store
+    expect((await store.list())[0]?.symbolParams?.['cn:600519.SH']).toEqual({ a1: 20240102 })
   })
 
   it('文件 store：symbolParams 落盘读回一致', async () => {
@@ -116,44 +116,45 @@ describe('symbolParams 按标的参数覆盖（issue #72）', () => {
     tmpDirs.push(dir)
     const file = path.join(dir, 'chart.json')
     const store = createFileChartActivationStore(file)
-    await store.activate({ id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'hk:00700.HK': { a1: 20240102 }, 'us:GOOGL': { a1: 20240315 } } })
+    await store.activate({ id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'cn:600519.SH': { a1: 20240102 }, 'cn:510050.SH': { a1: 20240315 } } })
     const reopened = createFileChartActivationStore(file)
     expect(await reopened.list()).toEqual([
-      { id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'hk:00700.HK': { a1: 20240102 }, 'us:GOOGL': { a1: 20240315 } } },
+      { id: 'anchor_px', params: { a1: 0 }, symbolParams: { 'cn:600519.SH': { a1: 20240102 }, 'cn:510050.SH': { a1: 20240315 } } },
     ])
   })
 })
 
 describe('hiddenScopes 按标的隐藏（symbol visibility）', () => {
-  const hidden = { id: 'kmaster', params: { n: 9 }, hiddenScopes: ['us', 'hk:00700.HK'] }
+  // 市场级与 symbol 级两级隐藏语义需两个市场词汇才能互证——保留 cn 之外用假想新市场 jp。
+  const hidden = { id: 'kmaster', params: { n: 9 }, hiddenScopes: ['jp', 'cn:600519.SH'] }
 
   it('sanitizeInstance：hiddenScopes 去重/丢非空串清洗，空表整字段消失', () => {
-    expect(sanitizeInstance({ id: 'k', params: {}, hiddenScopes: ['us', 'us', ' cn ', 42, ''] }))
-      .toEqual({ id: 'k', params: {}, hiddenScopes: ['us', 'cn'] })
+    expect(sanitizeInstance({ id: 'k', params: {}, hiddenScopes: ['jp', 'jp', ' cn ', 42, ''] }))
+      .toEqual({ id: 'k', params: {}, hiddenScopes: ['jp', 'cn'] })
     expect(sanitizeInstance({ id: 'k', params: {}, hiddenScopes: [] })).toEqual({ id: 'k', params: {} })
-    expect(sanitizeInstance({ id: 'k', params: {}, hiddenScopes: 'us' })).toEqual({ id: 'k', params: {} })
+    expect(sanitizeInstance({ id: 'k', params: {}, hiddenScopes: 'cn' })).toEqual({ id: 'k', params: {} })
   })
 
   it('isInstanceVisibleOn：market 级与 symbol 级命中即隐藏，无记录/market 缺失可见', () => {
-    expect(isInstanceVisibleOn(hidden, 'us', 'AAPL')).toBe(false)      // 市场级隐藏
-    expect(isInstanceVisibleOn(hidden, 'hk', '00700.HK')).toBe(false)  // 单标的隐藏
-    expect(isInstanceVisibleOn(hidden, 'hk', '02714.HK')).toBe(true)   // 同市场其它标的可见
-    expect(isInstanceVisibleOn(hidden, 'cn', '002714.SZ')).toBe(true)
+    expect(isInstanceVisibleOn(hidden, 'jp', '7203')).toBe(false)      // 市场级隐藏
+    expect(isInstanceVisibleOn(hidden, 'cn', '600519.SH')).toBe(false) // 单标的隐藏
+    expect(isInstanceVisibleOn(hidden, 'cn', '000001.SZ')).toBe(true)  // 同市场其它标的可见
+    expect(isInstanceVisibleOn(hidden, 'cn', '510050.SH')).toBe(true)
     expect(isInstanceVisibleOn(hidden)).toBe(true)                     // 无聚焦标的 → 可见（全局语义）
-    expect(isInstanceVisibleOn({ id: 'k', params: {} }, 'us', 'AAPL')).toBe(true)
+    expect(isInstanceVisibleOn({ id: 'k', params: {} }, 'cn', '600519.SH')).toBe(true)
   })
 
   it('withHiddenScopes：记隐藏/清隐藏幂等，清空后字段整体消失，不触碰 params/symbolParams', () => {
-    const base = { id: 'k', params: { n: 1 }, symbolParams: { 'us:AAPL': { n: 2 } } }
-    const once = withHiddenScopes(base, 'us', false)
-    expect(once.hiddenScopes).toEqual(['us'])
-    expect(withHiddenScopes(once, 'us', false)).toBe(once)             // 重复记隐藏 → 原引用
-    const twice = withHiddenScopes(once, 'us:AAPL', false)
-    expect(twice.hiddenScopes).toEqual(['us', 'us:AAPL'])
-    expect(withHiddenScopes(base, 'hk:00700.HK', true)).toBe(base)     // 无记录清隐藏 → 原引用
-    const unhidden = withHiddenScopes(twice, 'us', true)
-    expect(unhidden.hiddenScopes).toEqual(['us:AAPL'])
-    const cleared = withHiddenScopes(unhidden, 'us:AAPL', true)
+    const base = { id: 'k', params: { n: 1 }, symbolParams: { 'cn:600519.SH': { n: 2 } } }
+    const once = withHiddenScopes(base, 'cn', false)
+    expect(once.hiddenScopes).toEqual(['cn'])
+    expect(withHiddenScopes(once, 'cn', false)).toBe(once)             // 重复记隐藏 → 原引用
+    const twice = withHiddenScopes(once, 'cn:510050.SH', false)
+    expect(twice.hiddenScopes).toEqual(['cn', 'cn:510050.SH'])
+    expect(withHiddenScopes(base, 'cn:000001.SZ', true)).toBe(base)    // 无记录清隐藏 → 原引用
+    const unhidden = withHiddenScopes(twice, 'cn', true)
+    expect(unhidden.hiddenScopes).toEqual(['cn:510050.SH'])
+    const cleared = withHiddenScopes(unhidden, 'cn:510050.SH', true)
     expect(cleared).toEqual(base)                                      // 清空 → 字段整体消失
   })
 
@@ -241,29 +242,29 @@ describe('图表激活工具族（indicator_list / activate / deactivate）', ()
     const { activate } = createChartActivationTools({ customStore, chartStore })
 
     // market/symbol 只给一个 → 业务提示，不写入
-    expect(String(await activate.execute({ id: 'anchor_px', market: 'hk' }))).toContain('supplied together')
+    expect(String(await activate.execute({ id: 'anchor_px', market: 'cn' }))).toContain('supplied together')
     expect(await chartStore.list()).toEqual([])
 
     // 按标的写入两个覆盖，互不影响
-    const out1 = String(await activate.execute({ id: 'anchor_px', market: 'hk', symbol: '00700.HK', paramsJson: '{"a1":20240102}' }))
-    expect(out1).toContain('scope: hk:00700.HK')
-    await activate.execute({ id: 'anchor_px', market: 'us', symbol: 'GOOGL', paramsJson: '{"a1":20240315}' })
+    const out1 = String(await activate.execute({ id: 'anchor_px', market: 'cn', symbol: '600519.SH', paramsJson: '{"a1":20240102}' }))
+    expect(out1).toContain('scope: cn:600519.SH')
+    await activate.execute({ id: 'anchor_px', market: 'cn', symbol: '510050.SH', paramsJson: '{"a1":20240315}' })
     expect(await chartStore.list()).toEqual([{
       id: 'anchor_px', params: { a1: 0 },
-      symbolParams: { 'hk:00700.HK': { a1: 20240102 }, 'us:GOOGL': { a1: 20240315 } },
+      symbolParams: { 'cn:600519.SH': { a1: 20240102 }, 'cn:510050.SH': { a1: 20240315 } },
     }])
 
     // 全局写：更新 params 但保留已有覆盖（回归：旧行为整体覆盖会抹掉 symbolParams）
     await activate.execute({ id: 'anchor_px', paramsJson: '{"a1":20250110}' })
     expect(await chartStore.list()).toEqual([{
       id: 'anchor_px', params: { a1: 20250110 },
-      symbolParams: { 'hk:00700.HK': { a1: 20240102 }, 'us:GOOGL': { a1: 20240315 } },
+      symbolParams: { 'cn:600519.SH': { a1: 20240102 }, 'cn:510050.SH': { a1: 20240315 } },
     }])
 
     // 同标的重复写 → 覆盖该标的这套；另一标的保持
-    await activate.execute({ id: 'anchor_px', market: 'hk', symbol: '00700.HK', paramsJson: '{"a1":20240620}' })
+    await activate.execute({ id: 'anchor_px', market: 'cn', symbol: '600519.SH', paramsJson: '{"a1":20240620}' })
     expect((await chartStore.list())[0]?.symbolParams).toEqual({
-      'hk:00700.HK': { a1: 20240620 }, 'us:GOOGL': { a1: 20240315 },
+      'cn:600519.SH': { a1: 20240620 }, 'cn:510050.SH': { a1: 20240315 },
     })
   })
 
@@ -282,20 +283,20 @@ describe('图表激活工具族（indicator_list / activate / deactivate）', ()
     const { deactivate } = createChartActivationTools({ chartStore, onWritten })
 
     // 仅 symbol → 业务提示不写入
-    expect(String(await deactivate.execute({ id: 'boll', symbol: 'AAPL' }))).toContain('requires market')
+    expect(String(await deactivate.execute({ id: 'boll', symbol: '600519.SH' }))).toContain('requires market')
     expect(await chartStore.list()).toEqual([{ id: 'boll', params: {} }])
 
-    // market 级隐藏：实例保留，us 全市场不可见
-    await deactivate.execute({ id: 'boll', market: 'us' })
-    expect(await chartStore.list()).toEqual([{ id: 'boll', params: {}, hiddenScopes: ['us'] }])
+    // market 级隐藏：实例保留，cn 全市场不可见
+    await deactivate.execute({ id: 'boll', market: 'cn' })
+    expect(await chartStore.list()).toEqual([{ id: 'boll', params: {}, hiddenScopes: ['cn'] }])
     expect(onWritten).toHaveBeenCalledWith('boll')
 
     // symbol 级隐藏追加；同市场其它标的不受影响
-    await deactivate.execute({ id: 'boll', market: 'hk', symbol: '00700.HK' })
-    expect(await chartStore.list()).toEqual([{ id: 'boll', params: {}, hiddenScopes: ['us', 'hk:00700.HK'] }])
+    await deactivate.execute({ id: 'boll', market: 'cn', symbol: '510050.SH' })
+    expect(await chartStore.list()).toEqual([{ id: 'boll', params: {}, hiddenScopes: ['cn', 'cn:510050.SH'] }])
 
     // 未挂载 id 隐藏 → no-op 不反向创建
-    expect(JSON.parse(String(await deactivate.execute({ id: 'ghost', market: 'us' })))).toMatchObject({ ok: false, hidden: false })
+    expect(JSON.parse(String(await deactivate.execute({ id: 'ghost', market: 'cn' })))).toMatchObject({ ok: false, hidden: false })
     expect(await chartStore.list()).toHaveLength(1)
   })
 
@@ -306,14 +307,14 @@ describe('图表激活工具族（indicator_list / activate / deactivate）', ()
       computeSource: CUSTOM_SOURCE, createdAt: 1,
     }])
     const chartStore = createMemoryChartActivationStore([{
-      id: 'anchor_px', params: { a1: 0 }, hiddenScopes: ['us', 'hk:00700.HK'],
+      id: 'anchor_px', params: { a1: 0 }, hiddenScopes: ['cn', 'cn:600519.SH'],
     }])
     const { activate } = createChartActivationTools({ customStore, chartStore })
-    await activate.execute({ id: 'anchor_px', market: 'hk', symbol: '00700.HK', paramsJson: '{"a1":20240102}' })
+    await activate.execute({ id: 'anchor_px', market: 'cn', symbol: '600519.SH', paramsJson: '{"a1":20240102}' })
     expect(await chartStore.list()).toEqual([{
       id: 'anchor_px', params: { a1: 0 },
-      symbolParams: { 'hk:00700.HK': { a1: 20240102 } },
-      hiddenScopes: ['us'],   // hk 两级隐藏被清除，us 市场级隐藏保留
+      symbolParams: { 'cn:600519.SH': { a1: 20240102 } },
+      // cn 两级隐藏（market 级 + symbol 级）被清除，字段整体消失
     }])
   })
 
@@ -353,7 +354,7 @@ describe('indicator_author「创作即上图」（issue #63）', () => {
 
     // v1 挂载并写一个按标的覆盖
     await tool.execute({ ...v1, activate: true })
-    await chartStore.activate({ id: 'authored_i', params: { a1: 0 }, symbolParams: { 'hk:00700.HK': { a1: 20240102 } } })
+    await chartStore.activate({ id: 'authored_i', params: { a1: 0 }, symbolParams: { 'cn:600519.SH': { a1: 20240102 } } })
 
     // v2 改 schema（a1 → a2）：重挂不清覆盖；覆盖按新 schema 重 clamp（旧键 a1 丢弃、
     // 缺键 a2 补默认 7），全局 params 取新 schema 默认值。
@@ -361,7 +362,7 @@ describe('indicator_author「创作即上图」（issue #63）', () => {
     await tool.execute({ ...v2, activate: true })
     expect(await chartStore.list()).toEqual([{
       id: 'authored_i', params: { a2: 7 },
-      symbolParams: { 'hk:00700.HK': { a2: 7 } },
+      symbolParams: { 'cn:600519.SH': { a2: 7 } },
     }])
 
     // v3 同 schema re-author：覆盖原样保留，全局 params 更新为新默认。
@@ -369,7 +370,7 @@ describe('indicator_author「创作即上图」（issue #63）', () => {
     await tool.execute({ ...v3, activate: true })
     expect(await chartStore.list()).toEqual([{
       id: 'authored_i', params: { a2: 9 },
-      symbolParams: { 'hk:00700.HK': { a2: 7 } },
+      symbolParams: { 'cn:600519.SH': { a2: 7 } },
     }])
   })
 

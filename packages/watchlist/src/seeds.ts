@@ -3,7 +3,7 @@
  *
  * 背景（2026-09-02 agent 可见性修复）：种子行原先只活在 client-ui-trading 的
  * store.ts，host 侧 `watchlist_list` 只能看到用户定制行——用户看着左栏里的
- * 苹果/AAPL 问行情，Agent 却答"不在自选里"。种子表上收到本包后，客户端展示
+ * 贵州茅台/600519 问行情，Agent 却答"不在自选里"。种子表上收到本包后，客户端展示
  * 回退与 Agent 工具合并视图同源（展示语义：市场未定制时回落种子，见
  * effectiveWatchlistRows——与客户端 rowsFor 同构）。
  *
@@ -13,28 +13,11 @@ import type { WatchlistInstrument, WatchlistsMap } from './index.ts'
 
 /** 各市场种子行（connector-validated symbol formats）。 */
 export const WATCHLIST_SEEDS: WatchlistsMap = {
-  crypto: [
-    { market: 'crypto', symbol: 'BTCUSDT', name: 'Bitcoin' },
-    { market: 'crypto', symbol: 'ETHUSDT', name: 'Ethereum' },
-    { market: 'crypto', symbol: 'SOLUSDT', name: 'Solana' },
-    { market: 'crypto', symbol: 'BNBUSDT', name: 'BNB' },
-  ],
-  us: [
-    { market: 'us', symbol: 'AAPL', name: '苹果' },
-    { market: 'us', symbol: 'MSFT', name: '微软' },
-    { market: 'us', symbol: 'NVDA', name: '英伟达' },
-    { market: 'us', symbol: 'GOOGL', name: '谷歌' },
-  ],
   cn: [
     { market: 'cn', symbol: '600519', name: '贵州茅台' },
     { market: 'cn', symbol: '000001', name: '平安银行' },
     { market: 'cn', symbol: '601318', name: '中国平安' },
     { market: 'cn', symbol: '510050', name: '上证50ETF' },
-  ],
-  hk: [
-    { market: 'hk', symbol: '00700', name: '腾讯控股' },
-    { market: 'hk', symbol: '09988', name: '阿里巴巴-W' },
-    { market: 'hk', symbol: '03690', name: '美团-W' },
   ],
 }
 

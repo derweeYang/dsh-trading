@@ -10,11 +10,8 @@
  * 同时满足各 kit 包在 npm 发布分发时的静态资产打包需求。
  *
  * 路由规则：
- *   - 'trading-*' / 'indicator-*' / 'knowledge-*' -> 全部 4 个 market kit（crypto/us/cn/hk）
- *   - 'crypto-*'                                  -> kit-crypto
- *   - 'us-*'                                      -> kit-us
+ *   - 'trading-*' / 'indicator-*' / 'knowledge-*' -> 全部 market kit（cn）
  *   - 'cn-*'                                      -> kit-cn
- *   - 'hk-*'                                      -> kit-hk
  *   - 其它通用基础技能                             -> base
  */
 
@@ -28,10 +25,7 @@ const ROOT = path.resolve(__dirname, '..')
 const AGENTS_SKILLS_DIR = path.join(ROOT, '.agents', 'skills')
 
 const MARKET_PACKAGES = {
-  crypto: path.join(ROOT, 'packages', 'kit-crypto', 'assets', 'skills'),
-  us: path.join(ROOT, 'packages', 'kit-us', 'assets', 'skills'),
   cn: path.join(ROOT, 'packages', 'kit-cn', 'assets', 'skills'),
-  hk: path.join(ROOT, 'packages', 'kit-hk', 'assets', 'skills'),
   base: path.join(ROOT, 'packages', 'base', 'assets', 'skills'),
 }
 
@@ -41,12 +35,9 @@ function resolveTargetDirs(skillName) {
     skillName.startsWith('indicator-') ||
     skillName.startsWith('knowledge-')
   ) {
-    return [MARKET_PACKAGES.crypto, MARKET_PACKAGES.us, MARKET_PACKAGES.cn, MARKET_PACKAGES.hk]
+    return [MARKET_PACKAGES.cn]
   }
-  if (skillName.startsWith('crypto-')) return [MARKET_PACKAGES.crypto]
-  if (skillName.startsWith('us-')) return [MARKET_PACKAGES.us]
   if (skillName.startsWith('cn-')) return [MARKET_PACKAGES.cn]
-  if (skillName.startsWith('hk-')) return [MARKET_PACKAGES.hk]
   return [MARKET_PACKAGES.base]
 }
 

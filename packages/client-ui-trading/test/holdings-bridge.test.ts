@@ -34,7 +34,7 @@ async function dispatch(bridge: TradingBridge, method: string, sub: string, body
   return { status, payload: payload as Record<string, unknown> }
 }
 
-const VALID_ITEM = { market: 'hk', symbol: '00700', side: 'long', size: 100, entryPrice: 380, account: '富途', kind: 'real' }
+const VALID_ITEM = { market: 'cn', symbol: '600519.SH', side: 'long', size: 100, entryPrice: 1500, account: '华泰', kind: 'real' }
 
 describe('TradingBridge /holdings 七端点（fallback 内存 store）', () => {
   it('GET /holdings：空台账快照', async () => {
@@ -45,7 +45,7 @@ describe('TradingBridge /holdings 七端点（fallback 内存 store）', () => {
 
   it('stage → confirm（带编辑）→ snapshot 全流转，revision 自增', async () => {
     const bridge = makeBridge()
-    const staged = await dispatch(bridge, 'POST', '/holdings/stage', { items: [VALID_ITEM, { market: 'us', symbol: 'AAPL', size: 5 }] })
+    const staged = await dispatch(bridge, 'POST', '/holdings/stage', { items: [VALID_ITEM, { market: 'cn', symbol: '002714.SZ', size: 5 }] })
     expect(staged.payload).toMatchObject({ ok: true, revision: 1 })
 
     let snap = (await dispatch(bridge, 'GET', '/holdings')).payload
@@ -53,10 +53,10 @@ describe('TradingBridge /holdings 七端点（fallback 内存 store）', () => {
     expect(snap.holdings).toHaveLength(0)
     const rows = snap.staged as Array<{ id: string; size: number; account: string; kind: string; currency: string; source: string }>
     // 默认值推导在写入侧完成（契约 §2）：account 缺省 '默认账户'、kind 缺省 real、
-    // currency 按 market 推导（us→USD）、source 恒 imported、id 前缀 hd-。
-    expect(rows[1]).toMatchObject({ account: '默认账户', kind: 'real', currency: 'USD', source: 'imported' })
+    // currency 按 market 推导（cn→CNY）、source 恒 imported、id 前缀 hd-。
+    expect(rows[1]).toMatchObject({ account: '默认账户', kind: 'real', currency: 'CNY', source: 'imported' })
     expect(rows[0]?.id).toMatch(/^hd-/)
-    expect(rows[0]).toMatchObject({ account: '富途', currency: 'HKD' })
+    expect(rows[0]).toMatchObject({ account: '华泰', currency: 'CNY' })
 
     const confirm = await dispatch(bridge, 'POST', '/holdings/confirm', { ids: [rows[0]!.id], edits: { [rows[0]!.id]: { size: 200, kind: 'sim' } } })
     expect(confirm.payload).toMatchObject({ ok: true, revision: 2 })
@@ -79,10 +79,10 @@ describe('TradingBridge /holdings 七端点（fallback 内存 store）', () => {
     const id = (add.payload as { id: string }).id
     expect(id).toMatch(/^hd-/)
 
-    const update = await dispatch(bridge, 'PUT', '/holdings', { id, patch: { entryPrice: 390, account: 'IBKR' } })
+    const update = await dispatch(bridge, 'PUT', '/holdings', { id, patch: { entryPrice: 1550, account: '中信' } })
     expect(update.payload).toMatchObject({ ok: true, revision: 2 })
     let snap = (await dispatch(bridge, 'GET', '/holdings')).payload
-    expect((snap.holdings as Array<{ entryPrice: number; account: string }>)[0]).toMatchObject({ entryPrice: 390, account: 'IBKR' })
+    expect((snap.holdings as Array<{ entryPrice: number; account: string }>)[0]).toMatchObject({ entryPrice: 1550, account: '中信' })
 
     const removed = await dispatch(bridge, 'DELETE', '/holdings', undefined, `id=${id}`)
     expect(removed.payload).toMatchObject({ ok: true, revision: 3 })
@@ -122,10 +122,10 @@ describe('TradingBridge /holdings 七端点（fallback 内存 store）', () => {
 
   it('currency 大小写归一（小写入库大写）', async () => {
     const bridge = makeBridge()
-    const add = await dispatch(bridge, 'POST', '/holdings', { ...VALID_ITEM, currency: 'hkd' })
+    const add = await dispatch(bridge, 'POST', '/holdings', { ...VALID_ITEM, currency: 'cny' })
     expect(add.payload.ok).toBe(true)
     const snap = (await dispatch(bridge, 'GET', '/holdings')).payload
-    expect((snap.holdings as Array<{ currency: string }>)[0]?.currency).toBe('HKD')
+    expect((snap.holdings as Array<{ currency: string }>)[0]?.currency).toBe('CNY')
   })
 })
 

@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-一个把 dsh-trading Web GUI 变成可安装桌面应用（macOS / Windows）的 Electron 壳。安装包内置完整工具链——独立 Node.js 运行时（自带 npm 与 pnpm，版本跟随仓库 `packageManager` 钉住）、dsh 宿主和预装好的 trading-web profile（官方 web 界面 + base 与 crypto/us/cn/hk 市场 bundle，由本仓库自有包打包而来），因此在一台从未配置过任何编程环境的电脑上开箱即用。
+一个把 dsh-trading Web GUI 变成可安装桌面应用（macOS / Windows）的 Electron 壳。安装包内置完整工具链——独立 Node.js 运行时（自带 npm 与 pnpm，版本跟随仓库 `packageManager` 钉住）、dsh 宿主和预装好的 trading-web profile（官方 web 界面 + base 与 cn 市场 bundle，由本仓库自有包打包而来），因此在一台从未配置过任何编程环境的电脑上开箱即用。
 
 ## 功能
 

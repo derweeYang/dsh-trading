@@ -1,1 +1,0 @@
-../../../packages/kit-us/assets/skills/us-risk-checklist.md

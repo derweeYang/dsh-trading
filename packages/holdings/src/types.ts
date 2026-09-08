@@ -5,7 +5,7 @@
  * 确认/编辑后才转正式（holdings）。store 只承载导入持仓（source 恒
  * 'imported'）；paper/live 是运行时源，不落本台账。
  */
-export type HoldingMarket = 'crypto' | 'us' | 'cn' | 'hk'
+export type HoldingMarket = 'cn'
 export type HoldingCurrency = 'USD' | 'CNY' | 'HKD' | 'USDT'
 export type HoldingKind = 'real' | 'sim'
 
@@ -14,7 +14,7 @@ export interface Holding {
   id: string
   /** 行情路由依据，必填。 */
   market: HoldingMarket
-  /** 连接器词汇（与行情 API 对齐，如 AAPL / 002714.SZ / BTCUSDT）。 */
+  /** 连接器词汇（与行情 API 对齐，如 002714.SZ）。 */
   symbol: string
   /** 显示名（截图里的中文名等）。 */
   name?: string
@@ -24,9 +24,9 @@ export interface Holding {
   size: number
   /** 成本价；截图没有则缺省（uPnL 不显示）。 */
   entryPrice?: number
-  /** 缺省按 market 推导：crypto→USDT, us→USD, cn→CNY, hk→HKD（写入侧落库）。 */
+  /** 缺省按 market 推导：cn→CNY（写入侧落库）。 */
   currency?: HoldingCurrency
-  /** 用户命名账户（'富途'/'IBKR'/'币安'），必填，缺省 '默认账户'。 */
+  /** 用户命名账户（如 '默认账户'），必填，缺省 '默认账户'。 */
   account: string
   /** 用户面向标签，缺省 'real'（imported 源可改标——截图也可能来自模拟盘）。 */
   kind: HoldingKind

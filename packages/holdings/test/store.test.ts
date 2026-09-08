@@ -8,7 +8,7 @@ import { HoldingValidationError } from '../src/normalize.ts'
 import type { Holding, HoldingsStore, NewHoldingInput } from '../src/types.ts'
 
 function sampleInput(overrides: Partial<NewHoldingInput> = {}): NewHoldingInput {
-  return { market: 'us', symbol: 'AAPL', size: 10, ...overrides }
+  return { market: 'cn', symbol: '600519.SH', size: 100, ...overrides }
 }
 
 /** 两区操作行为套件：memory / file store 同构跑一遍（契约 §2 语义与实现解耦）。 */
@@ -17,21 +17,21 @@ function storeBehaviorSuite(label: string, make: () => HoldingsStore) {
     it('stage 推导默认值：currency 按 market、account 缺省、kind 缺省 real', async () => {
       const store = make()
       const { ids, revision } = await store.stage([
-        sampleInput({ market: 'crypto', symbol: 'BTCUSDT', size: 0.5 }),
-        sampleInput({ market: 'us', symbol: 'AAPL', size: 10 }),
-        sampleInput({ market: 'cn', symbol: '002714.SZ', size: 100 }),
-        sampleInput({ market: 'hk', symbol: '00700.HK', size: 200 }),
+        sampleInput({ market: 'cn', symbol: '600519.SH', size: 100 }),
+        sampleInput({ market: 'cn', symbol: '000001.SZ', size: 200 }),
+        sampleInput({ market: 'cn', symbol: '510050.SH', size: 400 }),
+        sampleInput({ market: 'cn', symbol: '601318.SH', size: 300 }),
       ])
       expect(revision).toBe(1)
       expect(ids).toHaveLength(4)
       const snap = await store.snapshot()
       expect(snap.staged).toHaveLength(4)
       expect(snap.holdings).toHaveLength(0)
-      const byMarket = new Map(snap.staged.map(h => [h.market, h]))
-      expect(byMarket.get('crypto')?.currency).toBe('USDT')
-      expect(byMarket.get('us')?.currency).toBe('USD')
-      expect(byMarket.get('cn')?.currency).toBe('CNY')
-      expect(byMarket.get('hk')?.currency).toBe('HKD')
+      const bySymbol = new Map(snap.staged.map(h => [h.symbol, h]))
+      expect(bySymbol.get('600519.SH')?.currency).toBe('CNY')
+      expect(bySymbol.get('000001.SZ')?.currency).toBe('CNY')
+      expect(bySymbol.get('510050.SH')?.currency).toBe('CNY')
+      expect(bySymbol.get('601318.SH')?.currency).toBe('CNY')
       for (const h of snap.staged) {
         expect(h.id).toMatch(/^hd-\d+-[a-z0-9]+$/)
         expect(h.account).toBe('默认账户')
@@ -46,53 +46,52 @@ function storeBehaviorSuite(label: string, make: () => HoldingsStore) {
     it('stage 保留显式字段（currency 覆盖 / account / kind=sim / name / entryPrice / note）', async () => {
       const store = make()
       await store.stage([sampleInput({
-        market: 'crypto', symbol: 'ETHUSDT', size: 2,
-        currency: 'USDT', account: '币安', kind: 'sim',
-        name: '以太坊', entryPrice: 3200.5, note: '截图导入',
+        // B股美元计价：HoldingCurrency 多币种枚举保留，显式 currency 覆盖市场默认推导
+        market: 'cn', symbol: '900901.SH', size: 200,
+        currency: 'USD', account: 'B股账户', kind: 'sim',
+        name: '云天化B', entryPrice: 0.52, note: '截图导入',
       })])
       const snap = await store.snapshot()
       const h = snap.staged[0]
       expect(h).toMatchObject({
-        currency: 'USDT', account: '币安', kind: 'sim',
-        name: '以太坊', entryPrice: 3200.5, note: '截图导入',
+        currency: 'USD', account: 'B股账户', kind: 'sim',
+        name: '云天化B', entryPrice: 0.52, note: '截图导入',
       })
     })
 
     it('stage 校验失败整体拒绝（负 size），不产生半解析暂存', async () => {
       const store = make()
       await expect(store.stage([
-        sampleInput({ symbol: 'AAPL', size: 10 }),
-        sampleInput({ symbol: 'TSLA', size: -3 }),
+        sampleInput({ symbol: '600519.SH', size: 10 }),
+        sampleInput({ symbol: '000001.SZ', size: -3 }),
       ])).rejects.toThrow(HoldingValidationError)
       const snap = await store.snapshot()
       expect(snap.staged).toHaveLength(0)
       expect(snap.revision).toBe(0)
     })
 
-    it('confirm 迁移到正式区并应用 edits；market 变更未显式给 currency 时重推导', async () => {
+    it('confirm 迁移到正式区并应用 edits；currency 保持按 market 推导值', async () => {
       const store = make()
       const { ids } = await store.stage([
-        sampleInput({ market: 'us', symbol: 'AAPL', size: 10 }),
-        sampleInput({ market: 'hk', symbol: '00700.HK', size: 200 }),
+        sampleInput({ market: 'cn', symbol: '600519.SH', size: 100 }),
+        sampleInput({ market: 'cn', symbol: '000001.SZ', size: 200 }),
       ])
       const revAfterStage = (await store.snapshot()).revision
       const result = await store.confirm(ids, {
-        [ids[0]!]: { size: 12, account: '富途' },
-        // 截图市场看走眼：us → hk，未显式给 currency → 按新 market 重推导 HKD
-        [ids[1]!]: { market: 'us' },
+        [ids[0]!]: { size: 120, account: '华泰' },
+        [ids[1]!]: { entryPrice: 12.5, note: '补录成本' },
       })
       expect(result.confirmed).toEqual(ids)
       expect(result.revision).toBe(revAfterStage + 1)
       const snap = await store.snapshot()
       expect(snap.staged).toHaveLength(0)
       expect(snap.holdings).toHaveLength(2)
-      const aapl = snap.holdings.find(h => h.symbol === 'AAPL')
-      expect(aapl).toMatchObject({ size: 12, account: '富途', currency: 'USD' })
-      // 第二条原 hk/00700.HK，edits 改 market=us → currency 重推导为 USD
-      const tencent = snap.holdings.find(h => h.symbol === '00700.HK')
-      expect(tencent?.market).toBe('us')
-      expect(tencent?.currency).toBe('USD')
-      expect(tencent?.id).toBe(ids[1]!)
+      const maotai = snap.holdings.find(h => h.symbol === '600519.SH')
+      expect(maotai).toMatchObject({ size: 120, account: '华泰', currency: 'CNY' })
+      // 第二条 edits 只补 entryPrice/note，currency 维持写入侧推导的 CNY
+      const payh = snap.holdings.find(h => h.symbol === '000001.SZ')
+      expect(payh).toMatchObject({ entryPrice: 12.5, note: '补录成本', currency: 'CNY' })
+      expect(payh?.id).toBe(ids[1]!)
     })
 
     it('confirm 未知 id 静默跳过；全部未知 = 幂等 no-op（revision 不动）', async () => {
@@ -111,8 +110,8 @@ function storeBehaviorSuite(label: string, make: () => HoldingsStore) {
     it('confirm 坏 edits 整体拒绝：两区状态不变', async () => {
       const store = make()
       const { ids } = await store.stage([
-        sampleInput({ symbol: 'AAPL' }),
-        sampleInput({ symbol: 'TSLA' }),
+        sampleInput({ symbol: '600519.SH' }),
+        sampleInput({ symbol: '000001.SZ' }),
       ])
       const before = await store.snapshot()
       await expect(store.confirm(ids, { [ids[1]!]: { size: -1 } })).rejects.toThrow(HoldingValidationError)
@@ -124,7 +123,7 @@ function storeBehaviorSuite(label: string, make: () => HoldingsStore) {
 
     it('discard 移除待确认条目；未知 id 幂等 no-op', async () => {
       const store = make()
-      const { ids } = await store.stage([sampleInput(), sampleInput({ symbol: 'TSLA' })])
+      const { ids } = await store.stage([sampleInput(), sampleInput({ symbol: '000001.SZ' })])
       const rev1 = (await store.snapshot()).revision
       const result = await store.discard([ids[0]!, 'hd-ghost'])
       expect(result.discarded).toEqual([ids[0]!])
@@ -199,7 +198,7 @@ function storeBehaviorSuite(label: string, make: () => HoldingsStore) {
     it('revision 跨操作单调自增', async () => {
       const store = make()
       const { ids } = await store.stage([sampleInput()])
-      await store.add(sampleInput({ symbol: 'TSLA' }))
+      await store.add(sampleInput({ symbol: '000001.SZ' }))
       await store.confirm(ids)
       const snap = await store.snapshot()
       expect(snap.revision).toBe(3)
@@ -241,19 +240,19 @@ describe('Holdings Store', () => {
     it('落盘形状为 { revision, staged, holdings } 且新实例可回读', async () => {
       const file = await freshPath()
       const store1 = createFileHoldingsStore(file)
-      const { ids } = await store1.stage([sampleInput({ market: 'crypto', symbol: 'BTCUSDT', size: 0.5 })])
+      const { ids } = await store1.stage([sampleInput({ market: 'cn', symbol: '600519.SH', size: 100 })])
       await store1.confirm(ids)
       const raw = JSON.parse(await readFile(file, 'utf8'))
       expect(Object.keys(raw).sort()).toEqual(['holdings', 'revision', 'staged'])
       expect(raw.revision).toBe(2)
       expect(raw.staged).toHaveLength(0)
       expect(raw.holdings).toHaveLength(1)
-      expect(raw.holdings[0].currency).toBe('USDT')
+      expect(raw.holdings[0].currency).toBe('CNY')
       // 新实例从磁盘装载（重启语义）
       const store2 = createFileHoldingsStore(file)
       const snap = await store2.snapshot()
       expect(snap.revision).toBe(2)
-      expect(snap.holdings[0]?.symbol).toBe('BTCUSDT')
+      expect(snap.holdings[0]?.symbol).toBe('600519.SH')
     })
 
     it('坏 JSON 文件回退空台账（不崩）', async () => {

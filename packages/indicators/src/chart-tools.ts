@@ -86,11 +86,11 @@ export function createIndicatorActivateTool(options: IndicatorActivateToolOption
       },
       market: {
         type: 'string',
-        description: 'Optional market vocabulary slug (crypto | us | cn | hk). Must be supplied together with symbol to write a per-symbol override.',
+        description: 'Optional market vocabulary slug (cn). Must be supplied together with symbol to write a per-symbol override.',
       },
       symbol: {
         type: 'string',
-        description: 'Optional market-canonical symbol exactly as the chart uses it (e.g. "00700.HK", "002714.SZ", "AAPL"). Requires market.',
+        description: 'Optional market-canonical symbol exactly as the chart uses it (e.g. "600519.SH", "002714.SZ"). Requires market.',
       },
     },
     output: {
@@ -184,7 +184,7 @@ export function createIndicatorDeactivateTool(options: IndicatorDeactivateToolOp
       + 'Without market/symbol: removes the active chart instance entirely — the indicator definition stays in the library '
       + '(use indicator_delete to remove a custom indicator definition entirely). '
       + 'With market (optionally plus symbol): the instance stays active but is hidden for that whole market '
-      + '(e.g. hide an HK/CN-only indicator on us and crypto) or just that one instrument — '
+      + '(e.g. hide an indicator on a whole market) or just that one instrument — '
       + 'other scopes keep rendering it; indicator_activate with the same market+symbol shows it again. '
       + 'Use indicator_list to see the currently active roster.',
     parameters: {
@@ -195,11 +195,11 @@ export function createIndicatorDeactivateTool(options: IndicatorDeactivateToolOp
       },
       market: {
         type: 'string',
-        description: 'Optional market slug (crypto | us | cn | hk). With market: hide instead of unmount — hides every instrument of that market.',
+        description: 'Optional market slug (cn). With market: hide instead of unmount — hides every instrument of that market.',
       },
       symbol: {
         type: 'string',
-        description: 'Optional market-canonical symbol (requires market): hide only this one instrument (e.g. "AAPL").',
+        description: 'Optional market-canonical symbol (requires market): hide only this one instrument (e.g. "600519.SH").',
       },
     },
     output: {

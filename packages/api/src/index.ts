@@ -1,7 +1,7 @@
 /**
- * @dshtrading/api — 纯类型契约包（crypto-slice-plan §关键接口草案）。
+ * @dshtrading/api — 纯类型契约包。
  *
- * 零运行时、零依赖：服务契约由连接器实现（ctx 键按市场命名空间，如 ctx.tradingCrypto），
+ * 零运行时、零依赖：服务契约由连接器实现（ctx 键按市场命名空间，如 ctx.tradingCn），
  * 消费方只依赖这里的类型。交易安全闸门（铁律 #3）在类型层面体现为
  * OrderRequest.dryRun 默认 true、错误词汇含 LIVE_TRADING_DISABLED / APPROVAL_DENIED。
  *
@@ -11,7 +11,7 @@
 // cordis Context augmentation 的解析锚点：无此 type-only import，TS2664 下 augmentation 整体失效。
 import type {} from '@deepseek-ai/cordis'
 
-/** K线周期（Binance 现货/合约 interval 词汇）。 */
+/** K线周期（与主流行情源 interval 词汇对齐）。 */
 export type Interval =
   | '1m'
   | '3m'
@@ -31,7 +31,7 @@ export type Interval =
 
 /** 最新行情快照（公共数据，无需凭证）。 */
 export interface Ticker {
-  /** 交易对符号，**市场规范词汇**（docs/symbol-vocabulary.md：crypto=BTCUSDT，us=AAPL，cn=600519.SH，hk=00700.HK）。 */
+  /** 交易对符号，**市场规范词汇**（docs/symbol-vocabulary.md：cn=600519.SH）。 */
   readonly symbol: string
   /** 标的/公司名称（如“紫光股份”、“苹果”、“腾讯控股”；部分数据源可缺省）。 */
   readonly name?: string
@@ -60,61 +60,6 @@ export interface Kline {
   readonly close: number
   readonly volume: number
   readonly closeTime: number
-}
-
-/** 衍生品市场指标快照（持仓量/多空比/资金费等）。 */
-export interface DerivativesData {
-  /** 交易对符号，市场规范词汇（如 BTCUSDT 或 BTCUSDT-SWAP）。 */
-  readonly symbol: string
-  /** 数据来源（如 binance / okx）。 */
-  readonly source: string
-  /** 未平仓合约量（Open Interest，base 币数或张数）。 */
-  readonly openInterest?: number
-  /** 未平仓合约总价值（USD 或 quote 计价）。 */
-  readonly openInterestValue?: number
-  /** 多空人数比（Long/Short Account Ratio）。 */
-  readonly longShortRatio?: number
-  /** 大户持仓多空比（Top Trader Long/Short Position Ratio）。 */
-  readonly topTraderLongShortRatio?: number
-  /** 主动买入/卖出量比（Taker Buy/Sell Volume Ratio）。 */
-  readonly takerBuySellRatio?: number
-  /** 最新资金费率（小数，如 0.0001 表示 0.01%）。 */
-  readonly fundingRate?: number
-  /** 预测（下一期）资金费率（小数；交易所未发布预测时缺省，issue #54）。 */
-  readonly nextFundingRate?: number
-  /** 下一期资金费率结算时间（epoch ms，GUI 倒计时用，issue #54）。 */
-  readonly nextFundingTime?: number
-  /** 标记价格（Mark Price，永续合约；issue #54 基差卡用）。 */
-  readonly markPrice?: number
-  /** 指数价格（Index Price，现货指数；与 markPrice 配对计算基差）。 */
-  readonly indexPrice?: number
-  /** 快照时间（epoch ms）。 */
-  readonly timestamp: number
-}
-
-/** 衍生品时序数据点（资金费率历史 / OI 历史共用词汇，issue #54）。 */
-export interface DerivativesPoint {
-  /** 采样时间（epoch ms）。 */
-  readonly time: number
-  /** 采样值（费率序列为小数费率；OI 序列单位与快照 openInterest 同语义）。 */
-  readonly value: number
-}
-
-/**
- * 衍生品历史序列（GUI「衍生品」页签趋势卡用，issue #54）：
- * 资金费率历史 + 未平仓量历史，时间一律升序（旧→新，与 K 线序列同向）。
- * 可选方法 getDerivativesHistory 的返回面；任一序列不可得时该字段缺省，
- * 消费方按卡降级（隐藏趋势图、保留快照读数）。
- */
-export interface DerivativesHistory {
-  /** 交易对符号，市场规范词汇（如 BTCUSDT-SWAP）。 */
-  readonly symbol: string
-  /** 数据来源（如 binance / okx）。 */
-  readonly source: string
-  /** 资金费率历史（时间升序，value 为小数费率）。 */
-  readonly fundingRates?: DerivativesPoint[]
-  /** OI 历史（时间升序，value 单位与 DerivativesData.openInterest 同语义）。 */
-  readonly openInterest?: DerivativesPoint[]
 }
 
 /* ── CN ETF 期权（只读分析面，2026-09-08）──────────────────────────────── */
@@ -246,31 +191,9 @@ export interface CnOptionsService {
   getStrategy(request: OptionStrategyRequest): Promise<OptionStrategyResult>
 }
 
-/** 加密标的代币经济学与基本面快照。 */
-export interface CryptoFundamentals {
-  /** 规范符号或代币代码（如 BTCUSDT 或 BTC）。 */
-  readonly symbol: string
-  /** 标的资产名称（如 Bitcoin）。 */
-  readonly name?: string
-  /** 全球市值排名（Market Cap Rank）。 */
-  readonly rank?: number
-  /** 流通市值（USD 计价）。 */
-  readonly marketCapUsd?: number
-  /** 完全稀释估值（FDV，USD 计价）。 */
-  readonly fdvUsd?: number
-  /** 流通供应量。 */
-  readonly circulatingSupply?: number
-  /** 总供应量 / 最大供应量。 */
-  readonly totalSupply?: number
-  /** 24h 交易量（USD 计价）。 */
-  readonly volume24hUsd?: number
-  /** 快照时间（epoch ms）。 */
-  readonly timestamp: number
-}
-
-/** 股票市场标的基本面与财务估值快照（US/CN/HK）。 */
+/** 股票市场标的基本面与财务估值快照（CN）。 */
 export interface StockFundamentals {
-  /** 标的规范符号（如 AAPL, 600519.SH, 00700.HK）。 */
+  /** 标的规范符号（如 600519.SH）。 */
   readonly symbol: string
   /** 公司/标的名称。 */
   readonly name?: string
@@ -310,7 +233,7 @@ export interface StockFundamentals {
   readonly timestamp: number
 }
 
-/** 盘口档位（价格 + 挂单量，量单位=标的基准单位：股票股、crypto 币）。 */
+/** 盘口档位（价格 + 挂单量，量单位=标的基准单位：股票股）。 */
 export interface OrderbookLevel {
   readonly price: number
   readonly amount: number
@@ -318,7 +241,7 @@ export interface OrderbookLevel {
 
 /**
  * 盘口快照（GUI「盘口」竖栏用，issue #39）。实现保证：bids 按价格降序（买一在前）、
- * asks 按价格升序（卖一在前），档位数由数据源决定（沪深五档、crypto 常见 5~20 档）。
+ * asks 按价格升序（卖一在前），档位数由数据源决定（沪深五档）。
  */
 export interface Orderbook {
   readonly symbol: string
@@ -367,7 +290,7 @@ export interface FinancialReportGroup {
 
 /** 历史多期财务报表与指标矩阵（富途牛牛同款）。 */
 export interface FinancialReportMatrix {
-  /** 币种（如 CNY / HKD / USD）。 */
+  /** 币种（如 CNY）。 */
   readonly currency: string
   /** 最新报告期标题（如 "2026财年H1 财报"）。 */
   readonly latestReportTitle?: string
@@ -577,7 +500,6 @@ export interface FundamentalsPackage {
   readonly market: string
   readonly symbol: string
   readonly stock?: StockFundamentals
-  readonly crypto?: CryptoFundamentals
   readonly matrix?: FinancialReportMatrix
   readonly profile?: CompanyProfile
   readonly shareholders?: ShareholderItem[]
@@ -675,7 +597,7 @@ export interface Disposable {
 }
 
 /**
- * 行情服务契约：由市场连接器实现，注册到按市场命名空间的 ctx 键（如 ctx.tradingCrypto）。
+ * 行情服务契约：由市场连接器实现，注册到按市场命名空间的 ctx 键（如 ctx.tradingCnMarketData）。
  * 符号词汇（2026-08-31 规范，docs/symbol-vocabulary.md）：入参接受市场规范形与连接器原生形，
  * 输出 `symbol` 一律市场规范形——消费方（GUI/Agent/工作流）与数据源方言解耦。
  */
@@ -686,33 +608,19 @@ export interface MarketDataService {
   /**
    * 查询本市场/交易所支持的全部标的名册（动态全集，Issue #15）。
    * 输出 `symbol` 一律市场规范词汇（docs/symbol-vocabulary.md）。
-   * 可选方法：无公开全集端点的数据源（如 tencent/yahoo/stooq）可缺省或由桥/前端回退。
+   * 可选方法：无公开全集端点的数据源可缺省或由桥/前端回退。
    */
   listInstruments?(): Promise<Array<{ symbol: string; name?: string }>>
   /**
    * 标的基本面与估值快照（GUI「基本面」页签用，2026-09-02）。
    * 可选方法：仅当数据源在同一公共端点里携带基本面字段时实现
-   * （腾讯行情行 cn/hk 已实现）；未实现的市场由消费方降级为派生数据（日K 52 周高低）。
+   * （腾讯行情行 cn 已实现）；未实现的市场由消费方降级为派生数据（日K 52 周高低）。
    * 输出 `symbol` 一律市场规范词汇（docs/symbol-vocabulary.md）。
    */
   getFundamentals?(symbol: string): Promise<StockFundamentals>
   /**
-   * 衍生品市场指标快照（GUI「衍生品」面板用，issue #38，2026-09-02）：持仓量/
-   * 多空比/资金费等微观结构数据，crypto 永续合约市场专属。
-   * 可选方法：现货/股票数据源不实现；未实现时消费方直接隐藏面板（不降级不报错）。
-   * 入参接受规范形与连接器原生形，输出 `symbol` 一律规范词汇 SWAP 形（BTCUSDT-SWAP）。
-   */
-  getDerivatives?(symbol: string): Promise<DerivativesData>
-  /**
-   * 衍生品历史序列（GUI「衍生品」页签趋势卡用，issue #54）：资金费率历史 +
-   * OI 历史，时间升序。可选方法：无公开历史端点的数据源不实现；未实现或失败
-   * 时消费方隐藏趋势图、保留快照读数（与快照同族的降级纪律）。
-   * 入参接受规范形与连接器原生形，输出 symbol 一律规范词汇 SWAP 形。
-   */
-  getDerivativesHistory?(symbol: string): Promise<DerivativesHistory>
-  /**
    * 盘口快照（GUI「盘口」竖栏用，issue #39）：档位词汇见 Orderbook。可选方法：
-   * 数据源无盘口能力时不实现（如 stooq/yahoo、腾讯 r_hk 港股行档位全 0）。
+   * 数据源无盘口能力时不实现（消费方降级为「该市场未提供盘口」）。
    * 入参接受规范形与连接器原生形，输出 `symbol` 一律市场规范词汇。
    */
   getOrderbook?(symbol: string): Promise<Orderbook>
@@ -728,19 +636,19 @@ export interface MarketDataService {
  * 交易服务契约：placeOrder 默认 dry-run；实盘前必须过插件 liveTrading 开关与
  * ctx.approval.request（交互形态；headless 下 ask=deny，fail-closed [S4]）。
  *
- * R3（okx 切片 2026-08-29）修订：cancelOrder 增加可选 symbol、新增 getOrder——
- * OKX 按 (instId, ordId) 双键定位订单，单参 id 形态不够；无其他实现方，扩展向后兼容。
+ * cancelOrder 的可选 symbol 与 getOrder 的 (symbol, id) 双键定位是历史切片
+ * （2026-08-29）沿用的形态：按双键定位订单的交易所需要，其余实现方可忽略。
  */
 export interface TradeService {
   placeOrder(req: OrderRequest): Promise<Order>
-  /** 撤单。symbol 可选：按 (symbol, id) 双键定位订单的交易所（如 OKX）必须提供。 */
+  /** 撤单。symbol 可选：按 (symbol, id) 双键定位订单的通道建议提供。 */
   cancelOrder(id: string, symbol?: string): Promise<void>
   /** 查询单笔订单状态（按 (symbol, id) 双键）。 */
   getOrder(symbol: string, id: string): Promise<Order>
   getPositions(): Promise<Position[]>
   /**
    * 账户余额快照（issue #40 GUI 交易台；只读，需凭证）。
-   * 可选方法：实现方已有只读余额面时实现（connector-okx 的 crypto_get_balance 同源）。
+   * 可选方法：实现方已有只读余额面时实现。
    */
   getBalances?(): Promise<AccountBalance[]>
   /**
@@ -799,20 +707,8 @@ export interface TradingError {
  */
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** crypto 市场行情服务（由 Binance 连接器以公共 REST 提供，无需凭证）。 */
-    tradingCryptoMarketData: MarketDataService
-    /** us 市场行情服务（由 Stooq 连接器以公共 CSV 端点提供，无需凭证；us 复制 2026-08-31 补齐）。 */
-    tradingUsMarketData: MarketDataService
-    /** cn 市场行情服务（由腾讯连接器以公共端点提供，无需凭证；cn+hk 切片 2026-08-31 补齐）。 */
+    /** cn 市场行情服务（由腾讯连接器以公共端点提供，无需凭证）。 */
     tradingCnMarketData: MarketDataService
-    /** hk 市场行情服务（由腾讯连接器同包双实例提供，config.market 分流；cn+hk 切片 2026-08-31 补齐）。 */
-    tradingHkMarketData: MarketDataService
-    /**
-     * crypto 市场交易服务（R3 2026-08-29 补齐，crypto 市场第一个真实 TradeService）：
-     * 由 connector-okx 实现（签名 demo/live 下单），与 connector-binance 经
-     * Config.enabled 互斥激活同一 tradingCryptoMarketData 键时一并 provide。
-     */
-    tradingCryptoTrade: TradeService
     /**
      * 交易服务注册表（issue #40 GUI 交易台，@dshtrading/api 类型声明）：
      * 与 tradingMarketDataRegistry 同构的宿主平面注册面——交易连接器 host 面数据行
@@ -856,9 +752,9 @@ declare module '@deepseek-ai/cordis' {
  * 落地时 TradeService 走独立注册面（不复用本键），铁律 #4 到时再抽象。
  */
 export interface MarketDataRegistration {
-  /** 市场 slug（crypto/us/cn/hk；开放词汇，新市场 = 新键）。 */
+  /** 市场 slug（cn；开放词汇，新市场 = 新键）。 */
   readonly market: string
-  /** 提供者 slug（binance/okx/…；开放词汇，第三方连接器可注册新 slug）。 */
+  /** 提供者 slug（tencent/eastmoney/tushare/qmt/…；开放词汇，第三方连接器可注册新 slug）。 */
   readonly provider: string
   readonly service: MarketDataService
 }
@@ -915,7 +811,7 @@ export interface MarketRouterService {
 
 /** 新闻/快讯条目（各市场 Kit 统一输出形状）。 */
 export interface NewsItem {
-  /** 来源标识（如 'eastmoney'、'yahoo'、'googlenews'、'binance'、'coindesk' 等）。 */
+  /** 来源标识（如 'eastmoney'、'eastmoney-announcement'、'cninfo-announcement'）。 */
   readonly source: string
   /** 新闻/快讯标题。 */
   readonly title: string
@@ -935,8 +831,6 @@ export interface AggregateNewsOptions {
   windowHours?: number | undefined
   /** 按标的代码过滤（可选）。 */
   symbol?: string | undefined
-  /** CryptoPanic API token（仅 crypto 市场使用，可选）。 */
-  cryptoPanicKey?: string | undefined
 }
 
 /** 新闻聚合结果。 */

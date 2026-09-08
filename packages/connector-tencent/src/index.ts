@@ -1,16 +1,13 @@
 /**
- * 腾讯行情连接器插件（dsh-trading cn+hk 双市场切片）：**单包双市场**——这是手册
- * （docs/replication.md §1-§4「一市场一连接器包」）之外的**多实例新模式**：
+ * 腾讯行情连接器插件（dsh-trading cn 市场切片）：**cn 单市场**——经腾讯公共行情
+ * 端点提供 A 股 `MarketDataService` 与 `cn_*` 三工具。
  *
- *   - 同一个插件包（插件名 `dsh-trading-tencent`，export const name）被挂载两次，
- *     preset 行用**不同行 id**（`dsh-trading-cn-connector` / `dsh-trading-hk-connector`）
- *     指向**同一 bare 包名**（`@dshtrading/connector-tencent`），以 `config.market`
- *     分流 cn/hk（行 id 即命名空间——不同 id 即两个独立实例，互不整行替换）；
- *   - provide 服务键按实例分流：cn → `tradingCnMarketData`，hk → `tradingHkMarketData`
- *     （api 包 Context 模块增强统一声明两个键）；
- *   - 工具按市场注册：market=cn 挂 `cn_get_ticker/cn_get_klines/cn_place_order`，
- *     market=hk 挂 `hk_` 同名三件。工具前缀落在 base 闸门模式
- *     `/^(?:crypto|us|cn|hk)_(?:place|cancel)_order$/` 内，闸门接线与 crypto/us 同构。
+ *   - 插件名 `dsh-trading-tencent`（export const name），Config.market 恒为 'cn'
+ *     （cn bundle 的 preset 行与 dataplane 行仍传 market: cn，字段保留以兼容行配置；
+ *     本仓多市场已收敛为仅 cn，历史的 cn/hk 单包双市场分流模式移除）；
+ *   - provide 服务键 `tradingCnMarketData`（api 包 Context 模块增强声明该键）；
+ *   - 工具注册 `cn_get_ticker/cn_get_klines/cn_place_order`，工具前缀落在 base 闸门
+ *     模式 `/^cn_(?:place|cancel)_order$/` 内，闸门接线与其它 cn 连接器同构。
  *
  * 下单三段闸门语义照抄 crypto/us 切片（README 铁律 #3 / S4 修订）；审批不在工具内做。
  * 腾讯本身无交易 API——live 路径恒为 TRADING_NOT_IMPLEMENTED（券商 API 是后续任务）。
@@ -28,27 +25,25 @@ import Schema from '@deepseek-ai/schemastery'
 import type { Disposable, Interval, Kline, MarketDataService, Orderbook, StockFundamentals, Ticker } from '@dshtrading/api'
 import {
   INTERVAL_VOCABULARY,
-  type TencentMarket,
   type TencentRestOptions,
   type TencentTicker,
   TencentRestClient,
   TradingServiceError,
-  normalizeSymbol,
+  normalizeCnSymbol,
 } from './rest.js'
 
 export * from './rest.js'
 
 /**
- * Cordis 插件名：`dsh-trading-*` 命名空间（TEMPLATES §8）。**两个 preset 实例共享此
- * 插件名**——实例区分靠 preset 行 id（dsh-trading-cn-connector / dsh-trading-hk-connector）
- * 与 config.market，不再依赖插件名后缀（单包双市场与 crypto/us 的「一市场一插件名」不同）。
+ * Cordis 插件名：`dsh-trading-*` 命名空间（TEMPLATES §8）。
  */
 export const name = 'dsh-trading-tencent'
 
-export type MarketOption = TencentMarket
+/** 市场标识：本包为 cn 单市场（类型保留供 Config 与工具命名引用）。 */
+export type MarketOption = 'cn'
 
 export interface Config {
-  /** 市场分流（单包双市场的核心开关）：cn = A 股，hk = 港股。 */
+  /** 市场标识：cn 单市场（preset/dataplane 行仍传 market: cn，字段保留兼容行配置）。 */
   market: MarketOption
   /** 交易安全闸门（铁律 #3）：true 时下单类工具强制 dry-run。 */
   dryRun: boolean
@@ -57,7 +52,7 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  market: Schema.union(['cn', 'hk']).required(),
+  market: Schema.union(['cn']).required(),
   dryRun: Schema.boolean().default(true),
   liveTrading: Schema.boolean().default(false),
 })
@@ -66,15 +61,10 @@ export const Config: Schema<Config> = Schema.object({
 export const inject = ['tools']
 
 /* ------------------------------------------------------------------ */
-/* 服务键（按实例分流；api 包 Context 模块增强声明了两个键）                    */
+/* 服务键（api 包 Context 模块增强声明）                                       */
 /* ------------------------------------------------------------------ */
 
 export const TRADING_CN_MARKET_DATA_KEY = 'tradingCnMarketData'
-export const TRADING_HK_MARKET_DATA_KEY = 'tradingHkMarketData'
-
-export function marketDataKey(market: MarketOption): string {
-  return market === 'hk' ? TRADING_HK_MARKET_DATA_KEY : TRADING_CN_MARKET_DATA_KEY
-}
 
 export interface SubscribeTickerOptions {
   /** 轮询间隔（ms）。subscribeTicker 以快照轮询实现（腾讯公共端点无推送面）。 */
@@ -90,12 +80,11 @@ export class TencentMarketDataService extends Service implements MarketDataServi
 
   constructor(
     ctx: Context,
-    market: MarketOption,
     options: TencentRestOptions = {},
     name: string = TRADING_CN_MARKET_DATA_KEY,
   ) {
     super(ctx, name)
-    this.client = new TencentRestClient(market, options)
+    this.client = new TencentRestClient(options)
   }
 
   getTicker(symbol: string): Promise<TencentTicker> {
@@ -109,7 +98,6 @@ export class TencentMarketDataService extends Service implements MarketDataServi
 
   /**
    * 盘口快照（MarketDataService 可选契约，issue #39）：同一报价行五档字段。
-   * hk 实例结构性不支持（r_hk 行档位全 0，getOrderbook 内按 NOT_IMPLEMENTED 拒绝）。
    */
   getOrderbook(symbol: string): Promise<Orderbook> {
     return this.client.getOrderbook(symbol)
@@ -136,12 +124,12 @@ export class TencentMarketDataService extends Service implements MarketDataServi
 }
 
 /* ------------------------------------------------------------------ */
-/* <market>_place_order（交易安全闸门：铁律 #3 修订版 [S4]，三路径照抄 crypto/us） */
+/* cn_place_order（交易安全闸门：铁律 #3 修订版 [S4]，三路径照抄 crypto/us）     */
 /* ------------------------------------------------------------------ */
 
-/** <market>_place_order 参数契约（dryRun 缺省 true）。 */
+/** cn_place_order 参数契约（dryRun 缺省 true）。 */
 export interface PlaceOrderArgs {
-  /** A 股 6 位代码（600519/SH600519）或港股 1-5 位代码（00700/700）。 */
+  /** A 股 6 位代码（600519/SH600519）。 */
   readonly symbol: string
   readonly side: 'BUY' | 'SELL'
   readonly type: 'MARKET' | 'LIMIT'
@@ -178,10 +166,9 @@ export function evaluateOrderGate(config: Config, args: PlaceOrderArgs): OrderGa
 /** 参数校验（模型调用问题抛普通 Error；服务故障才用错误词汇）。 */
 function validatePlaceOrderArgs(market: MarketOption, args: PlaceOrderArgs): void {
   try {
-    normalizeSymbol(market, args.symbol)
+    normalizeCnSymbol(args.symbol)
   } catch (cause) {
-    const expected = market === 'hk' ? 'an HK code like 00700 or 700' : 'a CN A-share code like 600519 or SH600519'
-    throw new Error(`${market}_place_order: invalid symbol ${JSON.stringify(args.symbol)} — expected ${expected}`, { cause })
+    throw new Error(`${market}_place_order: invalid symbol ${JSON.stringify(args.symbol)} — expected a CN A-share code like 600519 or SH600519`, { cause })
   }
   if (args.side !== 'BUY' && args.side !== 'SELL') {
     throw new Error(`${market}_place_order: invalid side ${JSON.stringify(args.side)} — expected BUY or SELL`)
@@ -209,7 +196,7 @@ export async function buildDryRunReceipt(
   args: PlaceOrderArgs,
   marketData: Pick<MarketDataService, 'getTicker'>,
 ): Promise<string> {
-  const symbol = normalizeSymbol(market, args.symbol)
+  const symbol = normalizeCnSymbol(args.symbol)
   let reference: Record<string, unknown>
   try {
     const ticker = await marketData.getTicker(symbol)
@@ -247,12 +234,12 @@ export async function buildDryRunReceipt(
 export interface PlaceOrderToolDeps {
   /** 行情服务（dry-run 回执的市价参照），按接口取用，不直连 HTTP。 */
   readonly marketData: Pick<MarketDataService, 'getTicker'>
-  /** 插件配置（market 分流 + dryRun 强制模拟 / liveTrading 总闸门）。 */
+  /** 插件配置（dryRun 强制模拟 / liveTrading 总闸门）。 */
   readonly config: Config
 }
 
 /**
- * <market>_place_order 工具工厂（独立导出便于单测三条闸门路径）。
+ * cn_place_order 工具工厂（独立导出便于单测三条闸门路径）。
  *
  * 审批不在这里做：dryRun!==true 的调用由 @dshtrading/base 的 gate 插件在
  * `tools/pre-execute` waterfall 统一 ask（S4：headless 下 ask=deny，fail-closed）。
@@ -262,16 +249,14 @@ export function createPlaceOrderTool(deps: PlaceOrderToolDeps) {
   return defineTool({
     name: `${market}_place_order`,
     description:
-      `Place a ${market === 'hk' ? 'Hong Kong' : 'China A-share'} stock order, or simulate one. dryRun defaults to true and returns a DRY-RUN `
+      'Place a China A-share stock order, or simulate one. dryRun defaults to true and returns a DRY-RUN '
       + 'simulated fill receipt referencing the latest Tencent public quote. Real execution (dryRun=false) requires the '
       + 'plugin liveTrading switch plus user approval, and is not implemented yet in this slice (Tencent has no trading API).',
     parameters: {
       symbol: {
         type: 'string',
         required: true,
-        description: market === 'hk'
-          ? 'HK stock code, e.g. 00700 or 700 (normalized internally)'
-          : 'CN A-share code, e.g. 600519 / SH600519 / sz000001 (normalized internally)',
+        description: 'CN A-share code, e.g. 600519 / SH600519 / sz000001 (normalized internally)',
       },
       side: {
         type: 'string',
@@ -330,11 +315,10 @@ export function createPlaceOrderTool(deps: PlaceOrderToolDeps) {
 
 export function apply(ctx: Context, config: Config): void {
   const market = config.market
-  const key = marketDataKey(market)
+  const key = TRADING_CN_MARKET_DATA_KEY
 
-  // provide：Service 基类随插件 fiber 注册，插件卸载自动注销；服务键按实例分流
-  // （同包双实例互不冲突：cn 实例写 tradingCnMarketData，hk 实例写 tradingHkMarketData）。
-  new TencentMarketDataService(ctx, market, {}, key)
+  // provide：Service 基类随插件 fiber 注册，插件卸载自动注销（键固定 tradingCnMarketData）。
+  new TencentMarketDataService(ctx, {}, key)
 
   // inject：等本实例行情服务就绪后注册工具；工具只面向服务接口，不直连 HTTP。
   ctx.inject([key], (ctx) => {
@@ -344,7 +328,7 @@ export function apply(ctx: Context, config: Config): void {
       defineTool({
         name: `${market}_get_ticker`,
         description:
-          `Get the latest market snapshot for a ${market === 'hk' ? 'Hong Kong (HKEX)' : 'China A-share'} stock via the `
+          'Get the latest market snapshot for a China A-share stock via the '
           + 'Tencent public quote endpoint (qt.gtimg.cn). Returns price, open/high/low, prev close, volume (shares) and '
           + 'quote time. No credentials required; Tencent public endpoint, no official authorization — personal use at '
           + 'your own discretion per Tencent terms.',
@@ -352,9 +336,7 @@ export function apply(ctx: Context, config: Config): void {
           symbol: {
             type: 'string',
             required: true,
-            description: market === 'hk'
-              ? 'HK stock code, e.g. 00700 or 700 (normalized internally)'
-              : 'CN A-share code, e.g. 600519 / SH600519 / sz000001 (normalized internally)',
+            description: 'CN A-share code, e.g. 600519 / SH600519 / sz000001 (normalized internally)',
           },
         },
         output: {
@@ -372,16 +354,14 @@ export function apply(ctx: Context, config: Config): void {
       defineTool({
         name: `${market}_get_klines`,
         description:
-          `Get recent OHLCV candles for a ${market === 'hk' ? 'Hong Kong (HKEX)' : 'China A-share'} stock via the Tencent `
-          + 'public kline endpoint (cn supports 5m/30m/1d/1w/1M; hk supports 1d/1w/1M forward-adjusted qfq). '
+          'Get recent OHLCV candles for a China A-share stock via the Tencent '
+          + 'public kline endpoints (5m/30m via mkline; 1d/1w/1M forward-adjusted qfq via fqkline). '
           + 'No credentials required; Tencent public endpoint, no official authorization — personal use at your own discretion per Tencent terms.',
         parameters: {
           symbol: {
             type: 'string',
             required: true,
-            description: market === 'hk'
-              ? 'HK stock code, e.g. 00700 or 700 (normalized internally)'
-              : 'CN A-share code, e.g. 600519 / SH600519 / sz000001 (normalized internally)',
+            description: 'CN A-share code, e.g. 600519 / SH600519 / sz000001 (normalized internally)',
           },
           interval: {
             type: 'string',

@@ -68,10 +68,10 @@ export function createWatchlistListTool(deps: WatchlistToolDeps) {
   return defineTool({
     name: 'watchlist_list',
     description:
-      'List the user\'s watchlist exactly as displayed in the trading GUI sidebar, across all markets (crypto/us/cn/hk). '
+      'List the user\'s watchlist exactly as displayed in the trading GUI sidebar, across all markets (cn). '
       + 'Rows merge the user\'s customized entries (source "custom") with each market\'s default seed rows (source "seed", '
       + 'shown while that market has no custom edits) — the GUI shows the same rows, so this list IS what the user sees. '
-      + 'It also maps display names to symbols (e.g. 苹果 → AAPL / us, 贵州茅台 → 600519 / cn). '
+      + 'It also maps display names to symbols (e.g. 贵州茅台 → 600519 / cn). '
       + 'ALWAYS call this first when the user mentions any instrument by name or symbol; never conclude an instrument '
       + 'is untracked from docs or connector coverage alone. Read-only.',
     parameters: {},
@@ -108,7 +108,7 @@ export function createWatchlistAddTool(deps: WatchlistToolDeps) {
       market: {
         type: 'string',
         required: true,
-        description: 'Market vocabulary slug: crypto | us | cn | hk',
+        description: 'Market vocabulary slug: cn',
       },
       symbol: {
         type: 'string',
@@ -149,7 +149,7 @@ export function createWatchlistRemoveTool(deps: WatchlistToolDeps) {
       market: {
         type: 'string',
         required: true,
-        description: 'Market vocabulary slug: crypto | us | cn | hk',
+        description: 'Market vocabulary slug: cn',
       },
       symbol: {
         type: 'string',
@@ -187,7 +187,7 @@ export function createWatchlistSelectTool(deps: WatchlistToolDeps) {
       market: {
         type: 'string',
         required: true,
-        description: 'Market vocabulary slug: crypto | us | cn | hk',
+        description: 'Market vocabulary slug: cn',
       },
       symbol: {
         type: 'string',

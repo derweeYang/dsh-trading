@@ -2,7 +2,7 @@
  * 持仓字段校验与默认值推导（纯函数，零 Node.js 依赖，浏览器安全）。
  *
  * 契约 §2：默认值推导（currency/account/kind）在 store 写入侧完成，读侧不做猜测。
- *   - currency 缺省按 market 推导：crypto→USDT, us→USD, cn→CNY, hk→HKD
+ *   - currency 缺省按 market 推导：cn→CNY
  *   - account 缺省 '默认账户'
  *   - kind 缺省 'real'
  */
@@ -15,7 +15,7 @@ import type {
   NewHoldingInput,
 } from './types.ts'
 
-export const HOLDING_MARKETS: readonly HoldingMarket[] = ['crypto', 'us', 'cn', 'hk']
+export const HOLDING_MARKETS: readonly HoldingMarket[] = ['cn']
 export const HOLDING_CURRENCIES: readonly HoldingCurrency[] = ['USD', 'CNY', 'HKD', 'USDT']
 export const HOLDING_KINDS: readonly HoldingKind[] = ['real', 'sim']
 
@@ -37,10 +37,7 @@ export class HoldingValidationError extends Error {
 /** currency 按 market 推导表（契约 §2 定稿映射）。 */
 export function defaultCurrencyForMarket(market: HoldingMarket): HoldingCurrency {
   switch (market) {
-    case 'crypto': return 'USDT'
-    case 'us': return 'USD'
     case 'cn': return 'CNY'
-    case 'hk': return 'HKD'
   }
 }
 
@@ -66,7 +63,7 @@ export function validateNewHoldingInput(input: NewHoldingInput): string[] {
     problems.push(`market 必须是 ${HOLDING_MARKETS.join('|')} 之一（收到 ${JSON.stringify(input.market)}）`)
   }
   if (typeof input.symbol !== 'string' || input.symbol.trim().length === 0) {
-    problems.push('symbol 必填（连接器词汇，如 AAPL / 002714.SZ / BTCUSDT）')
+    problems.push('symbol 必填（连接器词汇，如 002714.SZ）')
   }
   if (typeof input.size !== 'number' || !Number.isFinite(input.size) || input.size <= 0) {
     problems.push(`size 必须是 > 0 的有限数字（收到 ${JSON.stringify(input.size)}）`)

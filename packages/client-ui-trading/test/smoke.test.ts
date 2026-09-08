@@ -28,7 +28,7 @@ function makeCtx(options: { rejection?: number } = {}): {
     get: (name: string) => {
       if (name === 'webServer') return webServer
       if (name === 'connection') return connection
-      if (name === 'tradingCryptoMarketData') {
+      if (name === 'tradingCnMarketData') {
         return {
           getTicker: async (symbol: string) => ({ symbol, price: 42, timestamp: 1 }),
           getKlines: async () => [],
@@ -79,7 +79,7 @@ describe('@dshtrading/client-ui-trading node half', () => {
     await route.handler({ url: '/dshtrading/api/markets', method: 'GET' } as IncomingMessage, res as unknown as ServerResponse)
     expect(head).toBe(200)
     expect(headers['cache-control']).toBe('no-store')
-    expect(JSON.parse(body)).toEqual({ markets: [{ id: 'crypto' }] })
+    expect(JSON.parse(body)).toEqual({ markets: [{ id: 'cn' }] })
   })
 
   it('未认证请求被 connection 栅栏拒绝（401，不进桥）', async () => {

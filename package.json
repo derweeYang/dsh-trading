@@ -1,7 +1,7 @@
 {
   "name": "@dshtrading/root",
   "version": "0.1.0",
-  "description": "Your next trading terminal can also be DSH. Full-market (Crypto/US/CN/HK) modular AI trading terminal and plugin ecosystem on DeepSeek Harness.",
+  "description": "Your next trading terminal can also be DSH. CN-market (A-share / ETF / ETF options) modular AI trading terminal and plugin ecosystem on DeepSeek Harness.",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.9.0",

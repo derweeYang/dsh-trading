@@ -51,10 +51,7 @@ export const inject: string[] = []
 
 /** 行情服务键映射（与 client-ui-trading/bridge 的 MARKET_SERVICE_KEYS 同词汇；本地副本避免跨包依赖）。 */
 const MARKET_SERVICE_KEYS: Record<string, string> = {
-  crypto: 'tradingCryptoMarketData',
-  us: 'tradingUsMarketData',
   cn: 'tradingCnMarketData',
-  hk: 'tradingHkMarketData',
 }
 
 /** 默认存储路径：~/.dsh/strategies/custom.json。 */
@@ -284,12 +281,12 @@ export function createStrategyBacktestTool(deps: StrategyBacktestToolDeps) {
       market: {
         type: 'string',
         required: true,
-        description: 'Market vocabulary: crypto | us | cn | hk',
+        description: 'Market vocabulary: cn',
       },
       symbol: {
         type: 'string',
         required: true,
-        description: 'Market-canonical symbol, e.g. BTCUSDT (crypto), AAPL (us), 600519.SH (cn), 00700.HK (hk)',
+        description: 'Market-canonical symbol, e.g. 600519.SH (cn)',
       },
       interval: {
         type: 'string',

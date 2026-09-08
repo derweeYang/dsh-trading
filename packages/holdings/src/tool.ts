@@ -47,19 +47,19 @@ export function createHoldingsStageTool(store: HoldingsStore, options: HoldingsS
       + '等待用户在资产面板确认入账。这是导入持仓的唯一写入口：**只 stage，绝不直接确认入账**；'
       + '调用后必须在回复中提醒用户「持仓已放入待确认区，请到资产面板确认入账」。'
       + '解析纪律：'
-      + '① market 用词汇表 crypto|us|cn|hk（币安/OKX 等加密所→crypto，美股券商→us，A 股→cn，港股→hk）；'
-      + '② symbol 用连接器词汇（与行情 API 对齐：AAPL / 002714.SZ / BTCUSDT / 00700.HK），截图里的中文名放 name；'
+      + '① market 用词汇表 cn（A 股/ETF→cn；当前台账仅收录 A 股市场）；'
+      + '② symbol 用连接器词汇（与行情 API 对齐：600519.SH / 002714.SZ / 510050.SH），截图里的中文名放 name；'
       + '③ 数字（size/entryPrice）必须原样取自截图，看不清就缺省，绝不编造；entryPrice 截图没有就不填；'
-      + '④ 一张截图一个 account 名：用户未说明时用截图里的券商/交易所名（如「富途」「币安」），都拿不准则缺省；'
+      + '④ 一张截图一个 account 名：用户未说明时用截图里的券商名（如「华泰」「中信」），都拿不准则缺省；'
       + '⑤ 模拟盘截图须显式 kind="sim"，拿不准时缺省（缺省按真实账户 real 处理）；'
-      + '⑥ currency 一般缺省（按 market 自动推导 crypto→USDT/us→USD/cn→CNY/hk→HKD），仅截图明示币种与推导不符时才覆盖。',
+      + '⑥ currency 一般缺省（按 market 自动推导 cn→CNY），仅截图明示币种与推导不符时才覆盖。',
     parameters: {
       itemsJson: {
         type: 'string',
         required: true,
         description:
           'JSON 数组，每项一个持仓条目：'
-          + '[{"market":"us","symbol":"AAPL","size":10,"entryPrice":178.5,"name":"苹果","account":"富途"},...]。'
+          + '[{"market":"cn","symbol":"600519.SH","size":100,"entryPrice":1500.5,"name":"贵州茅台","account":"华泰"},...]。'
           + '必填 market/symbol/size；可选 name/entryPrice/currency/account/kind/note。'
           + '数字原样取自截图；不确定的字段整个缺省，不要编造。',
       },

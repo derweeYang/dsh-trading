@@ -87,7 +87,7 @@ describe('strategy_backtest', () => {
     const { store } = await makeDeps()
     const tool = createStrategyBacktestTool({ store, marketData: () => fakeService() })
     const result = JSON.parse(String(await tool.execute({
-      strategyId: 'demo-alternating', market: 'crypto', symbol: 'BTCUSDT', interval: '1d', limit: 60,
+      strategyId: 'demo-alternating', market: 'cn', symbol: '600519.SH', interval: '1d', limit: 60,
     }))) as { ok: boolean; metrics: Record<string, number>; trades: unknown[]; equity: unknown[]; barsTested: number }
     expect(result.ok).toBe(true)
     expect(result.barsTested).toBe(60)
@@ -102,7 +102,7 @@ describe('strategy_backtest', () => {
     const { store } = await makeDeps()
     const tool = createStrategyBacktestTool({ store, marketData: () => fakeService() })
     const result = JSON.parse(String(await tool.execute({
-      strategyId: strategyParadigms[0]!.id, market: 'us', symbol: 'AAPL', interval: '1d', limit: 120,
+      strategyId: strategyParadigms[0]!.id, market: 'cn', symbol: '600519.SH', interval: '1d', limit: 120,
     }))) as { ok: boolean; strategy: { id: string } }
     expect(result.ok).toBe(true)
     expect(result.strategy.id).toBe(strategyParadigms[0]!.id)
@@ -111,7 +111,7 @@ describe('strategy_backtest', () => {
   it('未知策略 → 错误提示 author 先行或改用范式 id', async () => {
     const { store } = await makeDeps()
     const tool = createStrategyBacktestTool({ store, marketData: () => fakeService() })
-    await expect(tool.execute({ strategyId: 'nope', market: 'us', symbol: 'AAPL' }))
+    await expect(tool.execute({ strategyId: 'nope', market: 'cn', symbol: '600519.SH' }))
       .rejects.toThrow(/strategy_author/)
   })
 
@@ -125,7 +125,7 @@ describe('strategy_backtest', () => {
       store,
       marketData: () => ({ ...fakeService(), getKlines: async () => [] }),
     })
-    await expect(empty.execute({ strategyId: 'demo-alternating', market: 'us', symbol: 'AAPL' }))
+    await expect(empty.execute({ strategyId: 'demo-alternating', market: 'cn', symbol: '600519.SH' }))
       .rejects.toThrow(/no klines returned/)
   })
 })

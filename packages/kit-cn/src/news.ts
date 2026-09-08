@@ -38,8 +38,6 @@ export interface AggregateNewsOptions {
   fetch?: typeof globalThis.fetch | undefined
   /** 注入当前时间戳（ms，测试用）；缺省 Date.now()。 */
   now?: number | undefined
-  /** CryptoPanic API token（桥面透传，cn/hk/us 聚合器忽略；对齐 api 契约形状）。 */
-  cryptoPanicKey?: string | undefined
 }
 
 export interface AggregateNewsResult {
@@ -96,7 +94,7 @@ async function fetchEastmoney(fetchImpl: typeof globalThis.fetch, limit: number)
     if (!it.title || it.code === undefined) continue
     const ts = typeof it.showTime === 'string' ? parseCnShowTime(it.showTime) : NaN
     if (!Number.isFinite(ts)) continue
-    // relatedCodes 保留完整 `<marketId>.<code>`（如 '1.600519'/'116.00700'），匹配时取 code 段。
+    // relatedCodes 保留完整 `<marketId>.<code>`（如 '1.600519'），匹配时取 code 段。
     const relatedCodes = Array.isArray(it.stockList)
       ? it.stockList.filter((s) => typeof s === 'string' && s.includes('.'))
       : undefined

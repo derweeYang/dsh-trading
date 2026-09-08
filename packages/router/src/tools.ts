@@ -8,7 +8,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { MarketDataService } from '@dshtrading/api'
 import { SYMBOL_CATALOG } from './catalog.ts'
 
-export const MARKETS: readonly string[] = ['crypto', 'us', 'cn', 'hk']
+export const MARKETS: readonly string[] = ['cn']
 
 /** registry + router 的最小消费面（鸭式，与连接器/桥同纪律）。 */
 export interface RouterToolServices {
@@ -23,7 +23,7 @@ export function createRoutingGetTool(services: RouterToolServices) {
   return defineTool({
     name: 'routing_get',
     description:
-      'Show the currently active market-data provider per market (crypto/us/cn/hk) — the authoritative value comes from '
+      'Show the currently active market-data provider per market (cn) — the authoritative value comes from '
       + 'the dshtrading settings namespace (dshtrading.markets.<market>.provider). Read-only.',
     parameters: {},
     output: {
@@ -54,18 +54,18 @@ export function createInstrumentsSearchTool(services: RouterToolServices) {
   return defineTool({
     name: 'instruments_search',
     description:
-      'Search tradable instruments across markets (crypto/us/cn/hk) by symbol or name substring, case-insensitive. '
+      'Search tradable instruments across markets (cn) by symbol or name substring, case-insensitive. '
       + 'Results union the routed provider dynamic roster (when it supports listing) with the built-in static catalog. '
       + 'Use a returned entry with watchlist_add / watchlist_select.',
     parameters: {
       query: {
         type: 'string',
         required: true,
-        description: 'Substring to match against symbol or name, e.g. "腾讯" / "BTC" / "apple"',
+        description: 'Substring to match against symbol or name, e.g. "腾讯" / "510050"',
       },
       market: {
         type: 'string',
-        description: 'Optional market filter: crypto | us | cn | hk (default: all markets)',
+        description: 'Optional market filter: cn (default: all markets)',
       },
       limit: {
         type: 'number',

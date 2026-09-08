@@ -2,7 +2,7 @@
  * Trading GUI shell, node half：`/dshtrading/api` 行情 HTTP 桥（web 宿主专用）。
  *
  * 浏览器半（exports["./client"]）通过同源 fetch 拉行情，本半把请求透传给
- * 对应市场的 MarketDataService（connector-binance/yahoo/tencent 提供）。
+ * 对应市场的 MarketDataService（connector-tencent 等市场连接器提供）。
  *
  * 双宿主策略：webServer/connection 只在 web 宿主存在，这里用 ctx.inject 子插件
  * 声明依赖——web 宿主等服务就绪后注册路由；headless 宿主永不解析，子 fiber 挂起
@@ -170,10 +170,6 @@ export function apply(ctx: Context): void {
       fetchFxRates,
       // 新闻注册表（issue #37）：各 Kit 向 host 面注册表注册 aggregateNews 纯函数。
       newsRegistry: webCtx.get('tradingNewsRegistry', false) as import('./bridge.ts').TradingNewsRegistryLike | undefined,
-      newsKey: () => {
-        const router = webCtx.get('tradingMarketRouter', false) as { newsKey?: () => string | undefined } | undefined
-        return router?.newsKey?.()
-      },
       cnOptions: (
         webCtx.get('tradingCnOptions', false)
         ?? (ctx as unknown as { get?: (key: string, strict?: boolean) => unknown }).get?.('tradingCnOptions', false)

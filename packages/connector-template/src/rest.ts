@@ -1,27 +1,26 @@
 /**
  * 【模板】交易所 REST 客户端骨架 —— 由生成器展开为新交易所插件后逐项填充。
  *
- * 本文件保持「结构真实、交换所特有逻辑留 TODO」：TradingServiceError 与通用的
+ * 本文件保持「结构真实、通道特有逻辑留 TODO」：TradingServiceError 与通用的
  * fetch → JSON → 错误映射管线可以直接用；签名头、端点、字段解析、单位换算、
- * 错误码表是每个交易所不同的，TODO 处参见完整参照实现 connector-okx/src/rest.ts。
+ * 错误码表是每个通道不同的，TODO 处参见完整参照实现 connector-qmt/src/rest.ts。
  *
  * 填充检查清单（对照参照实现的对应段）：
- *   1. baseUrl（REST host；注意 demo 与实盘是否同一 host——OKX 同 host 靠头区分，
- *      Binance 等用不同 host/路径）。
- *   2. 签名原语（prehash 拼接规则、HMAC/ECDSA、timestamp 格式与时差护栏——OKX 超
- *      30s 即 50102，见参照实现 signaturePrehash/signPayload/isoTimestamp 与对时逻辑）。
- *   3. 鉴权头（authHeaders；若交易所要求全程鉴权，则覆盖 request 让公共路径也带上）。
- *   4. 模拟盘语义：完全靠请求头区分时实现 simulationHeaders()（OKX 的
- *      x-simulated-trading:1 模式，参照 buildAuthHeaders）；独立 host/账号体系时在
- *      baseUrl 选择处处理。没有模拟环境的交易所把 Config.env 锁 'live'（见 index.ts）。
+ *   1. baseUrl（REST host；注意 demo 与实盘是否同一 host——同 host 靠头区分的
+ *      通道也存在，另一些用不同 host/路径）。
+ *   2. 签名原语（prehash 拼接规则、HMAC/ECDSA、timestamp 格式与时差护栏——
+ *      见参照实现 signaturePrehash/signPayload/isoTimestamp 与对时逻辑）。
+ *   3. 鉴权头（authHeaders；若通道要求全程鉴权，则覆盖 request 让公共路径也带上）。
+ *   4. 模拟盘语义：完全靠请求头区分时实现 simulationHeaders()（参照
+ *      buildAuthHeaders）；独立 host/账号体系时在 baseUrl 选择处处理。
+ *      没有模拟环境的通道把 Config.env 锁 'live'（见 index.ts）。
  *   5. 端点与响应字段 → api 词汇映射（getTicker/getKlines/placeOrder/cancelOrder/
  *      getOrder/getBalance/getPositions 各一个 parse* 函数；字段布局坑见
- *      docs/replication.md §8.2/§8.4——腾讯 cn/hk 布局不同、K 线是开收高低量）。
- *   6. 错误码 → api TradingErrorCode 映射表（错误码语义不同所不同；撤单幂等化
- *      所需的「已终态」码见参照实现 cancelOrder 的 51400/51603 处理）。
- *   7. 单位换算：api OrderRequest.quantity 恒为 base 币数；合约（张/ctVal 等）与
- *      现货市价单计价币陷阱（OKX 现货市价 buy 缺省按计价币金额——最大坑，见
- *      connector-okx normalizeSize / tgtCcy: base_ccy）。
+ *      docs/replication.md §8.2/§8.4——K 线是开收高低量）。
+ *   6. 错误码 → api TradingErrorCode 映射表（错误码语义因通道而异；撤单幂等化
+ *      所需的「已终态」码见参照实现 cancelOrder 的处理）。
+ *   7. 单位换算：api OrderRequest.quantity 恒为标的基数（股/张）；合约乘数与
+ *      最小变动价位从合约表读取（见参照实现 normalizeSize 一族）。
  *
  * @module @dshtrading/connector-__EXCHANGE_SLUG__/rest
  */
@@ -40,7 +39,7 @@ import type {
 /* 错误载体（api 包词汇的运行时映射）                                      */
 /* ------------------------------------------------------------------ */
 
-/** api 包 TradingError 契约的运行时 Error 实现（connector-binance 同款，直接复用）。 */
+/** api 包 TradingError 契约的运行时 Error 实现（connector-qmt 同款，直接复用）。 */
 export class TradingServiceError extends Error {
   readonly code: TradingErrorCode
 
@@ -67,7 +66,7 @@ export interface ExchangeRestOptions {
 
 type JsonRecord = Record<string, unknown>
 
-/** 凭证形状按交易所定（OKX 三值 key/secret/passphrase；多数所两值 key/secret）。 */
+/** 凭证形状按交易所定（三值 key/secret/passphrase 或两值 key/secret，按通道定）。 */
 export interface ExchangeCredentials {
   readonly key: string
   readonly secret: string
@@ -92,7 +91,7 @@ export class ExchangeRestClient {
 
   /**
    * 构造鉴权头。TODO: 按交易所签名规范实现（参照实现：
-   * connector-okx/src/rest.ts buildAuthHeaders——prehash 拼接、HMAC、时间戳、模拟盘头）。
+   * connector-qmt/src/rest.ts buildAuthHeaders——prehash 拼接、HMAC、时间戳、模拟盘头）。
    * 返回空对象的默认实现只适用于无鉴权公共端点；实现后由 request 统一附加。
    */
   protected async authHeaders(
@@ -104,7 +103,7 @@ export class ExchangeRestClient {
     return {}
   }
 
-  /** 模拟盘附加头（有独立模拟盘请求头的交易所覆写；OKX: { 'x-simulated-trading': '1' }）。 */
+  /** 模拟盘附加头（有独立模拟盘请求头的交易所覆写；例：x-simulated-trading:1 模式）。 */
   protected simulationHeaders(): Record<string, string> {
     return {}
   }
@@ -158,13 +157,13 @@ export class ExchangeRestClient {
   /* ---------- 端点（TODO: 填端点路径与字段解析） ---------- */
 
   async getTicker(symbol: string): Promise<Ticker> {
-    // TODO: GET /market/ticker 等；响应 → api Ticker 解析（参照 connector-okx parseTicker）。
+    // TODO: GET /market/ticker 等；响应 → api Ticker 解析（参照 connector-qmt parseTicker）。
     const json = await this.request<JsonRecord>('GET', `/TODO/ticker/${encodeURIComponent(symbol)}`)
     return this.parseTicker(json)
   }
 
   async getKlines(symbol: string, interval: Interval, limit?: number): Promise<Kline[]> {
-    // TODO: K 线端点 + Interval → 交易所 bar 词汇映射（参照 BAR_MAP/OKX_INTERVAL_VOCABULARY；
+    // TODO: K 线端点 + Interval → 交易所 bar 词汇映射（参照 BAR_MAP/INTERVAL_VOCABULARY；
     //      字段序坑：部分源是开收高低量而非 OHLC——docs/replication.md §8.4）。
     const json = await this.request<JsonRecord>('GET', `/TODO/klines/${encodeURIComponent(symbol)}`)
     return this.parseKlines(json)
@@ -172,38 +171,38 @@ export class ExchangeRestClient {
 
   async placeOrder(_params: JsonRecord, _credentials: ExchangeCredentials): Promise<JsonRecord[]> {
     // TODO: POST /trade/order；单位换算（quantity 恒为 base 币数）在参数构造前完成。
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement placeOrder — see connector-okx/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement placeOrder — see connector-qmt/src/rest.ts')
   }
 
   async cancelOrder(_symbol: string, _orderId: string, _credentials: ExchangeCredentials): Promise<JsonRecord[]> {
     // TODO: POST /trade/cancel-order（按所要求的定位键，可能是 symbol+id 双键）。
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement cancelOrder — see connector-okx/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement cancelOrder — see connector-qmt/src/rest.ts')
   }
 
   async getOrder(_symbol: string, _orderId: string, _credentials: ExchangeCredentials): Promise<JsonRecord[]> {
     // TODO: GET /trade/order 查单（若按 (symbol, id) 双键定位，api 契约的
     //      cancelOrder(id) 单参形态不够时扩展第二可选参数——@dshtrading/api R3 先例）。
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getOrder — see connector-okx/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getOrder — see connector-qmt/src/rest.ts')
   }
 
   async getBalance(_credentials: ExchangeCredentials): Promise<JsonRecord[]> {
     // TODO: GET 账户余额（账户结构差异大：按明细行归一为 AccountBalance[]）。
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getBalance — see connector-okx/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getBalance — see connector-qmt/src/rest.ts')
   }
 
   async getPositions(_credentials: ExchangeCredentials): Promise<JsonRecord[]> {
     // TODO: GET 持仓（合约单位 → 币数换算）。
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getPositions — see connector-okx/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement getPositions — see connector-qmt/src/rest.ts')
   }
 
   /* ---------- 解析（TODO: 字段布局按交易所实现） ---------- */
 
   protected parseTicker(_json: JsonRecord): Ticker {
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement parseTicker — see connector-okx/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement parseTicker — see connector-qmt/src/rest.ts')
   }
 
   protected parseKlines(_json: JsonRecord): Kline[] {
-    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement parseKlines — see connector-okx/src/rest.ts')
+    throw new TradingServiceError('TRADING_EXCHANGE_ERROR', 'TODO(connector): implement parseKlines — see connector-qmt/src/rest.ts')
   }
 }
 

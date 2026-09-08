@@ -9,22 +9,22 @@ describe('Holdings Agent Tools', () => {
     const tool = createHoldingsStageTool(store, { onWritten: ids => written.push(ids) })
     const result = await (tool as any).execute({
       itemsJson: JSON.stringify([
-        { market: 'us', symbol: 'AAPL', size: 10, entryPrice: 178.5, name: '苹果', account: '富途' },
-        { market: 'crypto', symbol: 'BTCUSDT', size: 0.5 },
+        { market: 'cn', symbol: '600519.SH', size: 100, entryPrice: 1500.5, name: '贵州茅台', account: '华泰' },
+        { market: 'cn', symbol: '510050.SH', size: 1000 },
       ]),
     })
     expect(result).toContain('已暂存 2 条持仓到待确认区')
     expect(result).toContain('资产面板确认入账')
-    expect(result).toContain('AAPL')
-    expect(result).toContain('BTCUSDT')
+    expect(result).toContain('600519.SH')
+    expect(result).toContain('510050.SH')
     const snap = await store.snapshot()
     expect(snap.revision).toBe(1)
     expect(snap.staged).toHaveLength(2)
-    // 写入侧推导：crypto → USDT / 默认账户 / real
-    const btc = snap.staged.find(h => h.symbol === 'BTCUSDT')
-    expect(btc).toMatchObject({ currency: 'USDT', account: '默认账户', kind: 'real' })
-    const aapl = snap.staged.find(h => h.symbol === 'AAPL')
-    expect(aapl).toMatchObject({ currency: 'USD', account: '富途', name: '苹果', entryPrice: 178.5 })
+    // 写入侧推导：cn → CNY / 默认账户 / real
+    const etf = snap.staged.find(h => h.symbol === '510050.SH')
+    expect(etf).toMatchObject({ currency: 'CNY', account: '默认账户', kind: 'real' })
+    const maotai = snap.staged.find(h => h.symbol === '600519.SH')
+    expect(maotai).toMatchObject({ currency: 'CNY', account: '华泰', name: '贵州茅台', entryPrice: 1500.5 })
     expect(written).toHaveLength(1)
     expect(written[0]).toHaveLength(2)
   })
@@ -45,8 +45,8 @@ describe('Holdings Agent Tools', () => {
     const tool = createHoldingsStageTool(store, { onWritten: ids => written.push(ids) })
     const result = await (tool as any).execute({
       itemsJson: JSON.stringify([
-        { market: 'us', symbol: 'AAPL', size: 10 },
-        { market: 'us', symbol: 'TSLA', size: -3 },
+        { market: 'cn', symbol: '600519.SH', size: 100 },
+        { market: 'cn', symbol: '000001.SZ', size: -3 },
       ]),
     })
     expect(result).toContain('校验失败')
@@ -65,8 +65,8 @@ describe('Holdings Agent Tools', () => {
     const result = await (tool as any).execute({
       itemsJson: JSON.stringify([
         { market: 'moon', symbol: 'X', size: 1 },
-        { market: 'us', symbol: '  ', size: 1 },
-        { market: 'hk', symbol: '00700.HK', size: 1, kind: 'fake' },
+        { market: 'cn', symbol: '  ', size: 1 },
+        { market: 'cn', symbol: '601318.SH', size: 1, kind: 'fake' },
       ]),
     })
     expect(result).toContain('校验失败')
@@ -92,12 +92,12 @@ describe('Holdings Agent Tools', () => {
     const store = createMemoryHoldingsStore()
     const tool = createHoldingsStageTool(store)
     const result = await (tool as any).execute({
-      itemsJson: JSON.stringify([{ market: 'crypto', symbol: 'ETHUSDT', size: '0.5', entryPrice: '3200.5' }]),
+      itemsJson: JSON.stringify([{ market: 'cn', symbol: '601318.SH', size: '0.5', entryPrice: '52.5' }]),
     })
     expect(result).toContain('已暂存 1 条')
     const h = (await store.snapshot()).staged[0]
     expect(h?.size).toBe(0.5)
-    expect(h?.entryPrice).toBe(3200.5)
+    expect(h?.entryPrice).toBe(52.5)
   })
 
   it('holdings_list 空台账输出两区为空', async () => {
@@ -114,16 +114,16 @@ describe('Holdings Agent Tools', () => {
     const store = createMemoryHoldingsStore()
     const stageTool = createHoldingsStageTool(store)
     await (stageTool as any).execute({
-      itemsJson: JSON.stringify([{ market: 'us', symbol: 'AAPL', size: 10, account: '富途' }]),
+      itemsJson: JSON.stringify([{ market: 'cn', symbol: '600519.SH', size: 100, account: '华泰' }]),
     })
-    await store.add({ market: 'crypto', symbol: 'BTCUSDT', size: 0.5, account: '币安' })
+    await store.add({ market: 'cn', symbol: '510050.SH', size: 1000, account: '银河' })
     const listTool = createHoldingsListTool(store)
     const result = await (listTool as any).execute({})
     expect(result).toContain('待确认区 1 条 / 正式持仓 1 条')
-    expect(result).toContain('AAPL')
-    expect(result).toContain('富途')
-    expect(result).toContain('BTCUSDT')
-    expect(result).toContain('币安')
+    expect(result).toContain('600519.SH')
+    expect(result).toContain('华泰')
+    expect(result).toContain('510050.SH')
+    expect(result).toContain('银河')
     expect(result).toContain('revision 2')
   })
 })

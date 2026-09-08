@@ -20,7 +20,7 @@
  * @module @dshtrading/watchlist
  */
 
-/** 跨市场标的行（market 为市场词汇 slug：crypto | us | cn | hk，开放新市场）。 */
+/** 跨市场标的行（market 为市场词汇 slug：cn，开放新市场）。 */
 export interface WatchlistInstrument {
   market: string
   symbol: string

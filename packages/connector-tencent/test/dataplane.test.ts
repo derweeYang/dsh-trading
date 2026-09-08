@@ -1,6 +1,5 @@
 /**
- * 数据面行单测：config.market 分流（cn → tradingCnMarketData / hk →
- * tradingHkMarketData），同包双行互不冲突。
+ * 数据面行单测：cn 单市场——provide tradingCnMarketData；注册表模式下注册 (cn, tencent)。
  */
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
@@ -17,18 +16,10 @@ function makeCtx(): { ctx: Context; provided: Record<string, unknown> } {
 }
 
 describe('connector-tencent dataplane', () => {
-  it('market=cn → provide tradingCnMarketData（不写 hk 键）', () => {
+  it('market=cn → provide tradingCnMarketData', () => {
     const { ctx, provided } = makeCtx()
     apply(ctx, { market: 'cn', dryRun: true, liveTrading: false })
     expect(provided.tradingCnMarketData).toBeDefined()
-    expect(provided.tradingHkMarketData).toBeUndefined()
-  })
-
-  it('market=hk → provide tradingHkMarketData（不写 cn 键）', () => {
-    const { ctx, provided } = makeCtx()
-    apply(ctx, { market: 'hk', dryRun: true, liveTrading: false })
-    expect(provided.tradingHkMarketData).toBeDefined()
-    expect(provided.tradingCnMarketData).toBeUndefined()
   })
 })
 
@@ -51,17 +42,12 @@ describe('connector-tencent dataplane（注册表模式，2026-08-30 整改 #1�
     return { ctx, provided, registrations }
   }
 
-  it('market=cn → 注册 (cn, tencent)；market=hk → 注册 (hk, tencent)；根键均不占', () => {
+  it('market=cn → 注册 (cn, tencent)；根键不占', () => {
     const cn = makeRegistryCtx()
     apply(cn.ctx, { market: 'cn', dryRun: true, liveTrading: false })
     expect(cn.registrations).toHaveLength(1)
     expect(cn.registrations[0]?.market).toBe('cn')
     expect(cn.registrations[0]?.provider).toBe('tencent')
     expect(cn.provided.tradingCnMarketData).toBeUndefined()
-
-    const hk = makeRegistryCtx()
-    apply(hk.ctx, { market: 'hk', dryRun: true, liveTrading: false })
-    expect(hk.registrations[0]?.market).toBe('hk')
-    expect(hk.provided.tradingHkMarketData).toBeUndefined()
   })
 })
