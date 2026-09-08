@@ -1,6 +1,9 @@
 /**
  * 自选股 host SSOT 同步单测（离线，mock api 模块）：启动同步（host 赢）、
  * 一次性迁移（幂等拒绝跳过）、变更 host-first 接管、SSE 双通道刷新。
+ *
+ * 2026-09-08 市场收敛：fixture 统一 cn 词汇（store.add 经 inferMarket 归一 'cn'，
+ * 非 cn 键会被 sanitizeWatchlists 剔除——断言必须落在 cn 键上）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSelectionStore, createWatchlistStore, type Instrument } from '../src/client/store.ts'
@@ -22,7 +25,8 @@ const apiMock = vi.hoisted(() => ({
 
 vi.mock('../src/client/api.ts', () => apiMock)
 
-const AAPL: Instrument = { market: 'us', symbol: 'AAPL', name: '苹果' }
+const MAOTAI: Instrument = { market: 'cn', symbol: '600519', name: '贵州茅台' }
+const PINGAN: Instrument = { market: 'cn', symbol: '000001', name: '平安银行' }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -35,29 +39,29 @@ describe('wireHostWatchlistSync', () => {
   it('启动同步：host 有行 → 覆盖本地（host SSOT）', async () => {
     const watchlists = createWatchlistStore()
     const selection = createSelectionStore()
-    apiMock.fetchHostWatchlists.mockResolvedValue({ us: [{ market: 'us', symbol: 'MSFT', name: '微软' }] })
+    apiMock.fetchHostWatchlists.mockResolvedValue({ cn: [{ market: 'cn', symbol: '000001', name: '平安银行' }] })
     wireHostWatchlistSync({ watchlists, selection })
-    await vi.waitFor(() => { expect(watchlists.getSnapshot().us).toHaveLength(1) })
-    expect(watchlists.getSnapshot().us?.[0]).toMatchObject({ symbol: 'MSFT' })
+    await vi.waitFor(() => { expect(watchlists.getSnapshot().cn).toHaveLength(1) })
+    expect(watchlists.getSnapshot().cn?.[0]).toMatchObject({ symbol: '000001' })
   })
 
   it('迁移：host 空 + 本地有定制行 → 导入成功后重拉；host 非空拒绝则跳过', async () => {
     const watchlists = createWatchlistStore()
-    watchlists.add('us', AAPL) // 本地镜像（localStorage 模拟）
+    watchlists.add('cn', MAOTAI) // 本地镜像（localStorage 模拟）
     const selection = createSelectionStore()
 
     apiMock.fetchHostWatchlists.mockResolvedValueOnce({}) // 首查：host 空
     apiMock.importHostWatchlists.mockResolvedValue(true)
-    apiMock.fetchHostWatchlists.mockResolvedValueOnce({ us: [{ market: 'us', symbol: 'AAPL', name: '苹果' }] }) // 导入后重拉
+    apiMock.fetchHostWatchlists.mockResolvedValueOnce({ cn: [{ market: 'cn', symbol: '600519', name: '贵州茅台' }] }) // 导入后重拉
 
     wireHostWatchlistSync({ watchlists, selection })
     await vi.waitFor(() => { expect(apiMock.importHostWatchlists).toHaveBeenCalledTimes(1) })
-    expect(apiMock.importHostWatchlists.mock.calls[0]?.[0]).toMatchObject({ us: [{ symbol: 'AAPL' }] })
+    expect(apiMock.importHostWatchlists.mock.calls[0]?.[0]).toMatchObject({ cn: [{ symbol: '600519' }] })
   })
 
   it('迁移幂等：host 非空拒绝导入 → 不改本地（等待统一重拉）', async () => {
     const watchlists = createWatchlistStore()
-    watchlists.add('us', AAPL)
+    watchlists.add('cn', MAOTAI)
     const selection = createSelectionStore()
 
     apiMock.fetchHostWatchlists.mockResolvedValueOnce({}) // 首查 host 空
@@ -77,16 +81,16 @@ describe('wireHostWatchlistSync', () => {
 
     wireHostWatchlistSync({ watchlists, selection })
 
-    watchlists.add('us', AAPL)
-    await vi.waitFor(() => { expect(watchlists.getSnapshot().us).toHaveLength(1) })
-    expect(apiMock.addHostWatchlistRow).toHaveBeenCalledWith(AAPL)
+    watchlists.add('cn', MAOTAI)
+    await vi.waitFor(() => { expect(watchlists.getSnapshot().cn).toHaveLength(1) })
+    expect(apiMock.addHostWatchlistRow).toHaveBeenCalledWith(MAOTAI)
 
-    watchlists.remove('us', 'AAPL')
-    await vi.waitFor(() => { expect(watchlists.getSnapshot().us).toHaveLength(0) })
+    watchlists.remove('cn', '600519')
+    await vi.waitFor(() => { expect(watchlists.getSnapshot().cn).toHaveLength(0) })
 
-    selection.select(AAPL)
-    await vi.waitFor(() => { expect(selection.getSnapshot().instrument).toEqual(AAPL) })
-    expect(apiMock.putHostSelection).toHaveBeenCalledWith(AAPL)
+    selection.select(MAOTAI)
+    await vi.waitFor(() => { expect(selection.getSnapshot().instrument).toEqual(MAOTAI) })
+    expect(apiMock.putHostSelection).toHaveBeenCalledWith(MAOTAI)
   })
 
   it('变更 host 失败 → 本地不变（fail-closed，SSOT 不劣化）', async () => {
@@ -95,9 +99,9 @@ describe('wireHostWatchlistSync', () => {
     apiMock.addHostWatchlistRow.mockResolvedValue(false)
 
     wireHostWatchlistSync({ watchlists, selection })
-    watchlists.add('us', AAPL)
+    watchlists.add('cn', MAOTAI)
     await vi.waitFor(() => { expect(apiMock.addHostWatchlistRow).toHaveBeenCalled() })
-    expect(watchlists.getSnapshot().us ?? []).toHaveLength(0)
+    expect(watchlists.getSnapshot().cn ?? []).toHaveLength(0)
   })
 
   it('SSE：watchlists/selection 信号 → 重拉覆盖（watchlist_select 工具驱动切图）', async () => {
@@ -106,37 +110,35 @@ describe('wireHostWatchlistSync', () => {
     wireHostWatchlistSync({ watchlists, selection })
 
     expect(apiMock.subscribeTradingEvents).toHaveBeenCalledTimes(1)
-    apiMock.fetchHostWatchlists.mockResolvedValue({ hk: [{ market: 'hk', symbol: '00700', name: '腾讯控股' }] })
-    apiMock.fetchHostSelection.mockResolvedValue({ market: 'hk', symbol: '00700', name: '腾讯控股' })
+    apiMock.fetchHostWatchlists.mockResolvedValue({ cn: [{ market: 'cn', symbol: '000001', name: '平安银行' }] })
+    apiMock.fetchHostSelection.mockResolvedValue({ market: 'cn', symbol: '000001', name: '平安银行' })
     apiMock.handlers['watchlists']?.()
     apiMock.handlers['selection']?.()
-    await vi.waitFor(() => { expect(watchlists.getSnapshot().hk).toHaveLength(1) })
-    await vi.waitFor(() => { expect(selection.getSnapshot().instrument).toMatchObject({ symbol: '00700' }) })
+    await vi.waitFor(() => { expect(watchlists.getSnapshot().cn).toHaveLength(1) })
+    await vi.waitFor(() => { expect(selection.getSnapshot().instrument).toMatchObject({ symbol: '000001' }) })
   })
 
   it('启动同步与 SSE：host 包含清空列表（空数组）时正确同步并保持已定制状态', async () => {
     const watchlists = createWatchlistStore()
     const selection = createSelectionStore()
-    // host 端已将 us 清空为 []
-    apiMock.fetchHostWatchlists.mockResolvedValue({ us: [] })
+    // host 端已将 cn 清空为 []
+    apiMock.fetchHostWatchlists.mockResolvedValue({ cn: [] })
     wireHostWatchlistSync({ watchlists, selection })
 
     await vi.waitFor(() => {
       const snap = watchlists.getSnapshot()
-      expect(snap.us).toBeDefined()
-      expect(snap.us).toEqual([])
+      expect(snap.cn).toBeDefined()
+      expect(snap.cn).toEqual([])
     })
-    expect(watchlists.isCustomized('us')).toBe(true)
-    expect(watchlists.listFor('us')).toEqual([])
+    expect(watchlists.isCustomized('cn')).toBe(true)
+    expect(watchlists.listFor('cn')).toEqual([])
 
     // SSE 触发重拉同样保持
-    apiMock.fetchHostWatchlists.mockResolvedValue({ us: [], crypto: [{ market: 'crypto', symbol: 'BTCUSDT' }] })
+    apiMock.fetchHostWatchlists.mockResolvedValue({ cn: [{ market: 'cn', symbol: '000001', name: '平安银行' }] })
     apiMock.handlers['watchlists']?.()
     await vi.waitFor(() => {
       const snap = watchlists.getSnapshot()
-      expect(snap.us).toEqual([])
-      expect(snap.crypto).toHaveLength(1)
+      expect(snap.cn).toHaveLength(1)
     })
   })
 })
-
