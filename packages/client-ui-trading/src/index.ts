@@ -174,6 +174,10 @@ export function apply(ctx: Context): void {
         webCtx.get('tradingCnOptions', false)
         ?? (ctx as unknown as { get?: (key: string, strict?: boolean) => unknown }).get?.('tradingCnOptions', false)
       ) as CnOptionsService | undefined,
+      cnOptionsTrade: (
+        webCtx.get('tradingCnOptionsTrade', false)
+        ?? (ctx as unknown as { get?: (key: string, strict?: boolean) => unknown }).get?.('tradingCnOptionsTrade', false)
+      ) as import('@dshtrading/api').CnOptionsTradeService | undefined,
     })
     const bridge = new TradingBridge(host)
 

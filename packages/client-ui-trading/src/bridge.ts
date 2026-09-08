@@ -14,7 +14,7 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, FundamentalsPackage, Interval, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionOrder, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick } from '@dshtrading/api'
 import { aggregateNews as aggregateCnNews, fetchCnFundamentalsPackage } from '@dshtrading/kit-cn'
 import type { ChartActivationStore, CustomIndicatorRecord, CustomIndicatorStore, IndicatorInstance } from '@dshtrading/indicators'
 import { clampActivationParams, createMemoryChartActivationStore, createMemoryCustomIndicatorStore, resolveIndicatorSpec, sanitizeInstance, symbolScopeKey, withHiddenScopes } from '@dshtrading/indicators'
@@ -98,6 +98,8 @@ export function createBridgeHost(services: {
   newsRegistry?: TradingNewsRegistryLike | undefined
   /** CN ETF 期权只读服务（host 面 tradingCnOptions；缺席 → 桥返回 NOT_IMPLEMENTED）。 */
   cnOptions?: CnOptionsService | undefined
+  /** CN ETF 期权交易服务（host 面 tradingCnOptionsTrade；缺席 → 桥返回 NOT_IMPLEMENTED）。 */
+  cnOptionsTrade?: CnOptionsTradeService | undefined
 }): BridgeHost {
   return {
     getMarketService: market => {
@@ -119,6 +121,7 @@ export function createBridgeHost(services: {
     fetchFxRates: services.fetchFxRates,
     newsRegistry: services.newsRegistry,
     getCnOptions: () => services.cnOptions,
+    getCnOptionsTrade: () => services.cnOptionsTrade,
   }
 }
 
@@ -156,14 +159,17 @@ export interface BridgeHost {
   fetchFxRates?: FxRatesFetcher | undefined
   /**
    * 交易服务（可选，issue #40）：tradeRegistry 按 market 解析；未注册 → undefined
-   * （交易台整体隐藏）。**安全语义**：桥只放行 dry-run 下单与只读查询——
-   * placeOrder 的 dryRun 被强制为 true，实盘路径不经 GUI。
+   * （交易台整体隐藏）。**安全语义**：GUI 下单默认请求实盘（dryRun: false），
+   * 由服务缝闸门（连接器 dryRun 缺省 true + liveTrading 显式开关）fail-closed，
+   * 桥层如实转达闸门错误，不伪造成交。
    */
   getTradeService?(market: MarketId): TradeService | undefined
   /** 新闻注册表（可选，issue #37）：各市场 Kit 注册的新闻聚合器。 */
   newsRegistry?: TradingNewsRegistryLike | undefined
   /** CN ETF 期权只读服务；未挂 connector-options → undefined。 */
   getCnOptions?(): CnOptionsService | undefined
+  /** CN ETF 期权交易服务（阶段 3）；未挂 connector-options 交易半 → undefined。 */
+  getCnOptionsTrade?(): CnOptionsTradeService | undefined
 }
 
 export interface MarketInfoWire {
@@ -224,6 +230,28 @@ export interface OptionImpliedVolWire {
 export interface OptionStrategyWire {
   ok: true
   strategy: OptionStrategyResult
+}
+
+/** 期权下单回执 wire（阶段 3 交易台）。 */
+export interface OptionOrderWire {
+  ok: true
+  order: OptionOrder
+}
+
+export interface OptionPositionsWire {
+  ok: true
+  positions: readonly OptionPosition[]
+}
+
+/** GUI 期权下单体（与 GuiOrderBody 同语义：默认请求实盘，服务缝闸门兜底）。 */
+export interface GuiOptionOrderBody {
+  readonly symbol?: unknown
+  readonly side?: unknown
+  readonly offset?: unknown
+  readonly orderType?: unknown
+  readonly quantity?: unknown
+  readonly price?: unknown
+  readonly dryRun?: unknown
 }
 
 export interface OrderbookWire {
@@ -644,11 +672,22 @@ export class TradingBridge {
     return service
   }
 
+  #requireCnOptionsTrade(): CnOptionsTradeService {
+    const service = this.host.getCnOptionsTrade?.()
+    if (service === undefined) {
+      throw Object.assign(
+        new Error('CN ETF options trade service is not mounted — add @dshtrading/connector-options (trade half)'),
+        { code: 'TRADING_NOT_IMPLEMENTED' },
+      )
+    }
+    return service
+  }
+
   /**
    * ETF 期权标的名册（workbuddy T 板显隐）。source 缺省走连接器默认值。
    */
   async optionUnderlyings(source?: string): Promise<OptionUnderlyingsWire> {
-    const typed = source === 'synth' || source === 'akshare' ? source : undefined
+    const typed = source === 'synth' || source === 'akshare' || source === 'iquant' ? source : undefined
     return { ok: true, underlyings: await this.requireCnOptions().listUnderlyings(typed) }
   }
 
@@ -658,7 +697,7 @@ export class TradingBridge {
   async optionExpiries(underlying: string, source?: string): Promise<OptionExpiriesWire> {
     const trimmed = underlying.trim()
     if (trimmed === '') throw new BridgeProtocolError(400, 'options expiries: underlying is required')
-    const typed = source === 'synth' || source === 'akshare' ? source : undefined
+    const typed = source === 'synth' || source === 'akshare' || source === 'iquant' ? source : undefined
     return {
       ok: true,
       expiries: await this.requireCnOptions().getOptionExpiries({
@@ -677,7 +716,7 @@ export class TradingBridge {
     if (trimmed === '') throw new BridgeProtocolError(400, 'options chain: underlying is required')
     const month = expiryMonth.trim()
     if (month === '') throw new BridgeProtocolError(400, 'options chain: expiryMonth is required')
-    const typed = source === 'synth' || source === 'akshare' ? source : undefined
+    const typed = source === 'synth' || source === 'akshare' || source === 'iquant' ? source : undefined
     return {
       ok: true,
       chain: await this.requireCnOptions().getOptionChain({
@@ -701,7 +740,7 @@ export class TradingBridge {
     if (month === '') throw new BridgeProtocolError(400, 'options implied-vol: expiryMonth is required')
     const rate = Number(rateRaw)
     if (!Number.isFinite(rate)) throw new BridgeProtocolError(400, 'options implied-vol: rate is required')
-    const typed = source === 'synth' || source === 'akshare' ? source : undefined
+    const typed = source === 'synth' || source === 'akshare' || source === 'iquant' ? source : undefined
     const field = priceField === 'prevSettle' ? 'prevSettle' as const : 'last' as const
     return {
       ok: true,
@@ -724,6 +763,54 @@ export class TradingBridge {
       throw new BridgeProtocolError(400, 'options strategy: underlying is required')
     }
     return { ok: true, strategy: await this.requireCnOptions().getStrategy(input) }
+  }
+
+  /**
+   * GUI 期权下单（阶段 3 T 板直接下单）：与 placeOrderFromGui 同语义——默认请求
+   * 实盘（dryRun: false），服务缝闸门（connector-options 的 dryRun/liveTrading
+   * 双闸）fail-closed，桥层如实转达闸门错误。回执含 premiumAmount 权利金金额。
+   */
+  async placeOptionOrderFromGui(body: GuiOptionOrderBody): Promise<OptionOrderWire> {
+    const symbol = typeof body.symbol === 'string' ? body.symbol.trim() : ''
+    const side = body.side === 'sell' ? 'sell' as const : body.side === 'buy' ? 'buy' as const : undefined
+    const offset = body.offset === 'close' ? 'close' as const : body.offset === 'open' ? 'open' as const : undefined
+    const orderType = body.orderType === 'market' ? 'market' as const : body.orderType === 'limit' ? 'limit' as const : undefined
+    const quantity = typeof body.quantity === 'number' ? body.quantity : Number.NaN
+    if (symbol === '') throw new BridgeProtocolError(400, 'options order: symbol is required')
+    if (side === undefined) throw new BridgeProtocolError(400, 'options order: side must be buy or sell')
+    if (offset === undefined) throw new BridgeProtocolError(400, 'options order: offset must be open or close')
+    if (orderType === undefined) throw new BridgeProtocolError(400, 'options order: orderType must be limit or market')
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw new BridgeProtocolError(400, 'options order: quantity must be a positive integer of contracts')
+    }
+    const price = typeof body.price === 'number' ? body.price : undefined
+    if (orderType === 'limit' && (price === undefined || !Number.isFinite(price) || price <= 0)) {
+      throw new BridgeProtocolError(400, 'options order: limit orders require a positive price')
+    }
+    const requestedDryRun = typeof body.dryRun === 'boolean' ? body.dryRun : false
+    const order = await this.#requireCnOptionsTrade().placeOptionOrder({
+      symbol,
+      side,
+      offset,
+      orderType,
+      quantity,
+      ...(price !== undefined ? { price } : {}),
+      dryRun: requestedDryRun,
+    })
+    return { ok: true, order }
+  }
+
+  /** GUI 期权撤单：连接器侧与真实下单同门槛（liveTrading=true 且 dryRun=false）。 */
+  async cancelOptionOrderFromGui(orderId: string, symbol?: string): Promise<{ ok: true; canceled: boolean }> {
+    const trimmedId = orderId.trim()
+    if (trimmedId === '') throw new BridgeProtocolError(400, 'options cancel: id is required')
+    await this.#requireCnOptionsTrade().cancelOptionOrder(trimmedId, symbol?.trim())
+    return { ok: true, canceled: true }
+  }
+
+  /** GUI 期权持仓（只读透传，不走闸门）。 */
+  async optionPositions(): Promise<OptionPositionsWire> {
+    return { ok: true, positions: await this.#requireCnOptionsTrade().listOptionPositions() }
   }
 
   /**
@@ -1651,6 +1738,9 @@ export async function dispatchBridgeRequest(
           ),
         }
       }
+      case '/options/positions': {
+        return { status: 200, payload: await bridge.optionPositions() }
+      }
       case '/orderbook': {
         const market = search.get('market') ?? ''
         const symbol = search.get('symbol') ?? ''
@@ -1743,6 +1833,12 @@ export async function dispatchBridgeRequest(
       if (!orderId) throw new BridgeProtocolError(400, 'cancel order: id is required')
       return { status: 200, payload: await bridge.cancelOrderFromGui(market, orderId, symbol) }
     }
+    if (pathname === '/options/order') {
+      const orderId = search.get('id') ?? search.get('orderId') ?? ''
+      const symbol = search.get('symbol') ?? undefined
+      if (!orderId) throw new BridgeProtocolError(400, 'options cancel: id is required')
+      return { status: 200, payload: await bridge.cancelOptionOrderFromGui(orderId, symbol) }
+    }
     if (pathname === '/watchlists') {
       const market = search.get('market') ?? ''
       const symbol = search.get('symbol') ?? ''
@@ -1816,6 +1912,9 @@ export async function dispatchBridgeRequest(
     }
     if (pathname === '/options/strategy') {
       return { status: 200, payload: await bridge.optionStrategy(body) }
+    }
+    if (pathname === '/options/order') {
+      return { status: 200, payload: await bridge.placeOptionOrderFromGui(body as GuiOptionOrderBody) }
     }
     throw new BridgeProtocolError(404, `no such endpoint: ${pathname}`)
   }

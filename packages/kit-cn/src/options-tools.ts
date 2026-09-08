@@ -18,7 +18,7 @@ function resolveService(options: OptionToolOptions): CnOptionsService {
 }
 
 function asSource(value: unknown): OptionSource | undefined {
-  return value === 'synth' || value === 'akshare' ? value : undefined
+  return value === 'synth' || value === 'akshare' || value === 'iquant' ? value : undefined
 }
 
 /** exactOptionalPropertyTypes：可选字段缺席时整键省略，不得显式传 undefined。 */
@@ -44,7 +44,7 @@ export function createGetOptionExpiriesTool(options: OptionToolOptions = {}) {
       },
       source: {
         type: 'string',
-        description: 'akshare (default) or synth',
+        description: 'akshare (default), iquant, or synth',
       },
     },
     output: {
@@ -83,7 +83,7 @@ export function createGetOptionChainTool(options: OptionToolOptions = {}) {
       },
       source: {
         type: 'string',
-        description: 'akshare (default) or synth',
+        description: 'akshare (default), iquant, or synth',
       },
     },
     output: {
@@ -129,7 +129,7 @@ export function createGetOptionIvTool(options: OptionToolOptions = {}) {
       },
       source: {
         type: 'string',
-        description: 'akshare (default) or synth',
+        description: 'akshare (default), iquant, or synth',
       },
       priceField: {
         type: 'string',
@@ -184,7 +184,7 @@ export function createGetOptionStrategyTool(options: OptionToolOptions = {}) {
       },
       source: {
         type: 'string',
-        description: 'akshare (default) or synth',
+        description: 'akshare (default), iquant, or synth',
       },
       rate: {
         type: 'number',
@@ -216,6 +216,263 @@ export function createGetOptionStrategyTool(options: OptionToolOptions = {}) {
         ...optionalField('rate', rate),
       })
       return JSON.stringify(result)
+    },
+  })
+}
+
+/* -- 阶段 3 内核上桥（python vol_analytics / fetch_underlying_daily / price /
+ *    parity_check 四命令，报告 JSON 透传不解释）------------------------------- */
+
+export function createGetOptionVolAnalyticsTool(options: OptionToolOptions = {}) {
+  return defineTool({
+    name: 'cn_get_option_vol_analytics',
+    description:
+      'Multi-month IV surface analytics for a China ETF option underlying: term structure, skew, realized vol (HV), '
+      + 'IV percentile, smile, Raw SVI fit, and butterflies, plus underlying daily stats. '
+      + 'akshare serves SSE; SZSE needs source=iquant; synth is deterministic offline. Read-only; not investment advice.',
+    parameters: {
+      underlying: {
+        type: 'string',
+        required: true,
+        description: 'ETF underlying or option long code, e.g. 510050.SH',
+      },
+      expiryMonths: {
+        type: 'string',
+        description: 'Comma-separated YYMM list, e.g. 2609,2610; default = standard four months',
+      },
+      asOf: {
+        type: 'string',
+        description: 'Snapshot date YYYY-MM-DD; default = latest',
+      },
+      rate: {
+        type: 'number',
+        description: 'Continuous risk-free rate',
+      },
+      dividendYield: {
+        type: 'number',
+        description: 'Continuous dividend yield',
+      },
+      source: {
+        type: 'string',
+        description: 'akshare (default), iquant, or synth',
+      },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: String(value) }],
+    },
+    async execute(raw) {
+      const args = (raw ?? {}) as {
+        underlying?: unknown
+        expiryMonths?: unknown
+        asOf?: unknown
+        rate?: unknown
+        dividendYield?: unknown
+        source?: unknown
+      }
+      const expiryMonths = typeof args.expiryMonths === 'string'
+        ? args.expiryMonths.split(',').map(m => m.trim()).filter(m => m !== '')
+        : undefined
+      const report = await resolveService(options).getVolAnalytics({
+        underlying: typeof args.underlying === 'string' ? args.underlying : '',
+        ...(expiryMonths === undefined || expiryMonths.length === 0 ? {} : { expiryMonths }),
+        ...optionalField('asOf', typeof args.asOf === 'string' ? args.asOf : undefined),
+        ...optionalField('rate', typeof args.rate === 'number' ? args.rate : undefined),
+        ...optionalField('dividendYield', typeof args.dividendYield === 'number' ? args.dividendYield : undefined),
+        ...optionalField('source', asSource(args.source)),
+      })
+      return JSON.stringify(report)
+    },
+  })
+}
+
+export function createGetOptionUnderlyingDailyTool(options: OptionToolOptions = {}) {
+  return defineTool({
+    name: 'cn_get_option_underlying_daily',
+    description:
+      'Fetch underlying ETF spot daily bars for option analysis (parquet cache-first on the kernel side). '
+      + 'source=akshare or iquant only; omit underlying to fetch the whole source registry. Read-only; not investment advice.',
+    parameters: {
+      source: {
+        type: 'string',
+        required: true,
+        description: 'akshare or iquant',
+      },
+      underlying: {
+        type: 'string',
+        description: 'ETF code, e.g. 510050; omit or "all" = whole registry',
+      },
+      start: {
+        type: 'string',
+        description: 'Start date YYYY-MM-DD',
+      },
+      end: {
+        type: 'string',
+        description: 'End date YYYY-MM-DD',
+      },
+      adjust: {
+        type: 'string',
+        description: '"" (raw, default) | qfq | hfq (akshare only)',
+      },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: String(value) }],
+    },
+    async execute(raw) {
+      const args = (raw ?? {}) as {
+        source?: unknown
+        underlying?: unknown
+        start?: unknown
+        end?: unknown
+        adjust?: unknown
+      }
+      const source = args.source === 'iquant' ? 'iquant' : 'akshare'
+      const adjust = args.adjust === 'qfq' ? 'qfq' : args.adjust === 'hfq' ? 'hfq' : ''
+      const report = await resolveService(options).getUnderlyingDaily({
+        source,
+        ...optionalField('underlying', typeof args.underlying === 'string' ? args.underlying : undefined),
+        ...optionalField('start', typeof args.start === 'string' ? args.start : undefined),
+        ...optionalField('end', typeof args.end === 'string' ? args.end : undefined),
+        ...(adjust === '' ? {} : { adjust: adjust as 'qfq' | 'hfq' }),
+      })
+      return JSON.stringify(report)
+    },
+  })
+}
+
+export function createGetOptionPriceTool(options: OptionToolOptions = {}) {
+  return defineTool({
+    name: 'cn_get_option_price',
+    description:
+      'Price a single European option leg with Black-Scholes and full Greeks (delta/gamma/vega/theta/rho with '
+      + 'per-vol-point / per-day / per-bp variants). Pure computation, no market data needed. Read-only; not investment advice.',
+    parameters: {
+      spot: {
+        type: 'number',
+        required: true,
+        description: 'Underlying spot price, e.g. 2.912',
+      },
+      strike: {
+        type: 'number',
+        required: true,
+        description: 'Strike price, e.g. 2.85',
+      },
+      optionType: {
+        type: 'string',
+        required: true,
+        description: 'C (call) or P (put)',
+      },
+      vol: {
+        type: 'number',
+        required: true,
+        description: 'Annualized volatility, e.g. 0.18',
+      },
+      expiryDate: {
+        type: 'string',
+        description: 'Expiry date YYYY-MM-DD (with asOf; alternative to years)',
+      },
+      asOf: {
+        type: 'string',
+        description: 'Valuation date YYYY-MM-DD, default = today',
+      },
+      years: {
+        type: 'number',
+        description: 'Time to expiry in calendar years (alternative to expiryDate+asOf)',
+      },
+      rate: {
+        type: 'number',
+        description: 'Continuous risk-free rate, default 0',
+      },
+      dividendYield: {
+        type: 'number',
+        description: 'Continuous dividend yield, default 0',
+      },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: String(value) }],
+    },
+    async execute(raw) {
+      const args = (raw ?? {}) as {
+        spot?: unknown
+        strike?: unknown
+        optionType?: unknown
+        vol?: unknown
+        expiryDate?: unknown
+        asOf?: unknown
+        years?: unknown
+        rate?: unknown
+        dividendYield?: unknown
+      }
+      const num = (v: unknown): number => (typeof v === 'number' ? v : Number.NaN)
+      const report = await resolveService(options).getPrice({
+        spot: num(args.spot),
+        strike: num(args.strike),
+        vol: num(args.vol),
+        optionType: args.optionType === 'P' ? 'P' : 'C',
+        ...optionalField('expiryDate', typeof args.expiryDate === 'string' ? args.expiryDate : undefined),
+        ...optionalField('asOf', typeof args.asOf === 'string' ? args.asOf : undefined),
+        ...optionalField('years', typeof args.years === 'number' ? args.years : undefined),
+        ...optionalField('rate', typeof args.rate === 'number' ? args.rate : undefined),
+        ...optionalField('dividendYield', typeof args.dividendYield === 'number' ? args.dividendYield : undefined),
+      })
+      return JSON.stringify(report)
+    },
+  })
+}
+
+export function createOptionParityCheckTool(options: OptionToolOptions = {}) {
+  return defineTool({
+    name: 'cn_option_parity_check',
+    description:
+      'Put-call parity check for a China ETF option chain: pair C/P at equal strike, report deviation '
+      + 'from (C - P) - (S·e^{-qT} - K·e^{-rT}) with tick-scaled flags. Default threshold = max(2×tickSize, 0.0005). '
+      + 'Read-only; not investment advice.',
+    parameters: {
+      underlying: {
+        type: 'string',
+        required: true,
+        description: 'ETF underlying or option long code, e.g. 510050.SH',
+      },
+      expiryMonth: {
+        type: 'string',
+        required: true,
+        description: 'Expiry month YYMM, e.g. 2609',
+      },
+      rate: {
+        type: 'number',
+        description: 'Continuous risk-free rate',
+      },
+      threshold: {
+        type: 'number',
+        description: 'Deviation threshold in yuan; default = max(2×tickSize, 0.0005)',
+      },
+      source: {
+        type: 'string',
+        description: 'akshare (default), iquant, or synth',
+      },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: String(value) }],
+    },
+    async execute(raw) {
+      const args = (raw ?? {}) as {
+        underlying?: unknown
+        expiryMonth?: unknown
+        rate?: unknown
+        threshold?: unknown
+        source?: unknown
+      }
+      const report = await resolveService(options).getParityCheck({
+        underlying: typeof args.underlying === 'string' ? args.underlying : '',
+        expiryMonth: typeof args.expiryMonth === 'string' ? args.expiryMonth : '',
+        ...optionalField('rate', typeof args.rate === 'number' ? args.rate : undefined),
+        ...optionalField('threshold', typeof args.threshold === 'number' ? args.threshold : undefined),
+        ...optionalField('source', asSource(args.source)),
+      })
+      return JSON.stringify(report)
     },
   })
 }

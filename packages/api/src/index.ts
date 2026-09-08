@@ -68,10 +68,10 @@ export interface Kline {
 export type OptionRight = 'C' | 'P'
 
 /**
- * 期权数据源。synth = 离线确定性链（CI / 无网关）；akshare = 上交所研究级；
- * iquant 预留，第一期桥不暴露。
+ * 期权数据源。synth = 离线确定性链（CI / 无网关）；akshare = 上交所研究级
+ * （深市 NO_DATA）；iquant = 迅投研终端（沪深皆可达，解深市行情缺口）。
  */
-export type OptionSource = 'synth' | 'akshare'
+export type OptionSource = 'synth' | 'akshare' | 'iquant'
 
 /** 已注册的 ETF 期权标的（与 python/options underlyings.json 对齐）。 */
 export interface OptionUnderlying {
@@ -80,8 +80,8 @@ export interface OptionUnderlying {
   readonly name: string
   readonly multiplier: number
   readonly tickSize: number
-  /** sse_board 有 T 板；szse_static_only 只有静态表。 */
-  readonly quotesSource: 'sse_board' | 'szse_static_only' | 'synth'
+  /** sse_board 有 T 板；szse_static_only 只有静态表；iquant_board 走迅投研。 */
+  readonly quotesSource: 'sse_board' | 'szse_static_only' | 'iquant_board' | 'synth'
 }
 
 /** 合约静态（规范主键 = 长代码，如 510050C2609M02850）。 */
@@ -152,11 +152,98 @@ export interface OptionStrategyRequest {
   readonly rate?: number
 }
 
+/** 策略组合一腿（python strategy `_public_leg` 形状；认购/认沽由 optionType）。 */
+export interface OptionStrategyLeg {
+  readonly index?: number
+  readonly kind: 'option' | 'underlying'
+  readonly side: 'buy' | 'sell'
+  readonly qty: number
+  /** 期权长代码（kind=option 时）。 */
+  readonly code?: string
+  readonly underlying?: string
+  readonly optionType?: OptionRight
+  readonly strike?: number
+  readonly expiryMonth?: string
+  readonly expiryDate?: string
+  /** 腿权利金（元/张，kind=option）。 */
+  readonly premium?: number
+  /** 备兑腿（covered short call 现货已锁）。 */
+  readonly covered?: boolean
+}
+
+/** 到期损益曲线一点。 */
+export interface OptionPayoffPoint {
+  readonly spot: number
+  readonly pnl: number
+}
+
+/** 净敞口希腊字母（带方向/张数/乘数符号；vegaPerVolPoint 按 1 vol 点、thetaPerDay 按 日）。 */
+export interface OptionNetGreeks {
+  readonly delta: number
+  readonly gamma: number
+  readonly vega: number
+  readonly vegaPerVolPoint: number
+  readonly theta: number
+  readonly thetaPerDay: number
+  readonly rho: number
+  readonly rhoPerBp: number
+}
+
+/** 组合希腊汇总（status=insufficient 表示至少一腿 IV 缺失，net 为部分和）。 */
+export interface OptionStrategyGreeksBlock {
+  readonly status: 'ok' | 'insufficient'
+  readonly net: OptionNetGreeks
+  readonly legs: readonly ({
+    readonly index?: number
+    readonly kind: 'option' | 'underlying'
+    readonly status: 'ok' | 'insufficient'
+  } & OptionNetGreeks)[]
+}
+
+/** 义务仓保证金一腿（SSE/SZSE ETF 标准比例 12%/7%，备兑认购权利仓现金 0）。 */
+export interface OptionStrategyMarginLeg {
+  readonly index?: number
+  readonly kind: 'option' | 'underlying'
+  readonly side?: 'buy' | 'sell'
+  readonly qty?: number
+  /** unsupported = 现货卖出腿无标准保证金口径。 */
+  readonly status?: 'unsupported'
+  readonly covered?: boolean
+  readonly initial?: number
+  readonly maintenance?: number
+}
+
+export interface OptionStrategyMarginBlock {
+  readonly perLeg: readonly OptionStrategyMarginLeg[]
+  readonly totalInitial: number
+  readonly totalMaintenance: number
+  readonly note: string
+}
+
+/** 到期月解析失败行（过期/无数据不中断整次策略计算）。 */
+export interface OptionStrategyFailure {
+  readonly expiryMonth: string
+  readonly code: string
+  readonly message: string
+}
+
+/** 策略组合全量报告（python strategy handle_strategy 返回形状的强类型）。 */
 export interface OptionStrategyResult {
   readonly underlying: string
   readonly source: OptionSource | string
+  readonly spot: number
+  readonly multiplier: number
+  readonly snapshotAt?: string
+  readonly priceBasis?: string
+  readonly priceBasisNote?: string
   readonly template?: string
-  readonly result: unknown
+  readonly legs: readonly OptionStrategyLeg[]
+  readonly entry: { readonly debitCredit: number; readonly note: string }
+  readonly payoff: readonly OptionPayoffPoint[]
+  readonly greeks: OptionStrategyGreeksBlock
+  readonly margin: OptionStrategyMarginBlock
+  readonly charts?: readonly unknown[]
+  readonly failures?: readonly OptionStrategyFailure[]
 }
 
 export interface CnOptionsQuery {
@@ -165,6 +252,56 @@ export interface CnOptionsQuery {
   readonly source?: OptionSource
   readonly rate?: number
   readonly priceField?: 'last' | 'prevSettle'
+}
+
+/**
+ * python 内核报告透传类型：形状由 python/options 各 handler 文档字符串定义
+ * （vol_analytics / fetch_underlying_daily / price / parity_check），桥与 agent
+ * 工具只 JSON 序列化不解释字段——与 OptionStrategyResult 的强类型（UI 消费）区分。
+ */
+export type KernelReport = Readonly<Record<string, unknown>>
+
+/** vol_analytics 查询（多月 IV 截面 + 标的已实现波动率）。 */
+export interface OptionVolAnalyticsQuery extends CnOptionsQuery {
+  /** 缺省 = 标准四季月全集。 */
+  readonly expiryMonths?: readonly string[]
+  readonly asOf?: string
+  readonly dividendYield?: number
+  /** 已实现波动率窗口（交易日），python 默认 [21, 63, 252]。 */
+  readonly hvWindows?: readonly number[]
+  /** IV 分位窗口，python 默认 [252]。 */
+  readonly ivWindows?: readonly number[]
+}
+
+/** fetch_underlying_daily 查询（标的 ETF 现货日线，parquet cache-first）。 */
+export interface OptionUnderlyingDailyQuery {
+  readonly source: 'akshare' | 'iquant'
+  /** 缺省 / 'all' = 该 source 注册表全表。 */
+  readonly underlying?: string
+  readonly start?: string
+  readonly end?: string
+  readonly adjust?: '' | 'qfq' | 'hfq'
+  readonly forceRefresh?: boolean
+}
+
+/** price 查询（单腿欧式 BSM 定价与全 Greeks；expiryDate+asOf 与 years 二选一）。 */
+export interface OptionPriceQuery {
+  readonly spot: number
+  readonly strike: number
+  readonly optionType: OptionRight
+  readonly vol: number
+  readonly expiryDate?: string
+  readonly asOf?: string
+  readonly years?: number
+  readonly rate?: number
+  readonly dividendYield?: number
+}
+
+/** parity_check 查询（同链同期同行权价 C−P 配对平价检验）。 */
+export interface OptionParityQuery extends CnOptionsQuery {
+  /** 偏差阈值（元），缺省 max(2×tickSize, 0.0005)。 */
+  readonly threshold?: number
+  readonly asOf?: string
 }
 
 /** 标准四季月一行（当月 / 次月 / +3 / +6），到期日 = 该月第四个周三。 */
@@ -189,6 +326,93 @@ export interface CnOptionsService {
   getOptionChain(query: CnOptionsQuery): Promise<OptionChain>
   getImpliedVol(query: CnOptionsQuery & { readonly rate: number }): Promise<OptionImpliedVolResult>
   getStrategy(request: OptionStrategyRequest): Promise<OptionStrategyResult>
+  /** 阶段 3 内核上桥：波动率分析报告（python vol_analytics）。 */
+  getVolAnalytics(query: OptionVolAnalyticsQuery): Promise<KernelReport>
+  /** 阶段 3 内核上桥：标的 ETF 现货日线（python fetch_underlying_daily）。 */
+  getUnderlyingDaily(query: OptionUnderlyingDailyQuery): Promise<KernelReport>
+  /** 阶段 3 内核上桥：单腿 BSM 定价与 Greeks（python price）。 */
+  getPrice(query: OptionPriceQuery): Promise<KernelReport>
+  /** 阶段 3 内核上桥：Put-Call 平价检验（python parity_check）。 */
+  getParityCheck(query: OptionParityQuery): Promise<KernelReport>
+}
+
+/* ── CN ETF 期权交易契约（2026-09-08 阶段 3，双闸照 TradeService 范式）──────── */
+
+/** 期权委托类型（上交所/深交所期权均以限价为主，市价仅部分标的支持）。 */
+export type OptionOrderType = 'limit' | 'market'
+
+/**
+ * 期权下单请求。认购/认沽由长代码内嵌（…C…/…P…）；CN 期权实物交割需显式开平标志。
+ * 铁律 #3：dryRun 缺省 true（模拟回执），实盘需 dryRun=false + 服务侧 liveTrading=true 双开。
+ */
+export interface OptionOrderRequest {
+  /** 期权长代码（规范主键），如 510050C2609M02850。 */
+  readonly symbol: string
+  readonly side: 'buy' | 'sell'
+  /** 开平仓（CN 期权必填语义：义务仓开仓收保证金，权利仓开仓付权利金）。 */
+  readonly offset: 'open' | 'close'
+  /** 张数（1 张 = multiplier 份 ETF，当前名册 multiplier=10000）。 */
+  readonly quantity: number
+  /** 委托价（元/张权利金口径；orderType=limit 时必填）。 */
+  readonly price?: number
+  readonly orderType: OptionOrderType
+  /** 缺省 true：本地构造模拟回执，不触 QMT 网关。 */
+  readonly dryRun?: boolean
+}
+
+/** 期权下单回执。premiumAmount 为换算好的权利金金额（price × quantity × multiplier）。 */
+export interface OptionOrder {
+  readonly id: string
+  readonly symbol: string
+  readonly side: 'buy' | 'sell'
+  readonly offset: 'open' | 'close'
+  readonly orderType: OptionOrderType
+  readonly status: 'new' | 'filled' | 'canceled' | 'rejected'
+  readonly quantity: number
+  readonly price?: number
+  /** 权利金金额（元）：price × quantity × multiplier。 */
+  readonly premiumAmount?: number
+  readonly multiplier: number
+  readonly dryRun: boolean
+  readonly timestamp: number
+}
+
+/** 期权持仓行。quantity 正 = 权利仓（多头），负 = 义务仓（空头）。 */
+export interface OptionPosition {
+  /** 期权长代码。 */
+  readonly symbol: string
+  readonly underlying: string
+  readonly optionType: OptionRight
+  readonly strike: number
+  readonly expiryMonth: string
+  readonly quantity: number
+  readonly avgPrice?: number
+  /** 义务仓保证金占用（元；权利仓恒 0/缺省）。 */
+  readonly marginOccupied?: number
+  readonly timestamp?: number
+}
+
+/**
+ * CN ETF 期权交易服务（独立键 tradingCnOptionsTrade）。与 TradeService 同款服务缝双闸
+ * （dryRun 缺省 true + liveTrading 显式）：dry-run 本地构造回执；live 路径打 QMT 网关
+ * （qmtGatewayUrl，MiniQMT 期权通道）。只读面（positions）不走闸门。
+ */
+export interface CnOptionsTradeService {
+  placeOptionOrder(request: OptionOrderRequest): Promise<OptionOrder>
+  cancelOptionOrder(orderId: string, symbol?: string): Promise<void>
+  listOptionPositions(): Promise<readonly OptionPosition[]>
+}
+
+/** 现货 ETF ↔ 期权名册关联（阶段 4 互联：双向跳转与现价拼接）。 */
+export interface UnderlyingLink {
+  /** 期权名册主键（6 位 ETF 代码，如 510050）。 */
+  readonly underlying: string
+  /** 现货市场规范符号（cn 词汇，如 510050.SH / 159915.SZ）。 */
+  readonly spotSymbol: string
+  readonly exchange: 'SSE' | 'SZSE' | 'SYNTH'
+  /** 期权长代码前缀（行权价与到期月接在其后）。 */
+  readonly callPrefix: string
+  readonly putPrefix: string
 }
 
 /** 股票市场标的基本面与财务估值快照（CN）。 */
@@ -738,6 +962,12 @@ declare module '@deepseek-ai/cordis' {
      * 不走 tradingMarketDataRegistry / CN 行情 provider（默认腾讯无期权链）。
      */
     tradingCnOptions: CnOptionsService
+    /**
+     * CN ETF 期权交易服务（2026-09-08 阶段 3）：connector-options 交易半提供。
+     * 服务缝双闸与 TradeService 同款（dryRun 缺省 true + liveTrading 显式），
+     * 注册不改变安全语义——实盘路径仍需 base 审批闸门（ORDER_GATE_PATTERN）。
+     */
+    tradingCnOptionsTrade: CnOptionsTradeService
   }
 }
 

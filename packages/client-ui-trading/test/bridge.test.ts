@@ -748,3 +748,93 @@ describe('TradingBridge CN ETF options', () => {
     })
   })
 })
+
+describe('TradingBridge CN ETF options 交易端点（阶段 3）', () => {
+  function optionsTradeHost(trade: import('@dshtrading/api').CnOptionsTradeService | undefined): BridgeHost {
+    return {
+      ...fakeHost({}),
+      getCnOptionsTrade: () => trade,
+    }
+  }
+
+  it('未挂 tradingCnOptionsTrade → TRADING_NOT_IMPLEMENTED', async () => {
+    const bridge = new TradingBridge(optionsTradeHost(undefined))
+    await expect(dispatchBridgeRequest(bridge, 'GET', '/options/positions', new URLSearchParams()))
+      .rejects.toMatchObject({ code: 'TRADING_NOT_IMPLEMENTED' })
+  })
+
+  it('POST /options/order 透传（默认请求实盘，闸门语义在服务缝）；校验失败 400', async () => {
+    const placeOptionOrder = vi.fn(async (req: import('@dshtrading/api').OptionOrderRequest) => ({
+      id: 'dry-opt-1', symbol: req.symbol, side: req.side, offset: req.offset, orderType: req.orderType,
+      status: 'filled' as const, quantity: req.quantity,
+      ...(req.price !== undefined ? { price: req.price, premiumAmount: req.price * req.quantity * 10000 } : {}),
+      multiplier: 10000, dryRun: req.dryRun ?? true, timestamp: 1,
+    }))
+    const bridge = new TradingBridge(optionsTradeHost({
+      placeOptionOrder: placeOptionOrder as never,
+      cancelOptionOrder: async () => {},
+      listOptionPositions: async () => [],
+    }))
+    const { status, payload } = await dispatchBridgeRequest(
+      bridge, 'POST', '/options/order', new URLSearchParams(),
+      { symbol: '510050C2609M02850', side: 'buy', offset: 'open', orderType: 'limit', quantity: 1, price: 0.0856 },
+    )
+    expect(status).toBe(200)
+    expect(payload).toMatchObject({ ok: true, order: { symbol: '510050C2609M02850', dryRun: false, premiumAmount: 856 } })
+    expect(placeOptionOrder).toHaveBeenCalledWith(expect.objectContaining({ dryRun: false, offset: 'open' }))
+
+    // 校验失败：limit 缺价格 / quantity 非正整数 / offset 非法 → 400
+    await expect(dispatchBridgeRequest(
+      bridge, 'POST', '/options/order', new URLSearchParams(),
+      { symbol: '510050C2609M02850', side: 'buy', offset: 'open', orderType: 'limit', quantity: 1 },
+    )).rejects.toMatchObject({ status: 400 })
+    await expect(dispatchBridgeRequest(
+      bridge, 'POST', '/options/order', new URLSearchParams(),
+      { symbol: '510050C2609M02850', side: 'buy', offset: 'open', orderType: 'limit', quantity: 0, price: 0.0856 },
+    )).rejects.toMatchObject({ status: 400 })
+    await expect(dispatchBridgeRequest(
+      bridge, 'POST', '/options/order', new URLSearchParams(),
+      { symbol: '510050C2609M02850', side: 'buy', offset: 'flip', orderType: 'limit', quantity: 1, price: 0.0856 },
+    )).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('DELETE /options/order 撤单；缺 id → 400', async () => {
+    const cancelOptionOrder = vi.fn(async (id: string, sym?: string) => {
+      if (id === 'missing') throw new Error('nope')
+      if (sym !== undefined) throw new Error('unexpected symbol')
+    })
+    const bridge = new TradingBridge(optionsTradeHost({
+      placeOptionOrder: async () => {
+        throw new Error('unused')
+      },
+      cancelOptionOrder,
+      listOptionPositions: async () => [],
+    }))
+    const { status, payload } = await dispatchBridgeRequest(
+      bridge, 'DELETE', '/options/order', new URLSearchParams({ id: 'opt-123' }),
+    )
+    expect(status).toBe(200)
+    expect(payload).toEqual({ ok: true, canceled: true })
+    expect(cancelOptionOrder).toHaveBeenCalledWith('opt-123', undefined)
+    await expect(dispatchBridgeRequest(bridge, 'DELETE', '/options/order', new URLSearchParams()))
+      .rejects.toMatchObject({ status: 400 })
+  })
+
+  it('GET /options positions 只读透传', async () => {
+    const bridge = new TradingBridge(optionsTradeHost({
+      placeOptionOrder: async () => {
+        throw new Error('unused')
+      },
+      cancelOptionOrder: async () => {},
+      listOptionPositions: async () => [{
+        symbol: '510050C2609M02850', underlying: '510050', optionType: 'C' as const,
+        strike: 2.85, expiryMonth: '2609', quantity: 2,
+      }],
+    }))
+    const { payload } = await dispatchBridgeRequest(bridge, 'GET', '/options/positions', new URLSearchParams())
+    expect(payload).toMatchObject({
+      ok: true,
+      positions: [{ symbol: '510050C2609M02850', optionType: 'C', quantity: 2 }],
+    })
+  })
+})

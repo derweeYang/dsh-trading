@@ -75,6 +75,17 @@
         dryRun: true
         liveTrading: false
 
+    # ETF 期权交易半（阶段 3）：provide tradingCnOptionsTrade（只读 tradingCnOptions
+    # 由 host 面 dataplane 行提供）。dryRun/liveTrading 双闸与 qmt 行同构：
+    # 默认全部模拟，实盘需两处显式开启（liveTrading: true + 请求 dryRun: false）。
+    - id: dsh-trading-cn-connector-options
+      name: '@dshtrading/connector-options'
+      config:
+        enabled: true
+        source: akshare
+        dryRun: true
+        liveTrading: false
+
 
 
 

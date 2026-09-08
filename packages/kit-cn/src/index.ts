@@ -33,7 +33,11 @@ import {
   createGetOptionChainTool,
   createGetOptionExpiriesTool,
   createGetOptionIvTool,
+  createGetOptionPriceTool,
   createGetOptionStrategyTool,
+  createGetOptionUnderlyingDailyTool,
+  createGetOptionVolAnalyticsTool,
+  createOptionParityCheckTool,
 } from './options-tools.js'
 import type { CnOptionsService } from '@dshtrading/api'
 
@@ -209,6 +213,11 @@ export function apply(ctx: Context, config: Config): void {
   registerOnce(createGetOptionChainTool({ getService: lookupOptions }))
   registerOnce(createGetOptionIvTool({ getService: lookupOptions }))
   registerOnce(createGetOptionStrategyTool({ getService: lookupOptions }))
+  // 阶段 3 内核上桥：vol_analytics / underlying daily / price / parity_check（只读）。
+  registerOnce(createGetOptionVolAnalyticsTool({ getService: lookupOptions }))
+  registerOnce(createGetOptionUnderlyingDailyTool({ getService: lookupOptions }))
+  registerOnce(createGetOptionPriceTool({ getService: lookupOptions }))
+  registerOnce(createOptionParityCheckTool({ getService: lookupOptions }))
   const registry = serviceGetter.get?.('tradingMarketDataRegistry', false) as
     | { active(m: string): { service: MarketDataService } | undefined }
     | undefined

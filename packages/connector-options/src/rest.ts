@@ -5,13 +5,18 @@
 import type {
   CnOptionsQuery,
   CnOptionsService,
+  KernelReport,
   OptionChain,
   OptionExpiryCalendar,
   OptionImpliedVolResult,
+  OptionParityQuery,
+  OptionPriceQuery,
   OptionSource,
   OptionStrategyRequest,
   OptionStrategyResult,
   OptionUnderlying,
+  OptionUnderlyingDailyQuery,
+  OptionVolAnalyticsQuery,
   TradingErrorCode,
 } from '@dshtrading/api'
 
@@ -30,6 +35,8 @@ export class TradingServiceError extends Error {
 export const SSE_UNDERLYINGS = ['510050', '510300', '510500', '588000', '588080'] as const
 export const SZSE_UNDERLYINGS = ['159919', '159915', '159901', '159922'] as const
 export const SYNTH_UNDERLYINGS = ['910050'] as const
+/** iquant（迅投研）名册：沪深皆可达，解深市 akshare NO_DATA。 */
+export const IQUANT_UNDERLYINGS = ['510050', '159915'] as const
 
 const STATIC_ROWS: Record<OptionSource, readonly OptionUnderlying[]> = {
   akshare: [
@@ -42,6 +49,10 @@ const STATIC_ROWS: Record<OptionSource, readonly OptionUnderlying[]> = {
     { underlying: '159915', exchange: 'SZSE', name: '创业板ETF易方达', multiplier: 10000, tickSize: 0.0001, quotesSource: 'szse_static_only' },
     { underlying: '159901', exchange: 'SZSE', name: '深证100ETF易方达', multiplier: 10000, tickSize: 0.0001, quotesSource: 'szse_static_only' },
     { underlying: '159922', exchange: 'SZSE', name: '嘉实中证500ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'szse_static_only' },
+  ],
+  iquant: [
+    { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
+    { underlying: '159915', exchange: 'SZSE', name: '创业板ETF易方达', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
   ],
   synth: [
     { underlying: '910050', exchange: 'SYNTH', name: 'synth50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'synth' },
@@ -110,6 +121,7 @@ export function isKnownUnderlying(underlying: string): boolean {
   return (
     (SSE_UNDERLYINGS as readonly string[]).includes(underlying)
     || (SZSE_UNDERLYINGS as readonly string[]).includes(underlying)
+    || (IQUANT_UNDERLYINGS as readonly string[]).includes(underlying)
     || (SYNTH_UNDERLYINGS as readonly string[]).includes(underlying)
   )
 }
@@ -199,6 +211,42 @@ export class OptionsRestClient implements CnOptionsService {
     })
   }
 
+  async getVolAnalytics(query: OptionVolAnalyticsQuery): Promise<KernelReport> {
+    const underlying = normalizeCnUnderlying(query.underlying)
+    return await this.invoke<KernelReport>('vol_analytics', {
+      ...query,
+      underlying,
+      source: query.source ?? this.source,
+    })
+  }
+
+  async getUnderlyingDaily(query: OptionUnderlyingDailyQuery): Promise<KernelReport> {
+    // fetch_underlying_daily 的 underlying 缺省 = source 注册表全表，不做 normalize。
+    return await this.invoke<KernelReport>('fetch_underlying_daily', { ...query })
+  }
+
+  async getPrice(query: OptionPriceQuery): Promise<KernelReport> {
+    // price 是纯计算（spot/strike/vol 直填），无标的规范化。
+    if (!Number.isFinite(query.spot) || !Number.isFinite(query.strike) || !Number.isFinite(query.vol)) {
+      throw new TradingServiceError('TRADING_UNSUPPORTED_SYMBOL', 'options price: spot/strike/vol must be finite numbers')
+    }
+    return await this.invoke<KernelReport>('price', { ...query })
+  }
+
+  async getParityCheck(query: OptionParityQuery): Promise<KernelReport> {
+    const underlying = normalizeCnUnderlying(query.underlying)
+    const expiryMonth = query.expiryMonth
+    if (expiryMonth === undefined || expiryMonth.trim() === '') {
+      throw new TradingServiceError('TRADING_UNSUPPORTED_SYMBOL', 'options: expiryMonth is required')
+    }
+    return await this.invoke<KernelReport>('parity_check', {
+      ...query,
+      underlying,
+      expiryMonth: expiryMonth.trim(),
+      source: query.source ?? this.source,
+    })
+  }
+
   private async invoke<T>(command: string, body: Record<string, unknown>): Promise<T> {
     const url = `${this.gatewayUrl}/v1/${command}`
     let res: Response
@@ -251,4 +299,145 @@ function asKernelError(wire: unknown): { code: string; message: string } | undef
 
 function kernelError(code: string, message: string): TradingServiceError {
   return new TradingServiceError(KERNEL_TO_TRADING[code] ?? 'TRADING_EXCHANGE_ERROR', message)
+}
+
+/* ── QMT 期权通道（live 路径专用；dry-run 不触网关）────────────────────── */
+
+export interface QmtOptionTradeOptions {
+  /** MiniQMT 网关地址（与 connector-qmt 共用同一网关进程，QMT_GATEWAY_URL 同源）。 */
+  qmtGatewayUrl?: string | undefined
+  accountId?: string | undefined
+  fetchImpl?: typeof fetch
+}
+
+/**
+ * QMT 网关期权通道 REST 客户端。端点契约由本仓定义（网关侧实现对齐）：
+ *   POST /api/v1/trade/option/order    {account_id, option_code, order_side,
+ *        open_dir, order_type, price, volume} → {code, message, data:{order_id, status}}
+ *   POST /api/v1/trade/option/cancel   {account_id, order_id} → {code, message}
+ *   GET  /api/v1/trade/option/positions?account_id= → {code, message, data:[...]}
+ * option_code 传 TS 规范长代码（如 510050C2609M02850），网关侧负责长代码→挂牌
+ * 合约代码映射（MiniQMT 挂牌代码随交易所分配，不宜在 TS 侧写死）。
+ */
+export class QmtOptionTradeRestClient {
+  readonly qmtGatewayUrl: string
+  private readonly accountId?: string | undefined
+  private readonly fetchImpl: typeof fetch
+
+  constructor(options: QmtOptionTradeOptions = {}) {
+    this.qmtGatewayUrl = (options.qmtGatewayUrl ?? process.env.QMT_GATEWAY_URL ?? 'http://127.0.0.1:5800').replace(/\/$/, '')
+    this.accountId = options.accountId
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch
+  }
+
+  private async requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+    const url = `${this.qmtGatewayUrl}${path}`
+    let res: Response
+    try {
+      res = await this.fetchImpl(url, {
+        method: init?.method ?? 'GET',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        ...(init?.body !== undefined ? { body: init.body } : {}),
+      })
+    } catch (err) {
+      throw new TradingServiceError(
+        'TRADING_NETWORK',
+        `QMT option gateway unreachable (${this.qmtGatewayUrl}): ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      )
+    }
+    let wire: unknown
+    try {
+      wire = await res.json()
+    } catch (err) {
+      throw new TradingServiceError('TRADING_UPSTREAM_ERROR', `QMT option gateway returned non-JSON (HTTP ${res.status})`, err)
+    }
+    if (!res.ok) {
+      const message = (wire as { message?: unknown } | null)?.message
+      throw new TradingServiceError('TRADING_UPSTREAM_ERROR', `QMT option gateway HTTP ${res.status}: ${typeof message === 'string' ? message : ''}`)
+    }
+    return wire as T
+  }
+
+  private requireAccount(): string {
+    if (this.accountId === undefined || this.accountId === '') {
+      throw new TradingServiceError('TRADING_AUTH_FAILED', 'QMT options: accountId is required (config or QMT gateway default)')
+    }
+    return this.accountId
+  }
+
+  async placeOptionOrder(request: {
+    symbol: string
+    side: 'buy' | 'sell'
+    offset: 'open' | 'close'
+    orderType: 'limit' | 'market'
+    price?: number
+    quantity: number
+  }): Promise<{ id: string; status?: string | undefined }> {
+    const res = await this.requestJson<{ code: number; message?: string; data?: { order_id?: string; status?: string } }>(
+      '/api/v1/trade/option/order',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          account_id: this.requireAccount(),
+          option_code: request.symbol,
+          order_side: request.side,
+          open_dir: request.offset,
+          order_type: request.orderType,
+          price: request.price ?? 0,
+          volume: request.quantity,
+        }),
+      },
+    )
+    if (res.code !== 0 || !res.data?.order_id) {
+      throw new TradingServiceError('TRADING_EXCHANGE_ERROR', `QMT option placeOrder failed: ${res.message ?? `code ${res.code}`}`)
+    }
+    return { id: res.data.order_id, status: res.data.status }
+  }
+
+  async cancelOptionOrder(orderId: string): Promise<void> {
+    const res = await this.requestJson<{ code: number; message?: string }>(
+      '/api/v1/trade/option/cancel',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          account_id: this.requireAccount(),
+          order_id: orderId,
+        }),
+      },
+    )
+    if (res.code !== 0) {
+      throw new TradingServiceError('TRADING_EXCHANGE_ERROR', `QMT option cancelOrder failed: ${res.message ?? `code ${res.code}`}`)
+    }
+  }
+
+  async listOptionPositions(): Promise<readonly {
+    option_code: string
+    underlying?: string
+    option_type?: string
+    strike?: number
+    expiry_month?: string
+    volume?: number
+    avg_price?: number
+    margin?: number
+  }[]> {
+    const res = await this.requestJson<{
+      code: number
+      message?: string
+      data?: Array<{
+        option_code: string
+        underlying?: string
+        option_type?: string
+        strike?: number
+        expiry_month?: string
+        volume?: number
+        avg_price?: number
+        margin?: number
+      }>
+    }>(`/api/v1/trade/option/positions?account_id=${encodeURIComponent(this.requireAccount())}`)
+    if (res.code !== 0) {
+      throw new TradingServiceError('TRADING_EXCHANGE_ERROR', `QMT option getPositions failed: ${res.message ?? `code ${res.code}`}`)
+    }
+    return res.data ?? []
+  }
 }
