@@ -1,9 +1,17 @@
+import { rmSync, symlinkSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { composePresets, connectorRowsOf, installFromLoader, installPresets, isUnmodifiedManaged, MARKETS, stamp, inject, Config } from '../src/presets.js'
 import { getPresetContribution as cn } from '../../cn/src/index.js'
+
+// Windows 未开开发者模式/非管理员时 symlink 权限被拒（EPERM）：探测能力后跳过
+// 该守卫用例，Linux CI 与开发者模式本机仍全覆盖（与 updater-service 的 skipIf 同例）。
+const canSymlink = (() => {
+  const probe = join(tmpdir(), `trading-symlink-probe-${process.pid}`)
+  try { symlinkSync(tmpdir(), probe, 'dir'); rmSync(probe); return true } catch { return false }
+})()
 
 const dirs: string[] = []
 async function root() { const dir = await mkdtemp(join(tmpdir(), 'trading-roles-')); dirs.push(dir); return join(dir, 'presets') }
@@ -160,7 +168,7 @@ it('does not overwrite an existing legacy backup or migrate when replacement is 
   await installPresets([], path)
   expect(await readdir(path)).toContain('us-trader')
 })
-it('refuses symlink targets without writing through them', async () => {
+it.skipIf(!canSymlink)('refuses symlink targets without writing through them', async () => {
   const path = await root()
   await mkdir(path, { recursive: true })
   const external = join(path, '../external')
