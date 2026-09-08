@@ -5,7 +5,8 @@
  */
 import type { AccountBalance, Kline, MarketId, MarketInfo, Order, Orderbook, Position, TickerOutcome, TradeFill, TradeTick } from './types.ts'
 import type {
-  FundamentalsPackage, OptionChain, OptionExpiryCalendar, OptionUnderlying,
+  FundamentalsPackage, KernelReport, OptionChain, OptionExpiryCalendar, OptionOrder,
+  OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying,
 } from '@dshtrading/api'
 import type { CustomIndicatorRecord, IndicatorInstance } from '@dshtrading/indicators'
 import type { KnowledgeCard } from '@dshtrading/knowledge'
@@ -144,6 +145,151 @@ export async function fetchOptionsChain(
     )
     if (wire.chain === undefined) return optionsFailure(new Error('chain missing in wire'))
     return { ok: true, data: wire.chain }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/**
+ * 现货 ↔ 期权长代码双向规范化结果（阶段 4 互联；形状镜像桥端 OptionResolveWire，
+ * SSOT 在 src/bridge.ts——client 不 import node 半，只声明消费的字段）。
+ */
+export interface OptionResolveResult {
+  input: string
+  /** 规范 6 位 ETF 代码（名册主键）。 */
+  underlying: string
+  /** 名册命中时给出现货跳转符号与长代码前缀；名册外（如个股）缺席 → 隐藏期权入口。 */
+  link?: { underlying: string; spotSymbol: string; exchange: string; callPrefix: string; putPrefix: string }
+  /** 输入本身是期权长代码时解析出的合约要素。 */
+  contract?: { code: string; optionType: 'C' | 'P'; strike: number; expiryMonth: string }
+}
+
+/** 双向规范化（纯本地解析，不打网关）；非 CN 格式输入 → 400。 */
+export async function fetchOptionsResolve(symbol: string): Promise<OptionsOutcome<OptionResolveResult>> {
+  try {
+    const query = new URLSearchParams({ symbol })
+    const wire = await getJson<{ ok: boolean } & OptionResolveResult>(
+      `/dshtrading/api/options/resolve?${query.toString()}`,
+    )
+    if (wire.underlying === undefined) return optionsFailure(new Error('underlying missing in wire'))
+    return { ok: true, data: wire }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/** 波动率分析报告（python vol_analytics JSON 透传不解释；总览页 IV 分位排序用）。 */
+export async function fetchOptionVolAnalytics(query: {
+  underlying: string
+  expiryMonths?: readonly string[]
+  asOf?: string
+  rate?: number
+  dividendYield?: number
+  source?: string
+}): Promise<OptionsOutcome<KernelReport>> {
+  try {
+    const search = new URLSearchParams({ underlying: query.underlying })
+    if (query.expiryMonths !== undefined && query.expiryMonths.length > 0) {
+      search.set('expiryMonths', query.expiryMonths.join(','))
+    }
+    if (query.asOf !== undefined) search.set('asOf', query.asOf)
+    if (query.rate !== undefined) search.set('rate', String(query.rate))
+    if (query.dividendYield !== undefined) search.set('dividendYield', String(query.dividendYield))
+    if (query.source !== undefined) search.set('source', query.source)
+    const wire = await getJson<{ ok: boolean; volAnalytics: KernelReport }>(
+      `/dshtrading/api/options/vol-analytics?${search.toString()}`,
+    )
+    if (wire.volAnalytics === undefined) return optionsFailure(new Error('volAnalytics missing in wire'))
+    return { ok: true, data: wire.volAnalytics }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/** 组合策略/保证金计算（义务仓保证金预估：单腿 legs=[{kind:'option',side,qty,code}]）。 */
+export async function fetchOptionStrategy(request: OptionStrategyRequest): Promise<OptionsOutcome<OptionStrategyResult>> {
+  try {
+    const response = await fetch('/dshtrading/api/options/strategy', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request),
+    })
+    const wire = await response.json().catch(() => undefined) as
+      | { ok?: boolean; strategy?: OptionStrategyResult; code?: string; message?: string }
+      | undefined
+    if (!response.ok || wire?.ok !== true || wire.strategy === undefined) {
+      const code = wire?.code ?? `HTTP_${response.status}`
+      return { ok: false, code, message: wire?.message ?? code }
+    }
+    return { ok: true, data: wire.strategy }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/** 期权下单回执：error 带 code（双闸拒绝 TRADING_LIVE_TRADING_DISABLED 原文展示）。 */
+export interface OptionOrderCallResult {
+  order?: OptionOrder
+  error?: { code: string; message: string }
+}
+
+/**
+ * GUI 期权下单（阶段 3 T 板直接下单）。默认请求实盘（dryRun: false，与现货交易台
+ * 一致）；安全由服务缝双闸 fail-closed 兜底——连接器 dryRun 缺省 true（本地模拟
+ * 回执）、实盘需宿主显式开 liveTrading。闸门拒绝原文转达，不在 UI 层伪造 dry-run 成功。
+ * 回执 premiumAmount 已换算为权利金金额（元），勿再乘 multiplier。
+ */
+export async function placeOptionOrder(input: {
+  symbol: string
+  side: 'buy' | 'sell'
+  offset: 'open' | 'close'
+  orderType: 'limit' | 'market'
+  quantity: number
+  price?: number
+}): Promise<OptionOrderCallResult> {
+  try {
+    const response = await fetch('/dshtrading/api/options/order', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...input, dryRun: false }),
+    })
+    const wire = await response.json().catch(() => ({})) as
+      | { ok?: boolean; order?: OptionOrder; code?: string; message?: string }
+    if (!response.ok || wire.ok !== true || wire.order === undefined) {
+      const code = wire.code ?? `HTTP_${response.status}`
+      const message = wire.message || code
+      console.warn('[dsh-trading] option order rejected:', code, wire.message)
+      return { error: { code, message } }
+    }
+    return { order: wire.order }
+  } catch (err) {
+    return { error: { code: 'TRADING_UNKNOWN', message: err instanceof Error ? err.message : 'Network request failed' } }
+  }
+}
+
+/** GUI 期权撤单（与真实下单同门槛：liveTrading=true 且 dryRun=false）。 */
+export async function cancelOptionOrder(orderId: string, symbol?: string): Promise<boolean> {
+  try {
+    const query = new URLSearchParams({ id: orderId, ...(symbol !== undefined ? { symbol } : {}) })
+    const response = await fetch(`/dshtrading/api/options/order?${query.toString()}`, {
+      method: 'DELETE',
+      headers: { accept: 'application/json' },
+    })
+    if (!response.ok) return false
+    const wire = await response.json() as { ok?: boolean; canceled?: boolean }
+    return wire.ok === true && wire.canceled === true
+  } catch {
+    return false
+  }
+}
+
+/** 期权持仓（只读透传，不走闸门）。quantity 正 = 权利仓、负 = 义务仓。 */
+export async function fetchOptionPositions(): Promise<OptionsOutcome<readonly OptionPosition[]>> {
+  try {
+    const wire = await getJson<{ ok: boolean; positions: readonly OptionPosition[] }>(
+      '/dshtrading/api/options/positions',
+    )
+    return { ok: true, data: Array.isArray(wire.positions) ? wire.positions : [] }
   } catch (err) {
     return optionsFailure(err)
   }

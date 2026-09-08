@@ -186,6 +186,14 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   /** 名册命中当前标的 → 「期权」页签可显示（docs/options-bridge.md 显隐判据）。 */
   const optionsAvailable = optionUnderlying !== undefined
     && optionsUnderlyings.some(item => item.underlying === optionUnderlying)
+  /** 当前标的的名册行：期权交易面的合约乘数与底仓 heldQty 来源（阶段 3/4 互联）。
+   *  未命中 → undefined（此时 optionsAvailable=false，期权透镜不渲染）。 */
+  const optionUnderlyingRow = useMemo(
+    () => optionUnderlying === undefined
+      ? undefined
+      : optionsUnderlyings.find(item => item.underlying === optionUnderlying),
+    [optionsUnderlyings, optionUnderlying],
+  )
   /** 标准四季月（本地算，网关未起也画得出到期胶囊）。 */
   const [optionExpiries, setOptionExpiries] = useState<OptionExpiryCalendar | null>(null)
   /** 选中到期月（YYMM）。 */
@@ -1340,6 +1348,8 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
             colorMode={colorMode}
             underlyingSymbol={symbol ?? ''}
             underlyingName={displayName}
+            multiplier={optionUnderlyingRow?.multiplier ?? 10000}
+            heldQty={optionUnderlyingRow?.heldQty}
             onViewSpot={() => { setLens('spot'); setStageTab('chart') }}
             onTradeSpot={() => { setTradeDeskOpen(true) }}
             {...(sendLegToAgent !== undefined ? { onSendLegToAgent: sendLegToAgent } : {})}

@@ -2,35 +2,43 @@
  * CN ETF 期权 T 型报价板（2026-09-08 第一期只读面；2026-09-08 期权升格重构后由
  * QuoteStage「现货 ⇄ 期权」对等双透镜的「期权」透镜挂载，与 A 股现货平级）。
  *
- * 形态：ETF 联动操作条（查看标的 / 交易现货 / 把选中合约发给 Agent 下单）+ 到期月
- * 胶囊条（本地算，网关未起也能画）+ T 表（中间行权价、左认购右认沽）。数据全部
- * 来自桥 `GET /dshtrading/api/options/{expiries,chain}`，类型取 `@dshtrading/api`
+ * 形态：ETF 联动操作条（查看标的 / 交易现货 / 底仓徽章）+ 到期月胶囊条（本地算，
+ * 网关未起也能画）+ T 表（中间行权价、左认购右认沽；spot 回填时 ATM 高亮 +
+ * 实/虚值分色）+ 合约点选下单面板（阶段 3 交易面）+ 期权持仓条（只读）。
+ * 数据全部来自桥 `GET/POST /dshtrading/api/options/*`，类型取 `@dshtrading/api`
  * ——不在 client 另造一份（交接契约 docs/options-bridge.md）。
  *
- * **ETF ↔ ETF 期权互联（本期目标）**：
- * - 顶部联动条把期权的「标的 ETF」做实——一键切回现货透镜（onViewSpot）、一键打开
- *   现货交易台（onTradeSpot），使期权分析与 ETF 现货交易闭环；
- * - T 表任意一档（认购/认沽）可点选为待下单合约，经 onSendLegToAgent 把合约要素
- *   交给 Agent 评估下单（dry-run 优先），期权下单链路在客户端即与现货交易打通。
+ * **交易面语义（阶段 3）**：
+ * - 下单默认请求实盘（dryRun: false），安全由服务缝双闸 fail-closed 兜底；
+ *   闸门拒绝（TRADING_LIVE_TRADING_DISABLED 等）原文展示，不伪造 dry-run 成功；
+ * - 回执 premiumAmount 已换算为权利金金额（元），直接显示，不再乘 multiplier；
+ * - 义务仓（sell+open）保证金预估经 POST /options/strategy 的 margin 块
+ *   （单腿 legs=[{kind:'option',side,qty,code}]），失败降级为「以回执为准」；
+ * - 底仓 heldQty（统一资产台账聚合）→ 备兑可开张数 = floor(heldQty / multiplier)，
+ *   认购腿上一键预填备兑开仓（sell + open + 张数）。
  *
  * 降级纪律：
  * - 未挂 connector-options → 透镜整体不渲染（QuoteStage 的显隐判据），本组件不处理；
  * - TRADING_NETWORK → 提示启动网关；TRADING_NO_DATA → 空态 + 原文 message；
  * - 首个应答在途（loaded=false）→ 留白加载，不闪「不可用」。
  *
- * 本页只读分析，不构成投资建议。
+ * 本页技术与行情分析面，不构成投资建议。
  */
-import { useState } from 'react'
-import type { OptionChain, OptionExpiryMonth, OptionQuoteRow } from '@dshtrading/api'
+import { useEffect, useMemo, useState } from 'react'
+import type { OptionChain, OptionExpiryMonth, OptionOrder, OptionPosition, OptionQuoteRow } from '@dshtrading/api'
 import type { ColorMode } from './color-mode.ts'
 import type { MarketLocaleKey } from './contract.ts'
+import { cancelOptionOrder, fetchOptionPositions, fetchOptionStrategy, placeOptionOrder } from './api.ts'
 import { directionColor, fmtClock, fmtCompact, fmtPercent, fmtPrice } from './format.ts'
+import { usePoll } from './usePoll.ts'
 import css from './options-stage.module.css'
 
-export type OptionsStageTranslate = (key: MarketLocaleKey) => string
+export type OptionsStageTranslate = (key: MarketLocaleKey, params?: Record<string, unknown>) => string
 
-/** 用户在 T 表点选的待下单合约要素（交给 Agent 评估下单，dry-run 优先）。 */
+/** 用户在 T 表点选的待下单合约要素（下单主键 = 长代码 code）。 */
 export interface SelectedOptionLeg {
+  /** 期权长代码（规范主键，如 510050C2609M02850）。 */
+  code: string
   side: 'call' | 'put'
   strike: number
   last?: number
@@ -54,7 +62,11 @@ export interface OptionsStageProps {
   /** 标的 ETF 代码（用于联动条展示与「查看现货」回跳）。 */
   underlyingSymbol: string
   /** 标的 ETF 名称（联动条展示，缺省回退代码）。 */
-  underlyingName?: string
+  underlyingName?: string | undefined
+  /** 合约乘数（1 张 = multiplier 份 ETF；名册行带回，缺省 10000）。 */
+  multiplier: number
+  /** 底仓份额（统一资产台账聚合；无持仓缺省——备兑徽章与快捷预填的依据）。 */
+  heldQty?: number | undefined
   /** 查看标的现货：切回现货透镜并定位该 ETF（由 QuoteStage 注入）。 */
   onViewSpot: () => void
   /** 交易现货 ETF：打开现货交易台预填该 ETF（由 QuoteStage 注入）。 */
@@ -91,18 +103,62 @@ function snapshotClock(snapshotAt: string | undefined): string | undefined {
   return Number.isFinite(ms) ? fmtClock(ms) : undefined
 }
 
+/** 持仓/保证金等金额（元，千分位整数或两位小数）。 */
+function fmtAmount(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return '—'
+  return value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+}
+
+// 期权持仓轮询：签名端点 + 个人账户面，15s 对齐交易台节奏（issue #40 同款）。
+const OPTION_POSITIONS_POLL_MS = 15000
+
 export function OptionsStage({
   t, months, selectedMonth, onSelectMonth, chain, failure, loaded, colorMode,
-  underlyingSymbol, underlyingName, onViewSpot, onTradeSpot, onSendLegToAgent,
+  underlyingSymbol, underlyingName, multiplier, heldQty, onViewSpot, onTradeSpot, onSendLegToAgent,
 }: OptionsStageProps): React.JSX.Element {
   const strikes = chain === null ? [] : strikeOrder(chain)
   const clock = chain === null ? undefined : snapshotClock(chain.snapshotAt)
-  /** 用户在 T 表点选的待下单合约（认购/认沽 + 行权价）。 */
+  /** 用户在 T 表点选的待下单合约（认购/认沽 + 行权价 + 长代码）。 */
   const [selectedLeg, setSelectedLeg] = useState<SelectedOptionLeg | null>(null)
+
+  // ATM 行（spot 回填时 |strike−spot| 最小档）：行级高亮 + 两侧实/虚值分色判据。
+  const spot = chain?.spot
+  const atmStrike = useMemo(() => {
+    if (spot === undefined || strikes.length === 0) return undefined
+    let best = strikes[0] ?? 0
+    for (const strike of strikes) {
+      if (Math.abs(strike - spot) < Math.abs(best - spot)) best = strike
+    }
+    return best
+  }, [spot, strikes])
+
+  // 底仓 → 备兑可开张数（floor(heldQty/multiplier)；不足 1 张不显示快捷入口）。
+  const coveredLots = heldQty !== undefined && multiplier > 0 ? Math.floor(heldQty / multiplier) : 0
+
+  // ── 期权持仓（只读，阶段 3）────────────────────────────────────
+  const [positions, setPositions] = useState<readonly OptionPosition[] | null>(null)
+  const [positionsAvailable, setPositionsAvailable] = useState(true)
+  /** 下单/撤单后立即重拉（usePoll deps 变化即触发一次）。 */
+  const [positionsTick, setPositionsTick] = useState(0)
+  const underlying6 = underlyingSymbol.replace(/\.(SH|SZ)$/i, '')
+  usePoll(async () => {
+    const res = await fetchOptionPositions()
+    if (res.ok) {
+      setPositions(res.data)
+      setPositionsAvailable(true)
+    } else {
+      setPositions(null)
+      setPositionsAvailable(false)
+    }
+  }, OPTION_POSITIONS_POLL_MS, [positionsTick])
+  const myPositions = useMemo(
+    () => (positions ?? []).filter(row => row.underlying === underlying6),
+    [positions, underlying6],
+  )
 
   return (
     <div className={css.root} data-dshtrading-options-stage="">
-      {/* ETF ↔ 期权 联动操作条：标的回跳 / 交易现货 / 合约下单（本期互联核心） */}
+      {/* ETF ↔ 期权 联动操作条：标的回跳 / 交易现货 / 底仓徽章 / 合约下单（互联核心） */}
       <div className={css.actionBar}>
         <button
           type="button"
@@ -122,6 +178,12 @@ export function OptionsStage({
         >
           {t('options.tradeSpot')}
         </button>
+        {/* 底仓徽章（阶段 4 互联）：统一资产台账聚合的 ETF 持仓 → 备兑可开张数。 */}
+        {heldQty !== undefined && coveredLots > 0 && (
+          <span className={css.heldBadge} title={t('options.held.badge', { qty: String(heldQty), n: String(coveredLots) })}>
+            {t('options.held.badge', { qty: String(heldQty), n: String(coveredLots) })}
+          </span>
+        )}
         <span className={css.spacer} />
         {selectedLeg !== null && (
           <span className={css.legTag}>
@@ -168,7 +230,7 @@ export function OptionsStage({
           ))}
       </div>
 
-      {/* 状态行：标的现价 / 快照时间 / 数据源（字段缺省即隐藏，不补占位） */}
+      {/* 状态行：标的现价 / 快照时间 / 数据源 / 期权持仓（字段缺省即隐藏，不补占位） */}
       {chain !== null && (
         <div className={css.metaRow}>
           {chain.spot !== undefined && (
@@ -178,6 +240,23 @@ export function OptionsStage({
             <span className={css.meta}><label>{t('options.snapshotAt')}</label>{clock}</span>
           )}
           <span className={css.meta}><label>{t('options.source')}</label>{String(chain.source)}</span>
+          <span className={css.meta}>
+            <label>{t('options.positions')}</label>
+            {!positionsAvailable
+              ? t('options.positions.unavailable')
+              : myPositions.length === 0
+                ? t('options.positions.empty')
+                : myPositions.map(row => (
+                  <span
+                    key={row.symbol}
+                    className={css.positionChip}
+                    data-side={row.quantity < 0 ? 'short' : 'long'}
+                    title={`${row.symbol} · ${t(row.quantity < 0 ? 'options.positions.short' : 'options.positions.long')}${row.marginOccupied !== undefined ? ` · ${t('options.order.marginEst')}: ${fmtAmount(row.marginOccupied)}` : ''}`}
+                  >
+                    {row.optionType}{fmtPrice(row.strike)}×{row.quantity}
+                  </span>
+                ))}
+          </span>
           <span className={css.disclaimer}>{t('options.hint')}</span>
         </div>
       )}
@@ -222,40 +301,54 @@ export function OptionsStage({
                           const putPct = put?.changePct
                           const callSelected = selectedLeg?.side === 'call' && selectedLeg.strike === strike
                           const putSelected = selectedLeg?.side === 'put' && selectedLeg.strike === strike
+                          // 实/虚值（spot 回填时分色；spot 缺席 → undefined 不分色）：
+                          // 认购 strike<spot 为实值、认沽 strike>spot 为实值（行权有利）。
+                          const callMoney = spot === undefined || strike === spot ? undefined : strike < spot ? 'itm' : 'otm'
+                          const putMoney = spot === undefined || strike === spot ? undefined : strike > spot ? 'itm' : 'otm'
                           // exactOptionalPropertyTypes：last/iv 缺席整键省略，不传 undefined。
                           const selectCall = (): void => {
                             const last = call?.last ?? call?.prevSettle
                             const iv = call?.impliedVol
-                            setSelectedLeg({ side: 'call', strike, ...(last !== undefined ? { last } : {}), ...(iv !== undefined ? { iv } : {}) })
+                            setSelectedLeg({
+                              code: call?.code ?? `${chain.underlying}C${chain.expiryMonth}M${String(Math.round(strike * 1000)).padStart(5, '0')}`,
+                              side: 'call', strike,
+                              ...(last !== undefined ? { last } : {}), ...(iv !== undefined ? { iv } : {}),
+                            })
                           }
                           const selectPut = (): void => {
                             const last = put?.last ?? put?.prevSettle
                             const iv = put?.impliedVol
-                            setSelectedLeg({ side: 'put', strike, ...(last !== undefined ? { last } : {}), ...(iv !== undefined ? { iv } : {}) })
+                            setSelectedLeg({
+                              code: put?.code ?? `${chain.underlying}P${chain.expiryMonth}M${String(Math.round(strike * 1000)).padStart(5, '0')}`,
+                              side: 'put', strike,
+                              ...(last !== undefined ? { last } : {}), ...(iv !== undefined ? { iv } : {}),
+                            })
                           }
                           return (
-                            <tr key={strike} className={css.row}>
-                              <td className={`${css.iv} ${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectCall}>{fmtIv(call?.impliedVol)}</td>
-                              <td className={`${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectCall}>{call?.volume === undefined ? '—' : fmtCompact(call.volume)}</td>
+                            <tr key={strike} className={css.row} data-atm={strike === atmStrike ? 'true' : undefined}>
+                              <td className={`${css.iv} ${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`} data-moneyness={callMoney} onClick={selectCall}>{fmtIv(call?.impliedVol)}</td>
+                              <td className={`${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`} data-moneyness={callMoney} onClick={selectCall}>{call?.volume === undefined ? '—' : fmtCompact(call.volume)}</td>
                               <td
                                 className={`${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`}
+                                data-moneyness={callMoney}
                                 onClick={selectCall}
                                 style={callPct === undefined ? undefined : { color: directionColor(callPct, colorMode) }}
                               >
                                 {fmtPercent(callPct)}
                               </td>
-                              <td className={`${css.last} ${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectCall}>{fmtPrice(call?.last ?? call?.prevSettle)}</td>
+                              <td className={`${css.last} ${css.selectable}${callSelected ? ` ${css.cellSelected}` : ''}`} data-moneyness={callMoney} onClick={selectCall}>{fmtPrice(call?.last ?? call?.prevSettle)}</td>
                               <td className={css.strikeCell}>{fmtPrice(strike)}</td>
-                              <td className={`${css.last} ${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectPut}>{fmtPrice(put?.last ?? put?.prevSettle)}</td>
+                              <td className={`${css.last} ${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`} data-moneyness={putMoney} onClick={selectPut}>{fmtPrice(put?.last ?? put?.prevSettle)}</td>
                               <td
                                 className={`${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`}
+                                data-moneyness={putMoney}
                                 onClick={selectPut}
                                 style={putPct === undefined ? undefined : { color: directionColor(putPct, colorMode) }}
                               >
                                 {fmtPercent(putPct)}
                               </td>
-                              <td className={`${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectPut}>{put?.volume === undefined ? '—' : fmtCompact(put.volume)}</td>
-                              <td className={`${css.iv} ${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`} onClick={selectPut}>{fmtIv(put?.impliedVol)}</td>
+                              <td className={`${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`} data-moneyness={putMoney} onClick={selectPut}>{put?.volume === undefined ? '—' : fmtCompact(put.volume)}</td>
+                              <td className={`${css.iv} ${css.selectable}${putSelected ? ` ${css.cellSelected}` : ''}`} data-moneyness={putMoney} onClick={selectPut}>{fmtIv(put?.impliedVol)}</td>
                             </tr>
                           )
                         })}
@@ -263,6 +356,195 @@ export function OptionsStage({
                     </table>
                   </div>
                 )}
+
+      {/* 下单面板（选中合约后出现；阶段 3 交易面） */}
+      {selectedLeg !== null && (
+        <OptionOrderPanel
+          t={t}
+          leg={selectedLeg}
+          multiplier={multiplier}
+          underlying={underlying6}
+          coveredLots={selectedLeg.side === 'call' ? coveredLots : 0}
+          onPlaced={() => { setPositionsTick(tick => tick + 1) }}
+        />
+      )}
     </div>
   )
+}
+
+/* ── 期权下单面板（阶段 3）────────────────────────────────────────── */
+
+function OptionOrderPanel(props: {
+  t: OptionsStageTranslate
+  leg: SelectedOptionLeg
+  multiplier: number
+  /** 6 位 ETF 代码（strategy 保证金预估的 underlying）。 */
+  underlying: string
+  /** 备兑可开张数（仅认购腿传入 >0；0 = 不显示快捷入口）。 */
+  coveredLots: number
+  onPlaced: () => void
+}): React.JSX.Element {
+  const { t, leg, multiplier, underlying, coveredLots, onPlaced } = props
+  const [side, setSide] = useState<'buy' | 'sell'>('buy')
+  const [offset, setOffset] = useState<'open' | 'close'>('open')
+  const [orderType, setOrderType] = useState<'limit' | 'market'>('limit')
+  const [qty, setQty] = useState('1')
+  const [price, setPrice] = useState(leg.last !== undefined ? String(leg.last) : '')
+  const [submitting, setSubmitting] = useState(false)
+  const [receipt, setReceipt] = useState<OptionOrder | null>(null)
+  const [error, setError] = useState<{ code: string; message: string } | null>(null)
+
+  const qtyNumber = Number(qty)
+  const qtyValid = Number.isInteger(qtyNumber) && qtyNumber > 0
+  const priceNumber = Number(price)
+  const limitPriceValid = orderType === 'market' || (Number.isFinite(priceNumber) && priceNumber > 0)
+
+  // 换合约：价格初值跟随最新价（上一合约的输入不留残影），回执/错误清场。
+  useEffect(() => {
+    setPrice(leg.last !== undefined ? String(leg.last) : '')
+    setReceipt(null)
+    setError(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leg.code])
+
+  // 预估权利金：limit 用委托价 × 张数 × 乘数（回执 premiumAmount 同式换算）；
+  // market 委托价未知 → 参考最新价估值，标注口径。
+  const premiumEst = qtyValid && limitPriceValid
+    ? (orderType === 'market'
+        ? (leg.last !== undefined ? leg.last : NaN)
+        : priceNumber) * qtyNumber * multiplier
+    : NaN
+
+  // 义务仓（sell+open）保证金预估：POST /options/strategy 单腿 margin 块
+  // （沪深 ETF 标准 12%/7%；网关未起/计算失败 → null 显示「以回执为准」）。
+  const [marginEst, setMarginEst] = useState<number | null>(null)
+  useEffect(() => {
+    if (side !== 'sell' || offset !== 'open' || !qtyValid) {
+      setMarginEst(null)
+      return
+    }
+    let cancelled = false
+    void fetchOptionStrategy({
+      underlying,
+      legs: [{ kind: 'option', side: 'sell', qty: qtyNumber, code: leg.code }],
+    }).then((res) => {
+      if (!cancelled) setMarginEst(res.ok ? res.data.margin.totalInitial : null)
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leg.code, side, offset, qty, underlying])
+
+  const submit = (): void => {
+    if (!qtyValid || !limitPriceValid || submitting) return
+    setSubmitting(true)
+    setReceipt(null)
+    setError(null)
+    void placeOptionOrder({
+      symbol: leg.code,
+      side,
+      offset,
+      orderType,
+      quantity: qtyNumber,
+      ...(orderType === 'limit' ? { price: priceNumber } : {}),
+    }).then((res) => {
+      if (res.order !== undefined) {
+        setReceipt(res.order)
+        onPlaced()
+      } else if (res.error !== undefined) {
+        setError(res.error)
+      }
+    }).finally(() => { setSubmitting(false) })
+  }
+
+  return (
+    <div className={css.orderPanel} data-dshtrading-option-order="">
+      <div className={css.orderHead}>
+        <span className={css.orderTitle}>{t('options.order.title')}</span>
+        <code className={css.orderCode}>{leg.code}</code>
+        {/* 备兑快捷（认购腿 + 底仓足 1 张）：预填 sell+open+满额张数。 */}
+        {coveredLots > 0 && (
+          <button
+            type="button"
+            className={css.coverBtn}
+            onClick={() => { setSide('sell'); setOffset('open'); setQty(String(coveredLots)) }}
+          >
+            {t('options.held.cover', { n: String(coveredLots) })}
+          </button>
+        )}
+      </div>
+      <div className={css.orderForm}>
+        <div className={css.orderToggle} role="tablist" aria-label="order side">
+          <button type="button" role="tab" aria-selected={side === 'buy'} className={css.orderOpt} data-active={side === 'buy' ? 'true' : undefined} onClick={() => { setSide('buy') }}>{t('trade.buy')}</button>
+          <button type="button" role="tab" aria-selected={side === 'sell'} className={css.orderOpt} data-active={side === 'sell' ? 'true' : undefined} onClick={() => { setSide('sell') }}>{t('trade.sell')}</button>
+        </div>
+        <div className={css.orderToggle} role="tablist" aria-label="order offset">
+          <button type="button" role="tab" aria-selected={offset === 'open'} className={css.orderOpt} data-active={offset === 'open' ? 'true' : undefined} onClick={() => { setOffset('open') }}>{t('options.order.offset.open')}</button>
+          <button type="button" role="tab" aria-selected={offset === 'close'} className={css.orderOpt} data-active={offset === 'close' ? 'true' : undefined} onClick={() => { setOffset('close') }}>{t('options.order.offset.close')}</button>
+        </div>
+        <div className={css.orderToggle} role="tablist" aria-label="order type">
+          <button type="button" role="tab" aria-selected={orderType === 'limit'} className={css.orderOpt} data-active={orderType === 'limit' ? 'true' : undefined} onClick={() => { setOrderType('limit') }}>{t('trade.limit')}</button>
+          <button type="button" role="tab" aria-selected={orderType === 'market'} className={css.orderOpt} data-active={orderType === 'market' ? 'true' : undefined} onClick={() => { setOrderType('market') }}>{t('trade.market')}</button>
+        </div>
+        <label className={css.orderField}>
+          <span>{t('options.order.quantity')}</span>
+          <input
+            inputMode="numeric"
+            value={qty}
+            onChange={(e) => { setQty(e.target.value) }}
+            aria-invalid={!qtyValid}
+          />
+          <em>{t('options.order.unit')}</em>
+        </label>
+        {orderType === 'limit' && (
+          <label className={css.orderField}>
+            <span>{t('trade.price')}</span>
+            <input
+              inputMode="decimal"
+              placeholder="0.0001"
+              value={price}
+              onChange={(e) => { setPrice(e.target.value) }}
+            />
+            <em>¥</em>
+          </label>
+        )}
+        <span className={css.orderEst}>
+          <label>{t('options.order.premiumEst')}</label>
+          {Number.isFinite(premiumEst) ? `¥${fmtAmount(premiumEst)}` : '—'}
+        </span>
+        {side === 'sell' && offset === 'open' && (
+          <span className={css.orderEst} title={t('options.order.marginEst')}>
+            <label>{t('options.order.marginEst')}</label>
+            {marginEst !== null ? `¥${fmtAmount(marginEst)}` : t('options.order.marginNa')}
+          </span>
+        )}
+        <button
+          type="button"
+          className={css.orderSubmit}
+          disabled={submitting || !qtyValid || !limitPriceValid}
+          onClick={submit}
+        >
+          {submitting ? t('options.order.submitting') : t('options.order.submit')}
+        </button>
+      </div>
+      {/* 回执 / 拒绝原文（双闸拒绝 TRADING_LIVE_TRADING_DISABLED 原文展示 + 开闸提示）。 */}
+      {receipt !== null && (
+        <div className={css.orderReceipt} data-state="ok">
+          {t('options.order.placed')} · {t(receipt.dryRun ? 'options.order.dryRunTag' : 'options.order.liveTag')} · ID {receipt.id}
+          {receipt.premiumAmount !== undefined && <> · {t('options.order.premiumAmount')} ¥{fmtAmount(receipt.premiumAmount)}</>}
+        </div>
+      )}
+      {error !== null && (
+        <div className={css.orderReceipt} data-state="error">
+          {t('options.order.rejected')}: {error.code}: {error.message}
+          {error.code === 'TRADING_LIVE_TRADING_DISABLED' && <> ({t('options.order.gateHint')})</>}
+        </div>
+      )}
+      {!qtyValid && qty !== '' && <div className={css.orderReceipt} data-state="error">{t('options.order.qtyInvalid')}</div>}
+    </div>
+  )
+}
+
+/** 撤单句柄（导出供持仓/委托列表复用；当前面板回执内联，暂无独立挂单列表）。 */
+export async function cancelOptionOrderAndRefresh(orderId: string, symbol?: string): Promise<boolean> {
+  return cancelOptionOrder(orderId, symbol)
 }

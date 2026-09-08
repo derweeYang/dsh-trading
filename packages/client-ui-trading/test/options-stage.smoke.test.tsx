@@ -58,6 +58,10 @@ function renderStage(overrides: Partial<React.ComponentProps<typeof OptionsStage
       failure={null}
       loaded
       colorMode="red-up"
+      underlyingSymbol="510050.SH"
+      multiplier={10000}
+      onViewSpot={() => {}}
+      onTradeSpot={() => {}}
       {...overrides}
     />,
   )
