@@ -1,0 +1,174 @@
+/* 组合策略预览面板（WB-4）：T 板内自包含，复用 POST /options/strategy。
+   与 options-stage.module.css 同源视觉语言，独立模块便于单测与复用。 */
+
+.panel {
+  margin: 8px 0;
+  border: 1px solid var(--dsw-border, #2a2f3a);
+  border-radius: 8px;
+  background: var(--dsw-surface-2, #161a22);
+  padding: 10px 12px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--dsw-text, #e6e9ef);
+}
+
+.close {
+  background: transparent;
+  border: none;
+  color: var(--dsw-text-dim, #8b93a7);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.tplLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dsw-text-dim, #8b93a7);
+}
+
+.tplSelect {
+  background: var(--dsw-surface, #0f131a);
+  color: var(--dsw-text, #e6e9ef);
+  border: 1px solid var(--dsw-border, #2a2f3a);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+.generate {
+  background: var(--dsw-accent, #3b82f6);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.generate:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.error {
+  color: #f87171;
+  font-size: 12px;
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.errVal {
+  margin-left: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.entryVal {
+  margin-left: 4px;
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--dsw-text-dim, #8b93a7);
+  margin-bottom: 6px;
+}
+
+.summary .note {
+  color: var(--dsw-text-dim, #8b93a7);
+  font-style: italic;
+}
+
+.legs {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.legs th,
+.legs td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--dsw-border, #2a2f3a);
+  color: var(--dsw-text, #e6e9ef);
+}
+
+.legs th {
+  color: var(--dsw-text-dim, #8b93a7);
+  font-weight: 500;
+}
+
+.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.buy { color: #ef4444; }
+.sell { color: #22c55e; }
+
+.covered {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+  font-size: 11px;
+}
+
+.action {
+  white-space: nowrap;
+}
+
+.loadBtn {
+  background: var(--dsw-surface, #0f131a);
+  color: var(--dsw-text, #e6e9ef);
+  border: 1px solid var(--dsw-border, #2a2f3a);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.loadBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.empty {
+  font-size: 12px;
+  color: var(--dsw-text-dim, #8b93a7);
+  padding: 8px 0;
+}
+
+.failures {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #f59e0b;
+}
+
+.failures ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}

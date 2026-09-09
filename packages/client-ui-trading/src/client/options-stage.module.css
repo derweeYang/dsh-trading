@@ -527,9 +527,10 @@ td[data-moneyness='otm'] {
   color: var(--dsw-futu-accent-text, #2563eb);
 }
 
-/* 返回总览 / 扫描（只预填 composer，不下单） */
+/* 返回总览 / 扫描 / 策略预览（只预填 composer / 下单面板，不下单） */
 .backBtn,
-.scanBtn {
+.scanBtn,
+.strategyBtn {
   appearance: none;
   border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
   background: var(--dsw-futu-bg-subtle, #f5f6f8);
@@ -543,6 +544,12 @@ td[data-moneyness='otm'] {
 }
 
 .scanBtn {
+  border-color: var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.25));
+  background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.08));
+  color: var(--dsw-futu-accent-text, #2563eb);
+}
+
+.strategyBtn {
   border-color: var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.25));
   background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.08));
   color: var(--dsw-futu-accent-text, #2563eb);

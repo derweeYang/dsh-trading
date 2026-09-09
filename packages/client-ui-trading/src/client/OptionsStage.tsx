@@ -26,7 +26,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import type {
-  OptionChain, OptionExpiryMonth, OptionIntradayBoxRow, OptionOrder, OptionPosition, OptionQuoteRow,
+  OptionChain, OptionExpiryMonth, OptionIntradayBoxRow, OptionOrder, OptionPosition, OptionQuoteRow, OptionStrategyLeg,
 } from '@dshtrading/api'
 import type { ColorMode } from './color-mode.ts'
 import type { MarketLocaleKey } from './contract.ts'
@@ -34,6 +34,7 @@ import { cancelOptionOrder, fetchOptionPositions, fetchOptionStrategy, placeOpti
 import { directionColor, fmtClock, fmtCompact, fmtPercent, fmtPrice } from './format.ts'
 import { usePoll } from './usePoll.ts'
 import { REGIME_KEY, SESSION_REASON_KEY, TEMPLATE_KEY } from './option-vocabulary.ts'
+import { StrategyPreview } from './StrategyPreview.tsx'
 import css from './options-stage.module.css'
 
 export type OptionsStageTranslate = (key: MarketLocaleKey, params?: Record<string, unknown>) => string
@@ -134,6 +135,10 @@ export function OptionsStage({
   const clock = chain === null ? undefined : snapshotClock(chain.snapshotAt)
   /** 用户在 T 表点选的待下单合约（认购/认沽 + 行权价 + 长代码）。 */
   const [selectedLeg, setSelectedLeg] = useState<SelectedOptionLeg | null>(null)
+  /** WB-4：策略预览面板显隐。 */
+  const [showStrategy, setShowStrategy] = useState(false)
+  /** WB-4：把策略腿的方向/张数回填下单面板（一次性，应用后即清空）。 */
+  const [orderPrefill, setOrderPrefill] = useState<{ code: string; side: 'buy' | 'sell'; qty: number } | null>(null)
 
   // ATM 行（spot 回填时 |strike−spot| 最小档）：行级高亮 + 两侧实/虚值分色判据。
   const spot = chain?.spot
@@ -169,6 +174,18 @@ export function OptionsStage({
     () => (positions ?? []).filter(row => row.underlying === underlying6),
     [positions, underlying6],
   )
+
+  /** WB-4：策略腿 → 选中合约 + 下单面板回填（preview 态，不自动下单）。 */
+  const handleLoadLeg = (leg: OptionStrategyLeg): void => {
+    if (leg.code === undefined || leg.optionType === undefined || leg.strike === undefined) return
+    setSelectedLeg({
+      code: leg.code,
+      side: leg.optionType === 'C' ? 'call' : 'put',
+      strike: leg.strike,
+      ...(leg.premium !== undefined ? { last: leg.premium } : {}),
+    })
+    setOrderPrefill({ code: leg.code, side: leg.side, qty: leg.qty })
+  }
 
   return (
     <div className={css.root} data-dshtrading-options-stage="">
@@ -215,6 +232,15 @@ export function OptionsStage({
             onClick={onScanUnderlying}
           >
             {t('options.overview.scanRow')}
+          </button>
+        )}
+        {selectedMonth !== null && (
+          <button
+            type="button"
+            className={css.strategyBtn}
+            onClick={() => { setShowStrategy(true) }}
+          >
+            {t('options.strategy.open')}
           </button>
         )}
         {selectedLeg !== null && (
@@ -295,6 +321,17 @@ export function OptionsStage({
             </span>
           ))}
         </div>
+      )}
+
+      {/* WB-4：组合策略预览（T 板内自包含；复用 POST /options/strategy）。 */}
+      {showStrategy && selectedMonth !== null && (
+        <StrategyPreview
+          t={t}
+          underlyingSymbol={underlyingSymbol}
+          expiryMonth={selectedMonth}
+          onLoadLeg={handleLoadLeg}
+          onClose={() => { setShowStrategy(false); setOrderPrefill(null) }}
+        />
       )}
 
       {/* 状态行：标的现价 / 快照时间 / 数据源 / 期权持仓（字段缺省即隐藏，不补占位） */}
@@ -432,6 +469,8 @@ export function OptionsStage({
           multiplier={multiplier}
           underlying={underlying6}
           coveredLots={selectedLeg.side === 'call' ? coveredLots : 0}
+          prefill={orderPrefill === null ? undefined : orderPrefill}
+          onPrefillApplied={() => { setOrderPrefill(null) }}
           onPlaced={() => { setPositionsTick(tick => tick + 1) }}
         />
       )}
@@ -441,7 +480,7 @@ export function OptionsStage({
 
 /* ── 期权下单面板（阶段 3）────────────────────────────────────────── */
 
-function OptionOrderPanel(props: {
+export function OptionOrderPanel(props: {
   t: OptionsStageTranslate
   leg: SelectedOptionLeg
   multiplier: number
@@ -449,9 +488,12 @@ function OptionOrderPanel(props: {
   underlying: string
   /** 备兑可开张数（仅认购腿传入 >0；0 = 不显示快捷入口）。 */
   coveredLots: number
+  /** WB-4：策略预览回填（preview 态）——一次性把腿的方向/张数填入面板，不自动下单。 */
+  prefill?: { code: string; side: 'buy' | 'sell'; qty: number } | undefined
+  onPrefillApplied?: () => void
   onPlaced: () => void
 }): React.JSX.Element {
-  const { t, leg, multiplier, underlying, coveredLots, onPlaced } = props
+  const { t, leg, multiplier, underlying, coveredLots, prefill, onPrefillApplied, onPlaced } = props
   const [side, setSide] = useState<'buy' | 'sell'>('buy')
   const [offset, setOffset] = useState<'open' | 'close'>('open')
   const [orderType, setOrderType] = useState<'limit' | 'market'>('limit')
@@ -471,8 +513,14 @@ function OptionOrderPanel(props: {
     setPrice(leg.last !== undefined ? String(leg.last) : '')
     setReceipt(null)
     setError(null)
+    // WB-4：策略腿回填——本合约匹配时一次性写入方向/张数，随后由父级清空 prefill。
+    if (prefill !== undefined && prefill.code === leg.code) {
+      setSide(prefill.side)
+      setQty(String(prefill.qty))
+      onPrefillApplied?.()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leg.code])
+  }, [leg.code, prefill])
 
   // 预估权利金：limit 用委托价 × 张数 × 乘数（回执 premiumAmount 同式换算）；
   // market 委托价未知 → 参考最新价估值，标注口径。

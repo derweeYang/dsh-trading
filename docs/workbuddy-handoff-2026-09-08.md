@@ -238,7 +238,7 @@ agent 回复经现有 toolview。在策略结果上加「加载到 T 板」：
 - [x] **WB-6** 闭环时间线（`GET /options/cycles/loop`）
 - [x] **WB-2** `fillComposer(scanPrompt / scanAllPrompt)`
 - [x] **WB-3** 箱体条（优先用 loop.latest.forecast）
-- [ ] **WB-4** 策略卡片加载到 T 板（第二轮，需后端先定型策略结果面）
+- [x] **WB-4** 策略预览 → T 板下单面板回填（preview 态；后端 `OptionStrategyResult` 已定型、端点已 live，2026-09-09）
 - [x] **WB-5** `pnpm i18n:check` 通过；typecheck 前端 0 新增
 - [ ] **WB-5 余项** trading-web 真机冒烟：本机宿主起不来（各市场 dataplane 重复
       注册，与 issue #81 同族），待后端清偿后补
