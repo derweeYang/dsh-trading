@@ -8,7 +8,7 @@ Status: proposed
 
 ## Proposal
 
-规格见 [docs/specs/2026-09-08-option-bar-agent.md](../../../../docs/specs/2026-09-08-option-bar-agent.md)。要点：
+规格见 [docs/specs/2026-09-08-option-bar-agent.md](../../../../docs/specs/2026-09-08-option-bar-agent.md)。编排上层（三车道总控、本期只挂本智能体）见 [trader-director](../architecture/2026-09-09-trader-director.md)。要点：
 
 1. 本仓 `data/options/` 落 cycles / recommendations / reviews；L0 打分仍是纯函数。
 2. LLM 只在 `sessionFlag === 'regular'` 的**新桶**触发，全市场一次 trader 会话；非 regular 只写桩。

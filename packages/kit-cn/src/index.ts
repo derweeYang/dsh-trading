@@ -50,6 +50,7 @@ export * from './options-tools.js'
 export * from './intraday-box.js'
 export * from './option-cycles.js'
 export * from './option-bar-ledger.js'
+export * from './trader-director.js'
 
 // ── skill provider（host 面 skill 全局可见即可，本切片不改 skill 作用域） ─────────
 

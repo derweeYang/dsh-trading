@@ -37,6 +37,7 @@ import { TASKS_ACTION_BYTES_LIMIT, parseTasksEnvelope } from './client/tasks-pro
 import { TradingTasksService } from './tasks/service.ts'
 import { TasksRunner, type SessionCommandDispatcher, type SessionGateway } from './tasks/runner.ts'
 import { OptionBarAgentHost } from './option-bar-agent.ts'
+import { TraderDirectorHost } from './trader-director-host.ts'
 import {
   appendJsonlLine,
   cyclesPath,
@@ -242,12 +243,13 @@ export function apply(ctx: Context): void {
       },
       log: (message, error) => { console.error(`[dsh-trading/option-bar] ${message}`, error) },
     })
+    const director = new TraderDirectorHost({ opportunity: barAgent })
     ctx.effect(() => {
       bridge.startOptionCycleLoop()
       const tick = (): void => {
         void bridge.optionCycleTick().then((result) => {
           const nowMs = Date.parse(result.asOf)
-          return barAgent.afterTick({
+          return director.afterTick({
             ticked: result.ticked,
             loop: result.loop,
             nowMs: Number.isFinite(nowMs) ? nowMs : Date.now(),
