@@ -155,7 +155,7 @@ export const provider: SkillProvider = {
       provider: target.provider,
       source: target.source,
       resourceBase: RESOURCE_BASE,
-      content: await readFile(target.locator, 'utf8'),
+      content: await readFile(fileURLToPath(target.locator as URL), 'utf8'),
     }
   },
 }

@@ -52,6 +52,9 @@ it('composes all installed-market subsets deterministically, preserving connecto
       } else {
         for (const contribution of subset) {
           expect(contribution.traderRows).toMatch(/^.*connector(?:-group)?\n  name: cordis:group\n  group: true\n  isolate:/)
+          expect(contribution.traderRows).toContain('tradingCnMarketData: true')
+          expect(contribution.traderRows).toContain('tradingCnOptions: true')
+          expect(contribution.traderRows).toContain('tradingCnOptionsTrade: true')
           expect(contribution.traderRows).not.toContain('liveTrading: true')
           if (preset.id === 'trader') {
             // kit row is split out of the market block and rewritten with the trader whitelist (#70)

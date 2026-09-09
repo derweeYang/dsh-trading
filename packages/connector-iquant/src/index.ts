@@ -53,11 +53,25 @@ export class IquantMarketDataService extends Service implements MarketDataServic
     }
     tick()
     const id = setInterval(tick, ms)
-    return () => clearInterval(id)
+    return { dispose: () => clearInterval(id) }
   }
 }
 
+/** 路由互斥：settings 选中 iquant 才 provide；无 router 时回退 enabled 语义。 */
+export function routeAllows(ctx: Context, config: Config, market: string = 'cn'): boolean {
+  if (!config.enabled) return false
+  const router = (ctx as unknown as { get?: (key: string, strict?: boolean) => unknown }).get?.(
+    'tradingMarketRouter',
+    false,
+  ) as { activeProvider(m: string): string | undefined } | undefined
+  if (router === undefined) return true
+  return router.activeProvider(market) === ROUTER_PROVIDER
+}
+
 export function apply(ctx: Context, config: Config): void {
-  if (!config.enabled) return
-  new IquantMarketDataService(ctx, { gatewayUrl: config.gatewayUrl })
+  if (!routeAllows(ctx, config)) return
+  const options: IquantRestOptions = config.gatewayUrl !== undefined
+    ? { gatewayUrl: config.gatewayUrl }
+    : {}
+  new IquantMarketDataService(ctx, options)
 }

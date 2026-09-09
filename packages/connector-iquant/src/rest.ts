@@ -107,9 +107,9 @@ export class IquantRestClient {
     return {
       symbol: row.symbol ?? parsed.symbol,
       price: row.last,
+      timestamp: row.timestamp ?? Date.now(),
       ...(row.preClose !== undefined ? { prevClose: row.preClose } : {}),
       ...(row.volume !== undefined ? { volume: row.volume } : {}),
-      ...(row.timestamp !== undefined ? { timestamp: row.timestamp } : {}),
     }
   }
 

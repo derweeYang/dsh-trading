@@ -181,7 +181,7 @@ export class CnOptionsTradeService extends Service implements CnOptionsTradeCont
     )
   }
 
-  async cancelOptionOrder(orderId: string, _symbol?: string): Promise<void> {
+  async cancelOptionOrder(_orderId: string, _symbol?: string): Promise<void> {
     // 服务缝闸门（P0）：撤单是改变券商真实状态的实盘动作，与真实下单同门槛，
     // 防「经撤单接口绕过下单闸门」。
     if (!this.config.liveTrading || this.config.dryRun) {

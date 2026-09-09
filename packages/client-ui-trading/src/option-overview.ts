@@ -161,7 +161,7 @@ export function composeScanAllPrompt(rows: readonly OptionOverviewRow[]): string
   )
 }
 
-export function applyTicker(metrics: ReturnType<typeof buildOverviewMetrics>, ticker?: Ticker): {
+export function applyTicker(_metrics: ReturnType<typeof buildOverviewMetrics>, ticker?: Ticker): {
   last?: number
   changePct?: number
 } {

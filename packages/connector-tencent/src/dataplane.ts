@@ -6,7 +6,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { MarketDataService } from '@dshtrading/api'
-import { TRADING_CN_MARKET_DATA_KEY, TencentMarketDataService, type Config } from './index.ts'
+import { ROUTER_PROVIDER, TRADING_CN_MARKET_DATA_KEY, TencentMarketDataService, type Config } from './index.ts'
 export const inject = ['tradingMarketDataRegistry']
 
 /** 注册表服务的最小消费面（鸭式，不定死接口——连接器对 router 包保持零依赖，与 router consult 同纪律）。 */
@@ -23,8 +23,6 @@ function resolveMarketDataRegistry(ctx: Context): MarketDataRegistryLike | undef
   const candidate = ctxGet(ctx, 'tradingMarketDataRegistry')
   return candidate !== undefined ? (candidate as MarketDataRegistryLike) : undefined
 }
-/** 本连接器的路由 provider slug（路由层词汇，docs/exchange-routing.md §2.2）。 */
-const ROUTER_PROVIDER = 'tencent'
 
 export function apply(ctx: Context, config: Config): void {
   const market = config.market

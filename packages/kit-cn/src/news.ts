@@ -364,7 +364,7 @@ function matchesSymbol(item: NewsItem, rawSymbol?: string): boolean {
   if (tokens.some((t) => t && title.includes(t))) return true
   if (item.relatedCodes) {
     // 东财 code = `<marketId>.<code>`；按 . 后 code 段匹配（'1.600519' → '600519'）。
-    const codes = item.relatedCodes.map((c) => c.split('.').slice(-1)[0].toUpperCase())
+    const codes = item.relatedCodes.map((c) => (c.split('.').slice(-1)[0] ?? '').toUpperCase())
     return tokens.some((t) => t && codes.includes(t))
   }
   return false

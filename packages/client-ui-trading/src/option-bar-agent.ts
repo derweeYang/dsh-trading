@@ -32,7 +32,7 @@ export interface OptionBarAgentOptions {
 
 export class OptionBarAgentHost {
   inFlight = false
-  private openSessionId?: string
+  private openSessionId: string | undefined = undefined
   private openStartedAt = 0
   private readonly options: OptionBarAgentOptions
 

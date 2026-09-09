@@ -294,7 +294,7 @@ function candidatesFor(
       invalidIf: '1-minute close re-enters the prior 15-bar range',
       reason: 'If a direction appears, switch to a vertical instead of holding a long straddle.',
     },
-  ].slice(0, 2)
+  ].slice(0, 2) as OptionIntradayCandidate[]
 }
 
 function logReturnStdev(closes: readonly number[]): number | undefined {

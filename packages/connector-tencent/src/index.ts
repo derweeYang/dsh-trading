@@ -66,6 +66,19 @@ export const inject = ['tools']
 
 export const TRADING_CN_MARKET_DATA_KEY = 'tradingCnMarketData'
 
+/** 路由层 provider slug（docs/exchange-routing.md §2.2）。 */
+export const ROUTER_PROVIDER = 'tencent'
+
+/** 路由互斥：settings 选中 tencent 才 provide；无 router 时回退「候选全开」语义。 */
+export function routeAllows(ctx: Context, market: string = 'cn'): boolean {
+  const router = (ctx as unknown as { get?: (key: string, strict?: boolean) => unknown }).get?.(
+    'tradingMarketRouter',
+    false,
+  ) as { activeProvider(m: string): string | undefined } | undefined
+  if (router === undefined) return true
+  return router.activeProvider(market) === ROUTER_PROVIDER
+}
+
 export interface SubscribeTickerOptions {
   /** 轮询间隔（ms）。subscribeTicker 以快照轮询实现（腾讯公共端点无推送面）。 */
   readonly intervalMs?: number
@@ -314,6 +327,8 @@ export function createPlaceOrderTool(deps: PlaceOrderToolDeps) {
 }
 
 export function apply(ctx: Context, config: Config): void {
+  if (!routeAllows(ctx, config.market)) return
+
   const market = config.market
   const key = TRADING_CN_MARKET_DATA_KEY
 

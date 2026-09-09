@@ -197,8 +197,10 @@ export function normalizeRecommendation(
     picks,
     noTrade,
     ...(skipReason === undefined ? {} : { skipReason }),
-    ...(row.previousScore !== undefined ? { previousScore: row.previousScore as OptionBarRecommendation['previousScore'] } : {}),
-  }
+    ...(row.previousScore !== undefined
+      ? { previousScore: row.previousScore as NonNullable<OptionBarRecommendation['previousScore']> }
+      : {}),
+  } as OptionBarRecommendation
 }
 
 export function makeSkipRecommendation(input: {

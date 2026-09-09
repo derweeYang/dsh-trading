@@ -201,11 +201,12 @@ export class OptionCycleBook {
       running: this.running,
       horizonMin: 5,
       ...(this.lastBucket === undefined ? {} : { lastBucket: this.lastBucket }),
-      rows: underlyings.map((underlying) => ({
-        underlying,
-        stats: statsOf(this.#byUnderlying.get(underlying) ?? []),
-        ...(this.latest(underlying) === undefined ? {} : { latest: this.latest(underlying) }),
-      })),
+      rows: underlyings.map((underlying) => {
+        const latest = this.latest(underlying)
+        const stats = statsOf(this.#byUnderlying.get(underlying) ?? [])
+        if (latest === undefined) return { underlying, stats }
+        return { underlying, stats, latest }
+      }),
     }
   }
 }

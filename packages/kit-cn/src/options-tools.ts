@@ -542,8 +542,8 @@ export function createGetOptionIntradayBoxTool(options: OptionToolOptions = {}) 
         throw new Error(`cn_get_option_intraday_box: unknown underlying ${underlying}`)
       }
       return JSON.stringify({
-        horizonMin: BOX_HORIZON_MIN,
         ...box,
+        horizonMin: BOX_HORIZON_MIN,
         note: 'Deterministic box JSON. Do not recompute levels. Not investment advice.',
       })
     },

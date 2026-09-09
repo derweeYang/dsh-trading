@@ -29,13 +29,17 @@
       trading-notes-setup 的规范记入日志——agent 自己的操作入 agent 轨，用户的决定与手工
       操作代记入 human 轨，dry-run 一律标注。
 
-# connector 行 provide 服务（tradingCnMarketData），必须包进 cordis:group + isolate，
-# isolate 键 = 服务名（commit 8f75804 + acceptance「修复 1」）。
+# connector 行 provide 服务（tradingCnMarketData / tradingCnOptions*），必须包进
+# cordis:group + isolate；isolate 键 = 服务名（commit 8f75804 + acceptance「修复 1」）。
+# tradingCnOptions* 也必须 isolate：host 面 dataplane 已在 Include 根提供同键，
+# 不 isolate 则 agent 行二次 provide 炸 preset 挂载。
 - id: dsh-trading-cn-connector-group
   name: cordis:group
   group: true
   isolate:
     tradingCnMarketData: true
+    tradingCnOptions: true
+    tradingCnOptionsTrade: true
   config:
     # 行 id 市场命名空间，name 指向插件包，market 固定 cn。
     - id: dsh-trading-cn-connector
