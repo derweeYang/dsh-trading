@@ -99,6 +99,350 @@
   flex: 0 0 auto;
 }
 
+/* ── WB-9 ① 九标的 5 日叠加走势 ─────────────────────────────────────── */
+
+.overlay {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+  border-radius: var(--dsw-futu-radius-md, 6px);
+  padding: 8px 10px 6px;
+  background: var(--dsw-futu-bg-surface, #f7f8fa);
+  flex: 0 0 auto;
+}
+
+.overlayHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.overlayTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+.overlayLegendHint,
+.boardHint {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.overlayEmpty {
+  font-size: 12px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  padding: 18px 0;
+  text-align: center;
+}
+
+.overlaySvg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.axisText {
+  font-size: 10px;
+  fill: var(--dsw-futu-text-muted, #8e95a3);
+  font-variant-numeric: tabular-nums;
+}
+
+.lineLabel {
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 图例：名次 / 名称 / 5 日累计；悬停聚焦对应曲线 */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.legendItem {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  border-radius: var(--dsw-futu-radius-sm, 4px);
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  cursor: pointer;
+}
+
+.legendItem:hover,
+.legendItem[data-active='true'] {
+  border-color: var(--dsw-futu-accent, #3b82f6);
+  background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.1));
+}
+
+/* 最强 / 最弱 / 中位：图例同步加粗，与图上粗线对应 */
+.legendItem[data-emph='strong'],
+.legendItem[data-emph='weak'],
+.legendItem[data-emph='median'] {
+  font-weight: 700;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.legendRank {
+  min-width: 12px;
+  text-align: right;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  font-variant-numeric: tabular-nums;
+}
+
+.legendName {
+  white-space: nowrap;
+}
+
+.legendVal {
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-futu-down, #2ba471);
+}
+
+.legendVal[data-up='true'] {
+  color: var(--dsw-futu-up, #e64545);
+}
+
+/* ── WB-9 ② 机会卡 ─────────────────────────────────────────────────── */
+
+.board {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.boardHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 8px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  border-radius: var(--dsw-futu-radius-md, 6px);
+  padding: 8px 10px;
+  background: var(--dsw-futu-bg-surface, #fff);
+  min-width: 0;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cardName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.cardCode {
+  font-family: var(--dsw-futu-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.cardRank {
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+/* 最强标的的名次徽章高亮 */
+.cardRank[data-top='true'] {
+  border-color: var(--dsw-futu-up-border, rgba(230, 69, 69, 0.3));
+  background: var(--dsw-futu-up-bg, rgba(230, 69, 69, 0.1));
+  color: var(--dsw-futu-up, #e64545);
+  font-weight: 700;
+}
+
+.riskRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.riskTag {
+  font-size: 11px;
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 1px 5px;
+  border: 1px solid var(--dsw-futu-warning-border, rgba(230, 162, 60, 0.3));
+  background: var(--dsw-futu-warning-bg, rgba(230, 162, 60, 0.1));
+  color: var(--dsw-futu-warning, #b8822a);
+}
+
+/* info 级（持仓敞口 / 样本不足）不给警示色，避免与 warn 混淆 */
+.riskTag[data-severity='info'] {
+  border-color: var(--dsw-futu-border-default, #e3e6ea);
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.riskCount {
+  font-size: 11px;
+  color: var(--dsw-futu-warning, #b8822a);
+  font-variant-numeric: tabular-nums;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-top: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+  padding-top: 5px;
+}
+
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+.sourceBadge {
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 999px;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+/* 来源必须可辨：AI 原文 vs 规则生成，不许混为一谈 */
+.sourceBadge[data-source='ai'] {
+  border-color: var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.3));
+  background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.1));
+  color: var(--dsw-futu-accent-text, #2563eb);
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px 6px;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.metricLabel {
+  font-size: 10px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  white-space: nowrap;
+}
+
+.metricValue {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lines,
+.steps {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.lines {
+  list-style: disc;
+}
+
+.steps {
+  list-style: decimal;
+}
+
+.edge {
+  font-size: 11px;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fallbackHint {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.blocker {
+  font-size: 11.5px;
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 2px 6px;
+  border: 1px solid var(--dsw-futu-down-border, rgba(43, 164, 113, 0.3));
+  background: var(--dsw-futu-down-bg, rgba(43, 164, 113, 0.1));
+  color: var(--dsw-futu-down, #2ba471);
+}
+
+.invalid {
+  font-size: 11px;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+.invalidMissing {
+  font-size: 11px;
+  color: var(--dsw-futu-warning, #b8822a);
+}
+
+.cardFoot {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.ghostBtn {
+  appearance: none;
+  align-self: flex-start;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  background: transparent;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  border-radius: var(--dsw-futu-radius-sm, 4px);
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ghostBtn:hover {
+  background: var(--dsw-futu-bg-surface-hover, rgba(0, 0, 0, 0.04));
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+/* ── 以下为 WB-1 明细表样式 ─────────────────────────────────────────── */
+
 .tableWrap {
   flex: 1;
   min-height: 0;

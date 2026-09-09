@@ -1,5 +1,5 @@
 /**
- * 九标的期权总览（2026-09-09 WB-1；交接单 docs/workbuddy-handoff-2026-09-08.md §C1）。
+ * 九标的期权总览（2026-09-09 WB-1；WB-9 重构为「叠图 → 机会卡 → 明细表」三段）。
  *
  * 期权透镜的**落地页**——不再一进「期权」就画当前自选的 T 板。设计取舍：
  * - **只拉一条** `GET /options/overview`：桥已把现货/T-5/底仓/期权持仓聚合好；
@@ -8,8 +8,15 @@
  *   不做整页空白，也不自己补算 strengthScore / IV 分位。
  * - **排序切 iv 才 includeIv=1**：九路 vol_analytics 会打爆网关，默认不打开。
  *
+ * WB-9 三段式（回答「如何更容易捕捉机会、识别风险」）：
+ * 1. **叠加走势图**：九条 5 日曲线共用一根 Y 轴——线的相对位置就是强弱序，
+ *    最强/最弱/中位加粗，其余弱化；独立 sparkline 各自归一化，不可比，故被替代。
+ * 2. **机会卡**：一标的一卡，分析数据 / 解读 / 操作计划三段齐全，风险标签顶到卡头。
+ * 3. **明细表**：保留原始 12 列（WB-1 验收基线），默认展开、可折叠。
+ *
  * 本页是技术与行情分析面，不构成投资建议；扫描按钮只预填聊天框，不下单。
  */
+import { useState } from 'react'
 import type {
   OptionOverview,
   OptionOverviewDay,
@@ -21,6 +28,9 @@ import type { ColorMode } from './color-mode.ts'
 import type { MarketLocaleKey } from './contract.ts'
 import { directionColor, fmtCompact, fmtPercent, fmtPrice } from './format.ts'
 import { Sparkline } from './Sparkline.tsx'
+import { OverlayTrendChart } from './OverlayTrendChart.tsx'
+import { OptionsOpportunityBoard } from './OptionsOpportunityBoard.tsx'
+import { rankByCumulative } from './option-insight.ts'
 import css from './options-overview.module.css'
 
 export type OptionsOverviewTranslate = (key: MarketLocaleKey, params?: Record<string, unknown>) => string
@@ -55,7 +65,7 @@ const SORT_KEYS: readonly { sort: OptionOverviewSort; key: MarketLocaleKey }[] =
  * T-5 一格：色深按 |changePct|（0.15→0.85），放量（volumeSurge）加边框。
  * 用 color-mix 而不是写死 rgba——暗色主题下涨跌 token 会变，写死会漂。
  */
-function dayCell(pct: number | undefined, surge: boolean, colorMode: ColorMode) {
+function dayCell(pct: number | undefined) {
   const label = pct === undefined ? '—' : fmtPercent(pct)
   if (pct === undefined || !Number.isFinite(pct)) {
     return { label, style: undefined, tone: 'flat' as const }
@@ -117,44 +127,13 @@ function trendValues(days: readonly OptionOverviewDay[]): number[] {
   return out
 }
 
-/**
- * 强弱排行条（2026-09-09 redesign）：按 strengthScore 降序排 9 条横向 sparkline，
- * 中位行高亮——一眼定位最强（顶）/ 最弱（底）/ 中位。走势用 days 的 5 日 changePct
- * 累乘成指数。
- */
-function OptionsStrengthStrip({ rows, t, colorMode }: {
-  rows: readonly OptionOverviewRow[]
-  t: OptionsOverviewTranslate
-  colorMode: ColorMode
-}): React.JSX.Element {
-  const ranked = [...rows].sort((a, b) => (b.strengthScore ?? -Infinity) - (a.strengthScore ?? -Infinity))
-  const medianIdx = Math.floor(ranked.length / 2)
-  return (
-    <div className={css.strip}>
-      <span className={css.stripTitle}>{t('options.overview.strengthStrip')}</span>
-      <div className={css.stripRows}>
-        {ranked.map((row, i) => {
-          const up = (row.return5d ?? 0) >= 0
-          const isMedian = i === medianIdx
-          return (
-            <div key={row.underlying} className={css.stripRow} data-median={isMedian ? 'true' : undefined}>
-              <span className={css.stripRank}>{String(i + 1)}</span>
-              <span className={css.stripName}>{row.name}</span>
-              <Sparkline values={trendValues(row.days)} width={120} height={20} up={up} colorMode={colorMode} />
-              <span className={css.stripScore}>{row.strengthScore === undefined ? '—' : row.strengthScore.toFixed(2)}</span>
-              {isMedian && <span className={css.stripMedian}>{t('options.overview.median')}</span>}
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
 export function OptionsOverview({
   t, colorMode, overview, failure, loaded, sort, onSortChange, onPickRow, onScanAll, onScanRow,
 }: OptionsOverviewProps): React.JSX.Element {
   const rows = overview?.rows ?? []
+  /** 明细表默认展开（WB-1 验收基线：9 行 / T-5 / 排序），可折叠让位给机会卡。 */
+  const [showTable, setShowTable] = useState(true)
+  const ranks = new Map(rankByCumulative(rows).map(item => [item.row.underlying, item.rank]))
 
   return (
     <div className={css.root} data-dshtrading-options-overview="">
@@ -204,7 +183,32 @@ export function OptionsOverview({
                 ? <div className={css.notice}>{t('options.overview.empty')}</div>
                 : (
                   <>
-                    <OptionsStrengthStrip rows={rows} t={t} colorMode={colorMode} />
+                    {/* ① 九标的 5 日叠加走势：共用 Y 轴，线的相对位置即强弱序 */}
+                    <OverlayTrendChart
+                      t={t}
+                      colorMode={colorMode}
+                      rows={rows}
+                      onPickRow={onPickRow}
+                    />
+                    {/* ② 机会卡：分析数据 + 解读 + 操作计划 + 风险标签 */}
+                    <OptionsOpportunityBoard
+                      t={t}
+                      colorMode={colorMode}
+                      rows={rows}
+                      ranks={ranks}
+                      onPickRow={onPickRow}
+                      onAskAi={onScanRow}
+                    />
+                    <button
+                      type="button"
+                      className={css.ghostBtn}
+                      aria-expanded={showTable}
+                      onClick={() => { setShowTable(!showTable) }}
+                    >
+                      {t(showTable ? 'options.overview.hideTable' : 'options.overview.showTable')}
+                    </button>
+                    {/* ③ 明细表（WB-1 基线，可折叠） */}
+                    {showTable && (
                     <div className={css.tableWrap}>
                   <table className={css.table}>
                     <thead>
@@ -312,7 +316,8 @@ export function OptionsOverview({
                       })}
                     </tbody>
                   </table>
-                </div>
+                    </div>
+                    )}
                   </>
                 )}
 

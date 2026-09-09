@@ -75,8 +75,9 @@ describe('OptionsOverview', () => {
     const sparse = rows[1] as HTMLElement
     expect(sparse.textContent).toContain('—')
     expect(sparse.textContent).toContain('159915')
-    // 正常行关键列在
-    expect(getByText('options.overview.col.strength')).toBeTruthy()
+    // 正常行关键列在（WB-9 后该文案在表头与机会卡指标各出现一次，故按表头限定）
+    const headers = Array.from(container.querySelectorAll('thead th')).map(th => th.textContent)
+    expect(headers).toContain('options.overview.col.strength')
     expect(rows[0]?.textContent).toContain('0.96')
   })
 
@@ -193,29 +194,107 @@ describe('OptionsOverview', () => {
     expect(trendCell.querySelector('svg')).toBeTruthy()
   })
 
-  it('redesign 强弱排行条按 strengthScore 降序，中位行高亮', () => {
+  it('WB-9 叠加图：九线共 Y 轴，图例按 5 日累计降序，最强/最弱/中位标记加粗', () => {
     const overview = {
       source: 'iquant', sort: 'strength', asOf: '2026-09-09T01:00:00.000Z', scanAllPrompt: 'scan all',
       rows: [
-        { underlying: '510050', name: '上证50ETF', exchange: 'SSE', spotSymbol: '510050.SH', strengthScore: 0.96, return5d: 1.2, days: [{ date: 'd1', changePct: 0.5, volumeSurge: false }], scanPrompt: 's' },
-        { underlying: '159915', name: '创业板ETF', exchange: 'SZSE', spotSymbol: '159915.SZ', strengthScore: 0.30, return5d: -0.4, days: [{ date: 'd1', changePct: -0.5, volumeSurge: false }], scanPrompt: 's' },
-        { underlying: '588000', name: '科创50ETF', exchange: 'SSE', spotSymbol: '588000.SH', strengthScore: 0.60, return5d: 0.1, days: [{ date: 'd1', changePct: 0.1, volumeSurge: false }], scanPrompt: 's' },
+        { underlying: '510050', name: '上证50ETF', exchange: 'SSE' as const, spotSymbol: '510050.SH', return5d: 1.2,
+          days: [{ date: '2026-09-08', changePct: 0.5, volumeSurge: false }, { date: '2026-09-09', changePct: 0.7, volumeSurge: false }], scanPrompt: 's' },
+        { underlying: '159915', name: '创业板ETF', exchange: 'SZSE' as const, spotSymbol: '159915.SZ', return5d: -0.4,
+          days: [{ date: '2026-09-08', changePct: -0.2, volumeSurge: false }, { date: '2026-09-09', changePct: -0.2, volumeSurge: false }], scanPrompt: 's' },
+        { underlying: '588000', name: '科创50ETF', exchange: 'SSE' as const, spotSymbol: '588000.SH', return5d: 0.1,
+          days: [{ date: '2026-09-08', changePct: 0.0, volumeSurge: false }, { date: '2026-09-09', changePct: 0.1, volumeSurge: false }], scanPrompt: 's' },
       ],
     }
     const { container } = renderOverview({ overview })
-    const strip = container.querySelector('[class*="strip"]') as HTMLElement
-    expect(strip).toBeTruthy()
-    expect(strip.textContent).toContain('options.overview.strengthStrip')
-    // 中位标记恰好一行
-    const median = strip.querySelector('[data-median="true"]')
-    expect(median).toBeTruthy()
-    expect(median?.textContent).toContain('options.overview.median')
-    // 排序：最强（0.96）在前，最弱（0.30）在后（行内展示名称，不展示代码）
-    const rowsContainer = strip.querySelector('[class*="stripRows"]') as HTMLElement
-    const rows = Array.from(rowsContainer.children)
-    expect(rows.length).toBe(3)
-    expect(rows[0]?.textContent).toContain('上证50ETF')
-    expect(rows[2]?.textContent).toContain('创业板ETF')
+    const overlay = container.querySelector('[data-dshtrading-overlay-trend]') as HTMLElement
+    expect(overlay).toBeTruthy()
+    // 九线同坐标：只画一个 svg 而不是每行一条 sparkline
+    expect(overlay.querySelectorAll('svg').length).toBe(1)
+    expect(overlay.querySelectorAll('polyline').length).toBe(3)
+
+    const legend = Array.from(overlay.querySelectorAll('[class*="legendItem"]')) as HTMLElement[]
+    expect(legend.length).toBe(3)
+    // 名次 = 图上终点顺序：+1.20% → +0.10% → -0.40%
+    expect(legend[0]?.textContent).toContain('上证50ETF')
+    expect(legend[1]?.textContent).toContain('科创50ETF')
+    expect(legend[2]?.textContent).toContain('创业板ETF')
+    // 最强 / 中位 / 最弱 各自被标记（对应粗线）
+    expect(legend[0]?.getAttribute('data-emph')).toBe('strong')
+    expect(legend[1]?.getAttribute('data-emph')).toBe('median')
+    expect(legend[2]?.getAttribute('data-emph')).toBe('weak')
+  })
+
+  it('WB-9 叠加图：5 日序列缺失 → 出空态，不画假线', () => {
+    const { container } = renderOverview({
+      overview: {
+        source: 'iquant', sort: 'strength', asOf: '2026-09-09T01:00:00.000Z', scanAllPrompt: 'scan all',
+        rows: [{ underlying: '159915', name: '创业板ETF', exchange: 'SZSE' as const, spotSymbol: '159915.SZ', days: [], scanPrompt: 's' }],
+      },
+    })
+    const overlay = container.querySelector('[data-dshtrading-overlay-trend]') as HTMLElement
+    expect(overlay.textContent).toContain('options.overview.overlayEmpty')
+    expect(overlay.querySelector('svg')).toBeNull()
+  })
+
+  it('WB-9 机会卡：分析数据 / 解读 / 操作计划三段齐全，来源徽章如实标注', () => {
+    const { container } = renderOverview({
+      overview: {
+        source: 'iquant', sort: 'strength', asOf: '2026-09-09T01:00:00.000Z', scanAllPrompt: 'scan all',
+        rows: [{
+          underlying: '510050', name: '上证50ETF', exchange: 'SSE' as const, spotSymbol: '510050.SH',
+          last: 2.91, changePct: 0.4, return5d: 1.2, volumeRatio: 0.8, strengthScore: 0.96, ivPercentile: 0.9,
+          days: [{ date: '2026-09-09', changePct: 0.4, volumeSurge: true }], scanPrompt: 's',
+          // 后端尚未投影 logic/playbook（现状）→ 必须回落规则解读并标 rule
+          strategy: { opportunity: 'theta_rent', template: 'butterfly', edge: 'range_hold collect theta', noTrade: false, bucketStart: '2026-09-09T01:00:00.000Z' },
+        }],
+      },
+    })
+    const card = container.querySelector('[data-dshtrading-opportunity-card="510050"]') as HTMLElement
+    expect(card).toBeTruthy()
+    expect(card.textContent).toContain('options.overview.card.data')
+    expect(card.textContent).toContain('options.overview.card.reading')
+    expect(card.textContent).toContain('options.overview.card.plan')
+    // 来源徽章：无 logic/playbook → 规则，不冒充 AI
+    const badges = Array.from(card.querySelectorAll('[data-source]')).map(el => el.getAttribute('data-source'))
+    expect(badges.length).toBeGreaterThan(0)
+    expect(new Set(badges)).toEqual(new Set(['rule']))
+    // 风险标签：IV 0.9 → iv_high；有 edge 但无 invalidIf → no_invalid
+    expect(card.textContent).toContain('options.insight.risk.iv_high')
+    expect(card.textContent).toContain('options.insight.risk.no_invalid')
+  })
+
+  it('WB-9 机会卡：后端补 logic/playbook 后来源切 ai，且原文照录', () => {
+    const { container } = renderOverview({
+      overview: {
+        source: 'iquant', sort: 'strength', asOf: '2026-09-09T01:00:00.000Z', scanAllPrompt: 'scan all',
+        rows: [{
+          underlying: '510050', name: '上证50ETF', exchange: 'SSE' as const, spotSymbol: '510050.SH',
+          days: [{ date: '2026-09-09', changePct: 0.4, volumeSurge: false }], scanPrompt: 's',
+          strategy: {
+            opportunity: 'theta_rent', template: 'vertical', edge: 'theta rich', noTrade: false,
+            bucketStart: '2026-09-09T01:00:00.000Z', invalidIf: 'spot < 2.90',
+            // 桥 JSON 尚未定义这两个键，用宽容类型预读
+            ...({ logic: '箱体上沿不破，收 theta', playbook: '卖 2900 购 / 买 2950 购' } as Record<string, unknown>),
+          } as never,
+        }],
+      },
+    })
+    const card = container.querySelector('[data-dshtrading-opportunity-card="510050"]') as HTMLElement
+    const badges = Array.from(card.querySelectorAll('[data-source]')).map(el => el.getAttribute('data-source'))
+    expect(new Set(badges)).toEqual(new Set(['ai']))
+    expect(card.textContent).toContain('箱体上沿不破，收 theta')
+    expect(card.textContent).toContain('卖 2900 购 / 买 2950 购')
+    expect(card.textContent).toContain('spot < 2.90')
+  })
+
+  it('WB-9 明细表默认展开、可折叠（保留 WB-1 9 行基线）', () => {
+    const { container, getByText } = renderOverview()
+    expect(container.querySelectorAll('tbody tr').length).toBe(2)
+    fireEvent.click(getByText('options.overview.hideTable'))
+    expect(container.querySelectorAll('tbody tr').length).toBe(0)
+    fireEvent.click(getByText('options.overview.showTable'))
+    expect(container.querySelectorAll('tbody tr').length).toBe(2)
   })
 })
 
