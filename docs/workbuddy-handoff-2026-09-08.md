@@ -233,11 +233,18 @@ agent 回复经现有 toolview。在策略结果上加「加载到 T 板」：
 
 - [x] A1-A3 全部落地（`feat/etf-options` 已快进含市场收敛与必红测试改 cn 词汇）
 - [x] B 的交易面 + 互联接线（T 板下单 / ATM / 备兑 / 持仓条已在 client 半）
-- [ ] **WB-0** overview / box / cycles fetch
-- [ ] **WB-1** 期权透镜落地 = 总览（`GET /options/overview`）
-- [ ] **WB-6** 闭环时间线（`GET /options/cycles/loop`）
-- [ ] **WB-2** `fillComposer(scanPrompt / scanAllPrompt)`
-- [ ] **WB-3** 箱体条（优先用 loop.latest.forecast）
-- [ ] **WB-4** 策略卡片加载到 T 板（可第二轮）
-- [ ] **WB-5** `pnpm i18n:check`、typecheck-gate、trading-web 冒烟
+- [x] **WB-0** overview / box / cycles fetch（2026-09-09）
+- [x] **WB-1** 期权透镜落地 = 总览（`GET /options/overview`）
+- [x] **WB-6** 闭环时间线（`GET /options/cycles/loop`）
+- [x] **WB-2** `fillComposer(scanPrompt / scanAllPrompt)`
+- [x] **WB-3** 箱体条（优先用 loop.latest.forecast）
+- [ ] **WB-4** 策略卡片加载到 T 板（第二轮，需后端先定型策略结果面）
+- [x] **WB-5** `pnpm i18n:check` 通过；typecheck 前端 0 新增
+- [ ] **WB-5 余项** trading-web 真机冒烟：本机宿主起不来（各市场 dataplane 重复
+      注册，与 issue #81 同族），待后端清偿后补
+
+WB-1/6/3 的决策记录见
+[2026-09-09-options-overview-cycle-loop-ui](../../.agents/notes/implemented/feature/2026-09-09-options-overview-cycle-loop-ui.md)。
+行为变更：期权透镜显隐判据从「当前标的在名册内」放宽为「名册非空」——总览是
+落地页，停在九只以外的标的时也要能进；进不进得去 T 板才看当前标的。
 

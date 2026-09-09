@@ -17,6 +17,7 @@ import type { FillComposerFn } from './fill-composer.ts'
 import type { MarketLocaleKey } from './contract.ts'
 import type { ChartState } from './chart-state.ts'
 import type { Observable, SelectionState } from './store.ts'
+import type { Instrument } from './types.ts'
 import css from './stage.module.css'
 
 /** 插件视图的注册 definition 形状（quote 由 shell 内建，不走此面）。 */
@@ -57,6 +58,8 @@ export interface MiddleStageInjected {
   removeIndicator: (id: string) => void
   /** 删除自定义指标（issue #30，透传给 QuoteStage 指标选择器）。 */
   deleteIndicator: (id: string) => Promise<boolean>
+  /** 切换全局标的（透传给 QuoteStage：期权总览点行进 T 板）。 */
+  selectInstrument?: (instrument: Instrument) => void
   /** 行情上下文 → 会话输入框（透传给 QuoteStage「发给 Agent」，只填入不发送）。 */
   fillComposer?: FillComposerFn
 }
@@ -66,7 +69,7 @@ export type MiddleStageProps =
   & PropsLocale<'dshtrading.market'>
   & InjectFace<MiddleStageInjected>
 
-export function MiddleStage({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, fillComposer }: MiddleStageProps) {
+export function MiddleStage({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, selectInstrument, fillComposer }: MiddleStageProps) {
   // 名册响应式：registry 版本号驱动 tab 条重渲染；当前视图是普通 state
   // （readStageView 净化 localStorage 脏值）。
   useSyncExternalStore(stageViews.subscribe, stageViews.getVersion)
@@ -99,7 +102,7 @@ export function MiddleStage({ t, useSelection, useChart, toggleIndicator, setInd
           quote 视图 = shell 内建（QuoteStage 直引——需要中栏全部指标动作面）；
           插件视图走 definition.render(props)。 */}
       {view === 'quote' ? (
-        <QuoteStage {...({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, fillComposer } as never)} />
+        <QuoteStage {...({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, selectInstrument, fillComposer } as never)} />
       ) : (
         (() => {
           const definition = stageViews.get(view)

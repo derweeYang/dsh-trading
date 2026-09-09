@@ -1,0 +1,219 @@
+/* OptionsOverview —— 九标的期权总览（2026-09-09 WB-1）。
+   token 与 options-stage / quote-stage 同族（--dsw-futu-*）。 */
+
+.root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 2px;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.sortGroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sortPill {
+  appearance: none;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  color: var(--dsw-futu-text-secondary, #4a5060);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sortPill:hover {
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.sortPill[data-active='true'] {
+  background: var(--dsw-futu-accent-subtle, rgba(59, 130, 246, 0.12));
+  border-color: var(--dsw-futu-accent, #3b82f6);
+  color: var(--dsw-futu-accent-text, #2563eb);
+}
+
+.asOf {
+  font-size: 12px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  font-variant-numeric: tabular-nums;
+}
+
+.scanAllBtn,
+.scanRowBtn {
+  appearance: none;
+  border: 1px solid var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.25));
+  background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.08));
+  color: var(--dsw-futu-accent-text, #2563eb);
+  border-radius: var(--dsw-futu-radius-sm, 4px);
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.scanAllBtn:hover,
+.scanRowBtn:hover {
+  background: var(--dsw-futu-bg-surface-active, rgba(0, 0, 0, 0.08));
+}
+
+.notice,
+.hint {
+  font-size: 12px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.notice {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 0;
+  text-align: center;
+}
+
+.hint {
+  flex: 0 0 auto;
+}
+
+.tableWrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+  border-radius: var(--dsw-futu-radius-md, 6px);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--dsw-futu-bg-surface, #f7f8fa);
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  font-weight: 600;
+  text-align: right;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  white-space: nowrap;
+}
+
+.table th:first-child {
+  text-align: left;
+}
+
+.row {
+  cursor: pointer;
+  border-bottom: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+}
+
+.row:hover {
+  background: var(--dsw-futu-bg-surface-hover, rgba(0, 0, 0, 0.04));
+}
+
+.row td {
+  padding: 6px 8px;
+}
+
+.num {
+  text-align: right;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  white-space: nowrap;
+}
+
+.nameCell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.name {
+  font-weight: 600;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.code {
+  font-family: var(--dsw-futu-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+/* 量价背离标签：价升量缩 / 价跌量增 */
+.divergence {
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 1px 5px;
+  font-size: 11px;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+.divergence[data-kind='weak_rally'] {
+  background: var(--dsw-futu-up-bg, rgba(230, 69, 69, 0.08));
+  border-color: var(--dsw-futu-up-border, rgba(230, 69, 69, 0.22));
+  color: var(--dsw-futu-up, #e64545);
+}
+
+.divergence[data-kind='accelerating_sell'] {
+  background: var(--dsw-futu-down-bg, rgba(43, 164, 113, 0.08));
+  border-color: var(--dsw-futu-down-border, rgba(43, 164, 113, 0.22));
+  color: var(--dsw-futu-down, #2ba471);
+}
+
+.t5Cell {
+  text-align: left;
+}
+
+.t5 {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.t5Box {
+  min-width: 46px;
+  text-align: center;
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 1px 3px;
+  font-size: 11px;
+  border: 1px solid transparent;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+/* 放量边框（当日量 / 5 日均量 > 1.5） */
+.t5Box[data-surge='true'] {
+  border-color: var(--dsw-futu-accent, #3b82f6);
+  font-weight: 600;
+}
+
+.actionCell {
+  text-align: right;
+}

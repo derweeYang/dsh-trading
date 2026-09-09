@@ -1,0 +1,229 @@
+/* OptionsCycleLoop —— 5 分钟闭环时间线（2026-09-09 WB-6）。
+   token 与 options-overview / options-stage 同族（--dsw-futu-*）。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.bucket,
+.stopped,
+.notice,
+.hint,
+.muted {
+  font-size: 12px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.bucket {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 闭环未启动（headless / 桥未挂）：如实标注，不假装在走 */
+.stopped {
+  border: 1px solid var(--dsw-futu-up-border, rgba(230, 69, 69, 0.22));
+  background: var(--dsw-futu-up-bg, rgba(230, 69, 69, 0.08));
+  color: var(--dsw-futu-up, #e64545);
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 1px 6px;
+}
+
+.workflow {
+  font-size: 11px;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  border-radius: var(--dsw-futu-radius-sm, 4px);
+  padding: 4px 8px;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 0;
+  text-align: center;
+}
+
+.hint {
+  flex: 0 0 auto;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 6px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.card {
+  border: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+  border-radius: var(--dsw-futu-radius-md, 6px);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--dsw-futu-bg-surface, #f7f8fa);
+}
+
+.card[data-expanded='true'] {
+  border-color: var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.25));
+}
+
+.cardHead {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  cursor: pointer;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.cardName {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cardCode {
+  font-family: var(--dsw-futu-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.rateWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rateTrack {
+  width: 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--dsw-futu-bg-surface-active, rgba(0, 0, 0, 0.08));
+  overflow: hidden;
+}
+
+.rateFill {
+  display: block;
+  height: 100%;
+  background: var(--dsw-futu-accent, #3b82f6);
+}
+
+.rateText {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  font-variant-numeric: tabular-nums;
+}
+
+.section {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.sectionLabel {
+  font-size: 11px;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  min-width: 52px;
+}
+
+.box,
+.realized {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+/* 已实现末值 vs 预报箱沿：箱内 = 绿（符合预期），箱外 = 红（偏离） */
+.realized[data-inside='true'] {
+  color: var(--dsw-futu-down, #2ba471);
+}
+
+.realized[data-inside='false'] {
+  color: var(--dsw-futu-up, #e64545);
+}
+
+.badge,
+.tag {
+  font-size: 11px;
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 1px 5px;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  white-space: nowrap;
+}
+
+.badge[data-kind='hit'] {
+  background: var(--dsw-futu-down-bg, rgba(43, 164, 113, 0.08));
+  border-color: var(--dsw-futu-down-border, rgba(43, 164, 113, 0.22));
+  color: var(--dsw-futu-down, #2ba471);
+}
+
+.badge[data-kind='miss'] {
+  background: var(--dsw-futu-up-bg, rgba(230, 69, 69, 0.08));
+  border-color: var(--dsw-futu-up-border, rgba(230, 69, 69, 0.22));
+  color: var(--dsw-futu-up, #e64545);
+}
+
+.badge[data-kind='partial'],
+.badge[data-kind='calibration'],
+.badge[data-kind='no_trade'] {
+  background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.08));
+  border-color: var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.25));
+  color: var(--dsw-futu-accent-text, #2563eb);
+}
+
+.badge[data-kind='range_hold'],
+.badge[data-kind='mean_revert'] {
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+}
+
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px dashed var(--dsw-futu-border-default, #e3e6ea);
+  padding-top: 4px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.historyRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.historyTime {
+  font-family: var(--dsw-futu-font-mono, ui-monospace, monospace);
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  min-width: 42px;
+}

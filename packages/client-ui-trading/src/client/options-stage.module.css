@@ -482,3 +482,73 @@ td[data-moneyness='otm'] {
   color: var(--dsw-futu-down, #dc2626);
 }
 
+
+/* 5 分钟箱体条（2026-09-09 WB-3）：只读展示，不出箱只说原因 */
+.boxBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 4px 6px;
+  border: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+  border-radius: var(--dsw-futu-radius-md, 6px);
+  background: var(--dsw-futu-bg-surface, #f7f8fa);
+}
+
+.boxLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.boxRange {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.boxMuted {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.boxTag {
+  font-size: 11px;
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 1px 5px;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  white-space: nowrap;
+}
+
+.boxTag[data-kind='no_trade'] {
+  background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.08));
+  border-color: var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.25));
+  color: var(--dsw-futu-accent-text, #2563eb);
+}
+
+/* 返回总览 / 扫描（只预填 composer，不下单） */
+.backBtn,
+.scanBtn {
+  appearance: none;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  color: var(--dsw-futu-text-secondary, #4a5060);
+  border-radius: var(--dsw-futu-radius-sm, 4px);
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.scanBtn {
+  border-color: var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.25));
+  background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.08));
+  color: var(--dsw-futu-accent-text, #2563eb);
+}
+
+.backBtn:hover,
+.scanBtn:hover {
+  background: var(--dsw-futu-bg-surface-active, rgba(0, 0, 0, 0.08));
+}

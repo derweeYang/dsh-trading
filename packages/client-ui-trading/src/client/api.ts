@@ -5,7 +5,8 @@
  */
 import type { AccountBalance, Kline, MarketId, MarketInfo, Order, Orderbook, Position, TickerOutcome, TradeFill, TradeTick } from './types.ts'
 import type {
-  FundamentalsPackage, KernelReport, OptionChain, OptionExpiryCalendar, OptionOrder,
+  FundamentalsPackage, KernelReport, OptionChain, OptionCycle, OptionCycleLoop,
+  OptionExpiryCalendar, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewSort,
   OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying,
 } from '@dshtrading/api'
 import type { CustomIndicatorRecord, IndicatorInstance } from '@dshtrading/indicators'
@@ -173,6 +174,91 @@ export async function fetchOptionsResolve(symbol: string): Promise<OptionsOutcom
     )
     if (wire.underlying === undefined) return optionsFailure(new Error('underlying missing in wire'))
     return { ok: true, data: wire }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/* ── 期权聚合面（C1 总览 / L2 箱体 / 5 分钟闭环；2026-09-09 WB-0）────────── */
+
+/**
+ * 九标的总览（C1）。桥侧聚合现货/日 K/底仓/期权持仓，**只拉这一条**——
+ * 不要再拼 tickers + klines + positions（交接单 WB-1 明令禁止）。
+ *
+ * `includeIv` 默认 false：置 1 会逐标的打 vol_analytics 网关，九路并发打爆
+ * 网关；仅排序切到 `iv` 时由调用方显式打开。单行缺键由 UI 按行容错。
+ */
+export async function fetchOptionsOverview(query: {
+  sort?: OptionOverviewSort
+  includeIv?: boolean
+}): Promise<OptionsOutcome<OptionOverview>> {
+  try {
+    const search = new URLSearchParams()
+    if (query.sort !== undefined) search.set('sort', query.sort)
+    search.set('includeIv', query.includeIv === true ? '1' : '0')
+    const wire = await getJson<{ ok: boolean; overview: OptionOverview }>(
+      `/dshtrading/api/options/overview?${search.toString()}`,
+    )
+    if (wire.overview === undefined) return optionsFailure(new Error('overview missing in wire'))
+    return { ok: true, data: wire.overview }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/**
+ * 1 分钟 → 5 分钟箱体（L2，展示用）。
+ * `horizon` 只接受 5 且不是 UI 选项 → 不传（桥缺省即 5）。
+ * T 板优先读闭环 `loop.latest.forecast`，本端点是降级路径（见 WB-3）。
+ */
+export async function fetchOptionsIntradayBox(query: {
+  underlying?: string
+  asOf?: string
+}): Promise<OptionsOutcome<OptionIntradayBox>> {
+  try {
+    const search = new URLSearchParams()
+    if (query.underlying !== undefined) search.set('underlying', query.underlying)
+    if (query.asOf !== undefined) search.set('asOf', query.asOf)
+    const wire = await getJson<{ ok: boolean; box: OptionIntradayBox }>(
+      `/dshtrading/api/options/intraday-box?${search.toString()}`,
+    )
+    if (wire.box === undefined) return optionsFailure(new Error('box missing in wire'))
+    return { ok: true, data: wire.box }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/**
+ * 5 分钟闭环最新周期 + 命中率（页面可视化 SSOT）。
+ * 宿主 node 半每 30s 已对齐上海 5 分钟桶，**页面不要自己算箱体/打分**。
+ */
+export async function fetchOptionsCycleLoop(): Promise<OptionsOutcome<OptionCycleLoop>> {
+  try {
+    const wire = await getJson<{ ok: boolean; loop: OptionCycleLoop }>(
+      '/dshtrading/api/options/cycles/loop',
+    )
+    if (wire.loop === undefined) return optionsFailure(new Error('loop missing in wire'))
+    return { ok: true, data: wire.loop }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/** 单标的闭环历史（点周期卡展开；先 forecast，下一桶补 score）。 */
+export async function fetchOptionsCycles(query: {
+  underlying?: string
+  limit?: number
+}): Promise<OptionsOutcome<readonly OptionCycle[]>> {
+  try {
+    const search = new URLSearchParams()
+    if (query.underlying !== undefined) search.set('underlying', query.underlying)
+    if (query.limit !== undefined) search.set('limit', String(query.limit))
+    const wire = await getJson<{ ok: boolean; cycles: readonly OptionCycle[] }>(
+      `/dshtrading/api/options/cycles?${search.toString()}`,
+    )
+    if (wire.cycles === undefined) return optionsFailure(new Error('cycles missing in wire'))
+    return { ok: true, data: wire.cycles }
   } catch (err) {
     return optionsFailure(err)
   }

@@ -19,6 +19,7 @@ import { MiddleStage } from './MiddleStage.tsx'
 import type { FillComposerFn } from './fill-composer.ts'
 import type { Observable, SelectionState } from './store.ts'
 import type { ChartState } from './chart-state.ts'
+import type { Instrument } from './types.ts'
 import css from './quote-pane.module.css'
 
 export interface QuotePaneInjected {
@@ -34,6 +35,11 @@ export interface QuotePaneInjected {
   removeIndicator: (id: string) => void
   /** 删除自定义指标（issue #30）：桥 DELETE → 注销注册表 + 移除激活实例。 */
   deleteIndicator: (id: string) => Promise<boolean>
+  /**
+   * 切换全局标的（2026-09-09 WB-1）：期权总览点行进 T 板时，要把选中标的切到
+   * 该 ETF 现货（T 板数据按全局 symbol 取）。与 MarketSidebar 同一入口。
+   */
+  selectInstrument?: (instrument: Instrument) => void
   /** 行情上下文 → 会话输入框（只填入不发送；shell 注入）。 */
   fillComposer?: FillComposerFn
 }
@@ -50,7 +56,7 @@ interface Rect {
   height: number
 }
 
-export function QuotePane({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, fillComposer }: QuotePaneProps) {
+export function QuotePane({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, selectInstrument, fillComposer }: QuotePaneProps) {
   const [rect, setRect] = useState<Rect | null>(null)
 
   useEffect(() => {
@@ -144,7 +150,7 @@ export function QuotePane({ t, useSelection, useChart, toggleIndicator, setIndic
     >
       {/* MiddleStage 的 slot 运行时面（viewRequest 等）在面板场景不需要，
           只取 t/两个 store hook 与指标动作。 */}
-      <MiddleStage {...({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, fillComposer } as never)} />
+      <MiddleStage {...({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, selectInstrument, fillComposer } as never)} />
     </div>
   )
 }

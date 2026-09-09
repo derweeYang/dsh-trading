@@ -305,6 +305,8 @@ export function apply(ctx: ClientContext): void {
         }
         return ok
       },
+      // 期权总览点行进 T 板 → 切全局标的（与 MarketSidebar 同一 store 入口）。
+      selectInstrument: (instrument: Instrument) => { selection.select(instrument) },
       fillComposer,
     }),
   }, QuotePane))}

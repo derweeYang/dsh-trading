@@ -25,12 +25,15 @@
  * 本页技术与行情分析面，不构成投资建议。
  */
 import { useEffect, useMemo, useState } from 'react'
-import type { OptionChain, OptionExpiryMonth, OptionOrder, OptionPosition, OptionQuoteRow } from '@dshtrading/api'
+import type {
+  OptionChain, OptionExpiryMonth, OptionIntradayBoxRow, OptionOrder, OptionPosition, OptionQuoteRow,
+} from '@dshtrading/api'
 import type { ColorMode } from './color-mode.ts'
 import type { MarketLocaleKey } from './contract.ts'
 import { cancelOptionOrder, fetchOptionPositions, fetchOptionStrategy, placeOptionOrder } from './api.ts'
 import { directionColor, fmtClock, fmtCompact, fmtPercent, fmtPrice } from './format.ts'
 import { usePoll } from './usePoll.ts'
+import { REGIME_KEY, SESSION_REASON_KEY, TEMPLATE_KEY } from './option-vocabulary.ts'
 import css from './options-stage.module.css'
 
 export type OptionsStageTranslate = (key: MarketLocaleKey, params?: Record<string, unknown>) => string
@@ -73,6 +76,16 @@ export interface OptionsStageProps {
   onTradeSpot: () => void
   /** 把选中合约要素交给 Agent 评估下单（dry-run 优先）；未注入（无 fillComposer）则不渲染按钮。 */
   onSendLegToAgent?: (leg: SelectedOptionLeg) => void
+  /**
+   * 本桶 5 分钟箱体（WB-3）。由上层给：优先闭环 `loop.latest.forecast`，闭环没有
+   * 该标的行才降级 `GET /options/intraday-box`。本组件**不自己算箱体**——打分与
+   * 校准在宿主/kit 侧，前端复制一份必然漂移。
+   */
+  forecast?: OptionIntradayBoxRow | null | undefined
+  /** 返回九标的总览（保留排序状态；由 QuoteStage 持有 sort）。 */
+  onBackToOverview?: () => void
+  /** 用该标的的 scanPrompt 预填 composer（只填不发；未注入 fillComposer 则缺席）。 */
+  onScanUnderlying?: (() => void) | undefined
 }
 
 /** 行权价并集升序：认购/认沽挂出的档位未必对称（深市静态表尤其）。 */
@@ -115,6 +128,7 @@ const OPTION_POSITIONS_POLL_MS = 15000
 export function OptionsStage({
   t, months, selectedMonth, onSelectMonth, chain, failure, loaded, colorMode,
   underlyingSymbol, underlyingName, multiplier, heldQty, onViewSpot, onTradeSpot, onSendLegToAgent,
+  forecast, onBackToOverview, onScanUnderlying,
 }: OptionsStageProps): React.JSX.Element {
   const strikes = chain === null ? [] : strikeOrder(chain)
   const clock = chain === null ? undefined : snapshotClock(chain.snapshotAt)
@@ -185,6 +199,24 @@ export function OptionsStage({
           </span>
         )}
         <span className={css.spacer} />
+        {onBackToOverview !== undefined && (
+          <button
+            type="button"
+            className={css.backBtn}
+            onClick={onBackToOverview}
+          >
+            {t('options.overview.back')}
+          </button>
+        )}
+        {onScanUnderlying !== undefined && (
+          <button
+            type="button"
+            className={css.scanBtn}
+            onClick={onScanUnderlying}
+          >
+            {t('options.overview.scanRow')}
+          </button>
+        )}
         {selectedLeg !== null && (
           <span className={css.legTag}>
             <span>{t('options.legSelected')}</span>
@@ -229,6 +261,41 @@ export function OptionsStage({
             </button>
           ))}
       </div>
+
+      {/* 5 分钟箱体条（WB-3）：只读展示。no_trade 只出示原因，不画假箱沿；
+          候选模板是标签，不是下单按钮——下单仍走下面的点选 + 双闸。 */}
+      {forecast !== undefined && forecast !== null && (
+        <div className={css.boxBar}>
+          <span className={css.boxLabel}>{t('options.box.title')}</span>
+          {forecast.regime !== 'no_trade' && (
+            <span className={css.boxTag} data-kind={forecast.regime}>{t(REGIME_KEY[forecast.regime])}</span>
+          )}
+          {forecast.boxLow !== undefined && forecast.boxHigh !== undefined
+            ? (
+              <span className={css.boxRange}>
+                {t('options.cycle.box', { low: fmtPrice(forecast.boxLow), high: fmtPrice(forecast.boxHigh) })}
+              </span>
+            )
+            : <span className={css.boxMuted}>{t('options.box.noTrade')}</span>}
+          {forecast.regime === 'no_trade' && forecast.noTradeReason !== undefined && (
+            <span className={css.boxMuted}>{t(SESSION_REASON_KEY[forecast.noTradeReason])}</span>
+          )}
+          {forecast.vwap !== undefined && (
+            <span className={css.boxMuted}>{t('options.box.vwap')} {fmtPrice(forecast.vwap)}</span>
+          )}
+          {forecast.sigma1 !== undefined && (
+            <span className={css.boxMuted}>{t('options.box.sigma')} {forecast.sigma1.toFixed(4)}</span>
+          )}
+          {forecast.atr14 !== undefined && (
+            <span className={css.boxMuted}>{t('options.box.atr')} {fmtPrice(forecast.atr14)}</span>
+          )}
+          {forecast.candidates.map(candidate => (
+            <span key={candidate.template} className={css.boxTag} title={candidate.reason}>
+              {t(TEMPLATE_KEY[candidate.template])}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* 状态行：标的现价 / 快照时间 / 数据源 / 期权持仓（字段缺省即隐藏，不补占位） */}
       {chain !== null && (
