@@ -127,6 +127,96 @@ describe('OptionsOverview', () => {
     expect(container.textContent).toContain('options.overview.loading')
     expect(container.textContent).not.toContain('options.overview.unavailable')
   })
+
+  it('WB-7 推荐策略列表头落在 optionQty 与 T-5 之间', () => {
+    const { container } = renderOverview({
+      overview: {
+        source: 'iquant', sort: 'strength', asOf: '2026-09-09T01:00:00.000Z', scanAllPrompt: 'scan all',
+        rows: [
+          { underlying: '510050', name: '上证50ETF', exchange: 'SSE', spotSymbol: '510050.SH', days: [], scanPrompt: 's',
+            strategy: { opportunity: 'theta_rent', template: 'butterfly', edge: 'range_hold collect theta', noTrade: false, bucketStart: '2026-09-09T01:00:00.000Z' } },
+        ],
+      },
+    })
+    const headers = Array.from(container.querySelectorAll('thead th')).map(th => th.textContent)
+    const iStr = headers.indexOf('options.overview.col.strategy')
+    const iQty = headers.indexOf('options.overview.col.optionQty')
+    const iT5 = headers.indexOf('options.overview.col.t5')
+    expect(iStr).toBeGreaterThan(iQty)
+    expect(iStr).toBeLessThan(iT5)
+  })
+
+  it('WB-7 三分支渲染：edge 模板·机会 / no_edge / skip / 缺键「—」', () => {
+    const { container } = renderOverview({
+      overview: {
+        source: 'iquant', sort: 'strength', asOf: '2026-09-09T01:00:00.000Z', scanAllPrompt: 'scan all',
+        rows: [
+          { underlying: '510050', name: '上证50ETF', exchange: 'SSE', spotSymbol: '510050.SH', days: [], scanPrompt: 's',
+            strategy: { opportunity: 'theta_rent', template: 'butterfly', edge: 'range_hold collect theta', noTrade: false, bucketStart: '2026-09-09T01:00:00.000Z' } },
+          { underlying: '159915', name: '创业板ETF', exchange: 'SZSE', spotSymbol: '159915.SZ', days: [], scanPrompt: 's',
+            strategy: { opportunity: 'no_edge', noTrade: true, edge: 'no edge today', bucketStart: '2026-09-09T01:00:00.000Z' } },
+          { underlying: '510300', name: '沪深300ETF', exchange: 'SSE', spotSymbol: '510300.SH', days: [], scanPrompt: 's',
+            strategy: { opportunity: 'rv_vs_iv', skipReason: 'overlap', edge: 'prev bucket unfinished', bucketStart: '2026-09-09T01:00:00.000Z' } },
+          { underlying: '588000', name: '科创50ETF', exchange: 'SSE', spotSymbol: '588000.SH', days: [], scanPrompt: 's' },
+        ],
+      },
+    })
+    const rows = container.querySelectorAll('tbody tr')
+    // edge：模板 · 机会，title 用后端 edge 原文
+    expect(rows[0]?.textContent).toContain('options.template.butterfly · options.overview.strategy.theta_rent')
+    expect(rows[0]?.querySelector('[data-tone="edge"]')?.getAttribute('title')).toBe('range_hold collect theta')
+    // no_edge：观望标签（tone none）
+    expect(rows[1]?.textContent).toContain('options.overview.strategy.no_edge')
+    expect(rows[1]?.querySelector('[data-tone="none"]')).toBeTruthy()
+    // skip：跳过标签（tone skip）
+    expect(rows[2]?.textContent).toContain('options.overview.strategy.skip.overlap')
+    expect(rows[2]?.querySelector('[data-tone="skip"]')).toBeTruthy()
+    // 缺 strategy 键：出「—」（按行容错，不整列空白）
+    expect(rows[3]?.textContent).toContain('—')
+  })
+
+  it('redesign 走势列落在 strength 与 iv 之间', () => {
+    const { container } = renderOverview()
+    const headers = Array.from(container.querySelectorAll('thead th')).map(th => th.textContent)
+    const iTrend = headers.indexOf('options.overview.col.trend')
+    const iStrength = headers.indexOf('options.overview.col.strength')
+    const iIv = headers.indexOf('options.overview.col.iv')
+    expect(iTrend).toBeGreaterThan(iStrength)
+    expect(iTrend).toBeLessThan(iIv)
+  })
+
+  it('redesign 走势列内嵌 sparkline（svg）', () => {
+    const { container } = renderOverview()
+    const first = container.querySelector('tbody tr') as HTMLElement
+    const trendCell = first.querySelector('[class*="colTrend"]') as HTMLElement
+    expect(trendCell).toBeTruthy()
+    expect(trendCell.querySelector('svg')).toBeTruthy()
+  })
+
+  it('redesign 强弱排行条按 strengthScore 降序，中位行高亮', () => {
+    const overview = {
+      source: 'iquant', sort: 'strength', asOf: '2026-09-09T01:00:00.000Z', scanAllPrompt: 'scan all',
+      rows: [
+        { underlying: '510050', name: '上证50ETF', exchange: 'SSE', spotSymbol: '510050.SH', strengthScore: 0.96, return5d: 1.2, days: [{ date: 'd1', changePct: 0.5, volumeSurge: false }], scanPrompt: 's' },
+        { underlying: '159915', name: '创业板ETF', exchange: 'SZSE', spotSymbol: '159915.SZ', strengthScore: 0.30, return5d: -0.4, days: [{ date: 'd1', changePct: -0.5, volumeSurge: false }], scanPrompt: 's' },
+        { underlying: '588000', name: '科创50ETF', exchange: 'SSE', spotSymbol: '588000.SH', strengthScore: 0.60, return5d: 0.1, days: [{ date: 'd1', changePct: 0.1, volumeSurge: false }], scanPrompt: 's' },
+      ],
+    }
+    const { container } = renderOverview({ overview })
+    const strip = container.querySelector('[class*="strip"]') as HTMLElement
+    expect(strip).toBeTruthy()
+    expect(strip.textContent).toContain('options.overview.strengthStrip')
+    // 中位标记恰好一行
+    const median = strip.querySelector('[data-median="true"]')
+    expect(median).toBeTruthy()
+    expect(median?.textContent).toContain('options.overview.median')
+    // 排序：最强（0.96）在前，最弱（0.30）在后（行内展示名称，不展示代码）
+    const rowsContainer = strip.querySelector('[class*="stripRows"]') as HTMLElement
+    const rows = Array.from(rowsContainer.children)
+    expect(rows.length).toBe(3)
+    expect(rows[0]?.textContent).toContain('上证50ETF')
+    expect(rows[2]?.textContent).toContain('创业板ETF')
+  })
 })
 
 /* ── 5 分钟闭环 ─────────────────────────────────────────────────────── */

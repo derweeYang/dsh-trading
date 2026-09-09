@@ -214,6 +214,114 @@
   font-weight: 600;
 }
 
+/* 推荐策略列（WB-7，只读标签，非数值所以左对齐） */
+.colStrategy {
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* 走势列（redesign）：内嵌 sparkline，居中 */
+.colTrend {
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* 强弱排行条（redesign）：按 strengthScore 排序的横向 sparkline 列表 */
+.strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+  border-radius: var(--dsw-futu-radius-md, 6px);
+  padding: 6px 8px;
+  background: var(--dsw-futu-bg-surface, #f7f8fa);
+}
+
+.stripTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+.stripRows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stripRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 4px;
+  border-radius: var(--dsw-futu-radius-sm, 4px);
+}
+
+/* 中位行高亮：一眼定位最强/最弱/中位的分界 */
+.stripRow[data-median='true'] {
+  background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.1));
+  outline: 1px dashed var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.3));
+}
+
+.stripRank {
+  width: 16px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  font-variant-numeric: tabular-nums;
+}
+
+.stripName {
+  width: 84px;
+  font-size: 12px;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stripScore {
+  width: 40px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  font-variant-numeric: tabular-nums;
+}
+
+.stripMedian {
+  font-size: 11px;
+  color: var(--dsw-futu-accent-text, #2563eb);
+  border: 1px solid var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.3));
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 0 4px;
+}
+
+.strategyTag {
+  display: inline-block;
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 1px 6px;
+  font-size: 11px;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  cursor: default;
+}
+
+.strategyTag[data-tone='edge'] {
+  background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.08));
+  border-color: var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.25));
+  color: var(--dsw-futu-accent-text, #2563eb);
+}
+
+.strategyTag[data-tone='skip'] {
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.strategyTag[data-tone='none'] {
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  border-color: transparent;
+}
+
 .actionCell {
   text-align: right;
 }

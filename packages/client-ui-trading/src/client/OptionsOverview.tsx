@@ -10,10 +10,17 @@
  *
  * 本页是技术与行情分析面，不构成投资建议；扫描按钮只预填聊天框，不下单。
  */
-import type { OptionOverview, OptionOverviewRow, OptionOverviewSort } from '@dshtrading/api'
+import type {
+  OptionOverview,
+  OptionOverviewDay,
+  OptionOverviewRow,
+  OptionOverviewSort,
+  OptionOverviewStrategy,
+} from '@dshtrading/api'
 import type { ColorMode } from './color-mode.ts'
 import type { MarketLocaleKey } from './contract.ts'
 import { directionColor, fmtCompact, fmtPercent, fmtPrice } from './format.ts'
+import { Sparkline } from './Sparkline.tsx'
 import css from './options-overview.module.css'
 
 export type OptionsOverviewTranslate = (key: MarketLocaleKey, params?: Record<string, unknown>) => string
@@ -69,6 +76,81 @@ function fmtIvPercentile(value: number | undefined): string {
   return `${(value > 1 ? value : value * 100).toFixed(0)}%`
 }
 
+/**
+ * 总览「推荐策略」列（WB-7）：只读展示后端 `row.strategy` 投影，前端绝不现场
+ * 算箱体或调 `cn_get_option_strategy`。渲染优先级：
+ *  1. skipReason 有值 → 跳过标签（盘中常见 overlap / launch_failed）；
+ *  2. noTrade 或 opportunity=no_edge → 观望标签；
+ *  3. 否则 `模板 · 机会`，tooltip 用后端给的 edge 原文。
+ * 无 strategy 键 → 返回 null（调用方出「—」），不整列空白。
+ */
+function renderStrategy(
+  s: OptionOverviewStrategy,
+  t: OptionsOverviewTranslate,
+): { label: string; title?: string; tone: 'edge' | 'none' | 'skip' } {
+  if (s.skipReason !== undefined) {
+    return { label: t(`options.overview.strategy.skip.${s.skipReason}`), tone: 'skip' }
+  }
+  if (s.noTrade || s.opportunity === 'no_edge') {
+    return { label: t('options.overview.strategy.no_edge'), tone: 'none' }
+  }
+  const opp = t(`options.overview.strategy.${s.opportunity}`)
+  const template = s.template !== undefined ? t(`options.template.${s.template}`) : ''
+  return {
+    label: template ? `${template} · ${opp}` : opp,
+    title: s.edge,
+    tone: 'edge',
+  }
+}
+
+/**
+ * 走势列 / 排行条共用的 5 日指数序列：从 days[].changePct 累乘成归一化指数
+ * （起点 1.0）。纯客户端可视化派生，不重算后端 strengthScore / 箱体。
+ */
+function trendValues(days: readonly OptionOverviewDay[]): number[] {
+  let idx = 1
+  const out: number[] = []
+  for (const d of days) {
+    idx *= 1 + (d.changePct ?? 0) / 100
+    out.push(idx)
+  }
+  return out
+}
+
+/**
+ * 强弱排行条（2026-09-09 redesign）：按 strengthScore 降序排 9 条横向 sparkline，
+ * 中位行高亮——一眼定位最强（顶）/ 最弱（底）/ 中位。走势用 days 的 5 日 changePct
+ * 累乘成指数。
+ */
+function OptionsStrengthStrip({ rows, t, colorMode }: {
+  rows: readonly OptionOverviewRow[]
+  t: OptionsOverviewTranslate
+  colorMode: ColorMode
+}): React.JSX.Element {
+  const ranked = [...rows].sort((a, b) => (b.strengthScore ?? -Infinity) - (a.strengthScore ?? -Infinity))
+  const medianIdx = Math.floor(ranked.length / 2)
+  return (
+    <div className={css.strip}>
+      <span className={css.stripTitle}>{t('options.overview.strengthStrip')}</span>
+      <div className={css.stripRows}>
+        {ranked.map((row, i) => {
+          const up = (row.return5d ?? 0) >= 0
+          const isMedian = i === medianIdx
+          return (
+            <div key={row.underlying} className={css.stripRow} data-median={isMedian ? 'true' : undefined}>
+              <span className={css.stripRank}>{String(i + 1)}</span>
+              <span className={css.stripName}>{row.name}</span>
+              <Sparkline values={trendValues(row.days)} width={120} height={20} up={up} colorMode={colorMode} />
+              <span className={css.stripScore}>{row.strengthScore === undefined ? '—' : row.strengthScore.toFixed(2)}</span>
+              {isMedian && <span className={css.stripMedian}>{t('options.overview.median')}</span>}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function OptionsOverview({
   t, colorMode, overview, failure, loaded, sort, onSortChange, onPickRow, onScanAll, onScanRow,
 }: OptionsOverviewProps): React.JSX.Element {
@@ -118,10 +200,12 @@ export function OptionsOverview({
           ? <div className={css.notice}>{t('options.overview.loading')}</div>
           : overview === null
             ? <div className={css.notice}>{t('options.overview.unavailable')}</div>
-            : rows.length === 0
-              ? <div className={css.notice}>{t('options.overview.empty')}</div>
-              : (
-                <div className={css.tableWrap}>
+              : rows.length === 0
+                ? <div className={css.notice}>{t('options.overview.empty')}</div>
+                : (
+                  <>
+                    <OptionsStrengthStrip rows={rows} t={t} colorMode={colorMode} />
+                    <div className={css.tableWrap}>
                   <table className={css.table}>
                     <thead>
                       <tr>
@@ -131,9 +215,11 @@ export function OptionsOverview({
                         <th>{t('options.overview.col.return5d')}</th>
                         <th>{t('options.overview.col.volumeRatio')}</th>
                         <th>{t('options.overview.col.strength')}</th>
+                        <th className={css.colTrend}>{t('options.overview.col.trend')}</th>
                         <th>{t('options.overview.col.iv')}</th>
                         <th>{t('options.overview.col.heldQty')}</th>
                         <th>{t('options.overview.col.optionQty')}</th>
+                        <th className={css.colStrategy}>{t('options.overview.col.strategy')}</th>
                         <th>{t('options.overview.col.t5')}</th>
                         {onScanRow !== undefined && <th />}
                       </tr>
@@ -168,9 +254,29 @@ export function OptionsOverview({
                             </td>
                             <td className={css.num}>{row.volumeRatio === undefined ? '—' : row.volumeRatio.toFixed(2)}</td>
                             <td className={css.num}>{row.strengthScore === undefined ? '—' : row.strengthScore.toFixed(2)}</td>
+                            <td className={css.colTrend}>
+                              <Sparkline values={trendValues(row.days)} width={84} height={22} up={(row.return5d ?? 0) >= 0} colorMode={colorMode} />
+                            </td>
                             <td className={css.num}>{fmtIvPercentile(row.ivPercentile)}</td>
                             <td className={css.num}>{row.heldQty === undefined ? '—' : fmtCompact(row.heldQty)}</td>
                             <td className={css.num}>{row.optionQty === undefined ? '—' : String(row.optionQty)}</td>
+                            {/* 推荐策略：只读后端投影，前端不重算（WB-7） */}
+                            <td className={css.colStrategy}>
+                              {row.strategy === undefined
+                                ? <span className={css.strategyTag} data-tone="none">—</span>
+                                : (() => {
+                                  const s = renderStrategy(row.strategy, t)
+                                  return (
+                                    <span
+                                      className={css.strategyTag}
+                                      data-tone={s.tone}
+                                      title={s.title}
+                                    >
+                                      {s.label}
+                                    </span>
+                                  )
+                                })()}
+                            </td>
                             {/* T-5 量价矩阵：色深 = changePct，边框 = volumeSurge */}
                             <td className={css.t5Cell}>
                               <span className={css.t5}>
@@ -207,7 +313,8 @@ export function OptionsOverview({
                     </tbody>
                   </table>
                 </div>
-              )}
+                  </>
+                )}
 
       <span className={css.hint}>{t('options.overview.hint')}</span>
     </div>

@@ -29,6 +29,8 @@ vi.mock('../src/client/TvChart.tsx', () => ({
 }))
 
 import { QuoteStage } from '../src/client/QuoteStage.tsx'
+import { optionsCycleLoopStore, optionsOverviewStore } from '../src/client/stage-actions.ts'
+import type { OptionCycleLoop } from '@dshtrading/api'
 import type { SelectionState } from '../src/client/store.ts'
 import type { ChartState } from '../src/client/chart-state.ts'
 import type { MarketLocaleKey } from '../src/client/contract.ts'
@@ -44,7 +46,28 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  // 共享聚合快照复位（模块级单例，跨测试污染会互相「看见」对方的 loop/overview）
+  optionsCycleLoopStore.set({ loop: null, loaded: false, failure: null })
+  optionsOverviewStore.set(null)
 })
+
+/** 5 分钟闭环 fixture（redesign 后 QuoteStage 从共享 store 读，不再自己 fetch）。 */
+const LOOP: OptionCycleLoop = {
+  running: true, horizonMin: 5, lastBucket: '2026-09-09T02:30:00.000Z',
+  rows: [{
+    underlying: '510050',
+    stats: { n: 4, hits: 2, misses: 1, partials: 0, skipped: 1, hitRate: 0.67 },
+    latest: {
+      id: '510050:1', bucketStart: '2026-09-09T02:30:00.000Z', asOf: '2026-09-09T02:30:00.000Z',
+      forecast: {
+        underlying: '510050', name: '华夏上证50ETF', exchange: 'SSE', horizonMin: 5,
+        boxLow: 2.99, boxHigh: 3.01, regime: 'range_hold', session: 'regular',
+        candidates: [{ template: 'butterfly', bias: 'neutral', invalidIf: 'x', reason: 'y' }],
+      },
+      calibration: 'none',
+    },
+  }],
+}
 
 function quoteStageProps(symbol = '600519') {
   const selection: SelectionState = { instrument: { market: 'cn', symbol } }
@@ -248,31 +271,21 @@ describe('QuoteStage「现货 ⇄ 期权」双透镜冒烟（阶段 3 交易面�
     }))
   }
 
-  it('期权透镜落地页 = 总览（WB-1）→ 点行 resolve 切标的进 T 板 + 底仓徽章', async () => {
+  it('期权透镜落地页 = T 板（redesign：总览升格中栏顶部 tab）+ 底仓徽章 + 箱体条', async () => {
     stubOptionsBridge()
-    const selectInstrument = vi.fn()
+    optionsCycleLoopStore.set({ loop: LOOP, loaded: true, failure: null })
     const { container, getByText } = render(
-      <QuoteStage {...quoteStageProps('510050')} selectInstrument={selectInstrument} />,
+      <QuoteStage {...quoteStageProps('510050')} />,
     )
     const lensTab = await waitFor(() => getByText('lens.options'))
     fireEvent.click(lensTab)
-    // 落地页是总览：不再一进「期权」就画当前自选的 T 板；闭环时间线同页挂载。
-    await waitFor(() => { expect(container.querySelector('[data-dshtrading-options-overview]')).toBeTruthy() })
-    expect(container.querySelector('[data-dshtrading-options-stage]')).toBeNull()
-    expect(container.querySelector('[data-dshtrading-options-cycle-loop]')).toBeTruthy()
-    // 总览行字段与 T-5 一格、背离标签
-    expect(getByText('options.overview.col.strength')).toBeTruthy()
-    expect(getByText('options.overview.divergence.weak_rally')).toBeTruthy()
-
-    // 点总览行 → resolve → 切全局标的 → 进 T 板
-    const row = await waitFor(() => container.querySelector('[data-dshtrading-options-overview] tbody tr') as HTMLElement)
-    fireEvent.click(row)
-    await waitFor(() => { expect(selectInstrument).toHaveBeenCalledWith(expect.objectContaining({ symbol: '510050.SH' })) })
+    // 落地页直接是 T 板：总览不再是透镜落地页（已升格中栏顶部 tab，不在透镜渲染）
     await waitFor(() => { expect(container.querySelector('[data-dshtrading-options-stage]')).toBeTruthy() })
+    expect(container.querySelector('[data-dshtrading-options-overview]')).toBeNull()
     expect(getByText('options.underlying')).toBeTruthy()
     expect(getByText('options.calls')).toBeTruthy()
     expect(getByText('options.held.badge')).toBeTruthy()
-    // WB-3 箱体条：读闭环本桶预报，不自己算
+    // WB-3 箱体条：读共享闭环快照的本桶预报，不自己算
     expect(getByText('options.box.title')).toBeTruthy()
     expect(getByText('options.cycle.regime.range_hold')).toBeTruthy()
     expect(getByText('options.template.butterfly')).toBeTruthy()
@@ -287,14 +300,13 @@ describe('QuoteStage「现货 ⇄ 期权」双透镜冒烟（阶段 3 交易面�
     await waitFor(() => { expect(container.querySelector('[data-dshtrading-options-stage]')).toBeNull() })
   })
 
-  it('非注册标的（个股）：透镜仍可进总览，但进不去 T 板（WB-1 显隐判据放宽）', async () => {
+  it('非注册标的（个股）：透镜不渲染（redesign：总览走中栏顶部 tab，不依赖标的上下文）', async () => {
     stubOptionsBridge()
-    const { container, getByText } = render(<QuoteStage {...quoteStageProps('600519')} />)
+    const { container } = render(<QuoteStage {...quoteStageProps('600519')} />)
     await waitFor(() => { expect(container.textContent).toContain('600519') })
-    // 挂了 connector-options（名册非空）→ 透镜可用，落地总览（九标的市场入口）
-    const lensTab = await waitFor(() => getByText('lens.options'))
-    fireEvent.click(lensTab)
-    await waitFor(() => { expect(container.querySelector('[data-dshtrading-options-overview]')).toBeTruthy() })
+    // 显隐判据收紧回 optionsAvailable：个股无透镜入口，也不会渲染 T 板/总览
+    expect(container.querySelector('[aria-label="spot or options lens"]')).toBeNull()
     expect(container.querySelector('[data-dshtrading-options-stage]')).toBeNull()
+    expect(container.querySelector('[data-dshtrading-options-overview]')).toBeNull()
   })
 })

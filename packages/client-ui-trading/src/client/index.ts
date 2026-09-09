@@ -24,6 +24,7 @@ import { createSelectionStore, createWatchlistStore } from './store.ts'
 import { createChartStateStore } from './chart-state.ts'
 import { indicators, markCustomIndicator, unmarkCustomIndicator } from './indicator-registry.ts'
 import { stageViews } from './stage-views.ts'
+import { OptionsOverviewMiddleView } from './OptionsOverviewMiddleView.tsx'
 import { createTradingBridgeService } from './api.ts'
 import { fillComposerWithQuote, guardComposerTarget, type FillComposerFn, type ConversationDraftFace } from './fill-composer.ts'
 import { OrderCard, WatchlistChipCard } from './toolview.tsx'
@@ -121,6 +122,10 @@ export function apply(ctx: ClientContext): void {
   // 视图包的桥依赖面：provide tradingBridge（K线/策略/知识卡 fetch + SSE 订阅
   // 共享单例）。视图包不 import shell 内部模块，只经服务 inject。
   ctx.reflect.provide('tradingBridge', createTradingBridgeService())
+
+  // 期权总览升格为 MiddleStage 顶部 tab（2026-09-09 redesign）：与行情/策略/知识库
+  // 平级，order 10 紧跟行情。薄壳自取数，不依赖单标的上下文。
+  stageViews.register({ id: 'options-overview', titleKey: 'stage.optionsOverview', order: 10, render: OptionsOverviewMiddleView })
 
   // quote 视图是 registry 的内建种子条目（stage-views.ts 工厂内写入）——tab 条
   // 从名册统一渲染，MiddleStage 对 quote 走 QuoteStage 直引面。

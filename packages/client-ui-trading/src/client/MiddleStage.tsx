@@ -7,11 +7,12 @@
  * 中栏 tab。同一时刻仅挂载活动视图（切换即卸载，图表态由 store/localStorage
  * 承接，后台视图零渲染开销）。
  */
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ComponentType } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { readJson, writeJson } from './store.ts'
 import { stageViews } from './stage-views.ts'
+import { setStageActions } from './stage-actions.ts'
 import { QuoteStage } from './QuoteStage.tsx'
 import type { FillComposerFn } from './fill-composer.ts'
 import type { MarketLocaleKey } from './contract.ts'
@@ -79,6 +80,17 @@ export function MiddleStage({ t, useSelection, useChart, toggleIndicator, setInd
     setView(next)
     writeStageView(next)
   }
+
+  // 把 quote 视图专有动作桥接给插件面（期权总览薄壳）：挂载即写入，切走保留最新值。
+  // exactOptionalPropertyTypes 下可选属性不接受显式 undefined → 条件展开。
+  useEffect(() => {
+    setStageActions({
+      ...(selectInstrument !== undefined ? { selectInstrument } : {}),
+      ...(fillComposer !== undefined ? { fillComposer } : {}),
+      switchToQuote: () => { switchView('quote') },
+      switchToOverview: () => { switchView('options-overview') },
+    })
+  }, [selectInstrument, fillComposer, switchView])
 
   return (
     <div className={css.root} data-dshtrading-middle-stage="">

@@ -8,8 +8,8 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import {
   fetchKlines, fetchTickers, fetchOrderbook, fetchRecentTrades,
   fetchTradePositions, fetchTradeBalances, fetchTradeOpenOrders, fetchTradeFills, placeGuiOrder,
-  fetchOptionsUnderlyings, fetchOptionsExpiries, fetchOptionsChain, fetchOptionsResolve,
-  fetchOptionsOverview, fetchOptionsCycleLoop, fetchOptionsIntradayBox,
+  fetchOptionsUnderlyings, fetchOptionsExpiries, fetchOptionsChain,
+  fetchOptionsIntradayBox,
   type TradeRowsReason,
 } from './api.ts'
 import { setHoldingsPanelOpen } from './holdings-store.ts'
@@ -22,8 +22,6 @@ import type { QuoteMessageCopy } from './compose-quote.ts'
 import type { SendImageInput, FillComposerFn } from './fill-composer.ts'
 import { FundamentalsStage } from './FundamentalsStage.tsx'
 import { OptionsStage, type SelectedOptionLeg } from './OptionsStage.tsx'
-import { OptionsOverview } from './OptionsOverview.tsx'
-import { OptionsCycleLoop } from './OptionsCycleLoop.tsx'
 import { OrderbookPane } from './OrderbookPane.tsx'
 import { OrderPanel } from './OrderPanel.tsx'
 import { paperTradingStore } from './paper-trading-store.ts'
@@ -37,8 +35,7 @@ import {
 import { indicators, isCustomIndicator } from './indicator-registry.ts'
 import type { IndicatorDefinition, IndicatorInstance } from '@dshtrading/indicators'
 import type {
-  OptionChain, OptionCycleLoop, OptionExpiryCalendar, OptionIntradayBoxRow, OptionOverview,
-  OptionOverviewRow, OptionOverviewSort, OptionUnderlying,
+  OptionChain, OptionExpiryCalendar, OptionIntradayBoxRow, OptionUnderlying,
 } from '@dshtrading/api'
 import { effectiveInstanceParams, isInstanceVisibleOn, symbolScopeKey } from '@dshtrading/indicators'
 import { MARKET_INTERVALS } from './store.ts'
@@ -46,6 +43,7 @@ import type { SelectionState } from './store.ts'
 import type { ChartState } from './chart-state.ts'
 import type { AccountBalance, Instrument, Order, Orderbook, Position, TradeFill, TradeTick } from './types.ts'
 import { colorModeStore } from './color-mode.ts'
+import { optionsOverviewStore, optionsCycleLoopStore, stageActions } from './stage-actions.ts'
 import { MARKET_INDICES, getMarketSessionStatus } from './market-status.ts'
 import type { Kline, MarketId, Ticker } from './types.ts'
 import { usePoll } from './usePoll.ts'
@@ -75,11 +73,6 @@ const TRADE_DESK_POLL_MS = 15000
 // 激活时才拉——网关未起时不空转（契约见 docs/options-bridge.md）。
 const OPTIONS_LIST_POLL_MS = 600000
 const OPTIONS_CHAIN_POLL_MS = 30000
-// 九标的总览（2026-09-09 WB-1）：桥侧聚合 9×(ticker + 日K)，比单标的重一个量级 →
-// 60s，且仅在期权透镜停在总览页时拉（T 板页靠缓存，不重复打上游）。
-const OPTIONS_OVERVIEW_POLL_MS = 60000
-// 5 分钟闭环（WB-6）：宿主每 30s 已对齐一次桶，页面 30s 跟上即可；再快只是重读内存环。
-const OPTIONS_CYCLE_LOOP_POLL_MS = 30000
 // 盘中周期 K 线根数（曾按市场区分 crypto 300 / 其余 500；市场收敛后统一 500）。
 // 日 K 深度需求由 1d 分支单独走 DAILY_LIMIT。
 const KLINE_LIMIT_DEFAULT = 500
@@ -141,7 +134,7 @@ type SendState = 'idle' | 'sending' | 'sent' | 'error'
 /** 信号 reason 的币种符号（市场收敛后人民币）。 */
 const CURRENCY_SYMBOL: Record<MarketId, string> = { cn: '¥' }
 
-export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, selectInstrument, fillComposer }: QuoteStageProps) {
+export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndicatorParams, setIndicatorVisible, removeIndicator, deleteIndicator, fillComposer }: QuoteStageProps) {
   const instrument = useSelection(value => value.instrument)
   const market: MarketId | undefined = instrument?.market === 'cn'
     ? 'cn'
@@ -221,16 +214,13 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   /** 首个链应答是否落地（区分「加载中」与「不可用」）。 */
   const [optionChainLoaded, setOptionChainLoaded] = useState(false)
 
-  /* ── 期权总览 / 5 分钟闭环（2026-09-09 WB-1 / WB-6）────────────────── */
-  /** 期权透镜内页：总览（落地页）| T 板（点行进入）。 */
-  const [optionPane, setOptionPane] = useState<'overview' | 'chain'>('overview')
-  const [overviewSort, setOverviewSort] = useState<OptionOverviewSort>('strength')
-  const [optionsOverview, setOptionsOverview] = useState<OptionOverview | null>(null)
-  const [optionOverviewFailure, setOptionOverviewFailure] = useState<{ code: string; message: string } | null>(null)
-  const [optionOverviewLoaded, setOptionOverviewLoaded] = useState(false)
-  const [optionsLoop, setOptionsLoop] = useState<OptionCycleLoop | null>(null)
-  const [optionLoopFailure, setOptionLoopFailure] = useState<{ code: string; message: string } | null>(null)
-  const [optionLoopLoaded, setOptionLoopLoaded] = useState(false)
+  /* ── 期权总览 / 5 分钟闭环（2026-09-09 WB-1 / WB-6）──────────────────
+   *  redesign：总览升格为 MiddleStage 顶部 tab（OptionsOverviewMiddleView 自取数），
+   *  本透镜只保留单标的 T 板。聚合快照改由共享 store 承接，避免重复打上游。 */
+  const overviewSnap = useSyncExternalStore(optionsOverviewStore.subscribe, optionsOverviewStore.getSnapshot)
+  const cycleState = useSyncExternalStore(optionsCycleLoopStore.subscribe, optionsCycleLoopStore.getSnapshot)
+  const optionsLoop = cycleState.loop
+  const optionLoopLoaded = cycleState.loaded
   /** 闭环无该标的行时的降级箱体（WB-3；正常路径用 loop.latest.forecast）。 */
   const [optionFallbackBox, setOptionFallbackBox] = useState<OptionIntradayBoxRow | null>(null)
 
@@ -242,14 +232,11 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
    *  启用；期权从 6 个次级页签升格为与 A 股现货平级的一级切换。非期权标的恒 'spot'。 */
   const [lens, setLens] = useState<'spot' | 'options'>('spot')
   /**
-   * 透镜可用性判据（WB-1 起放宽）：**挂了 connector-options（名册非空）就给透镜**，
-   * 不再要求当前自选正好是那 9 只 ETF——否则用户停在 600519 时连总览都进不去。
-   * 名册命中当前标的（optionsAvailable）只决定能不能进 T 板。
+   * 透镜可用性判据（redesign 2026-09-09 收紧回 optionsAvailable）：总览已升格为
+   * 中栏顶部 tab，全市场扫描不再依赖透镜——透镜只服务注册标的（T 板/链）。
+   * 停在个股（或未挂 connector-options）时透镜整体隐藏、渲染按现货处理。
    */
-  const optionsMounted = optionsUnderlyings.length > 0
-  const activeLens = optionsMounted ? lens : 'spot'
-  /** T 板需要当前标的是注册标的；否则期权透镜只落总览（渲染期归一，不等 effect）。 */
-  const optionPaneView: 'overview' | 'chain' = optionPane === 'chain' && optionsAvailable ? 'chain' : 'overview'
+  const activeLens = optionsAvailable ? lens : 'spot'
   // 渲染期页签归一（issue #54 评审 L3）：期权是注册标的专属，切到非注册标的
   // （或未挂 connector-options）时渲染直接按图表页签处理——不等 useEffect 纠偏。
   const viewTab = stageTab === 'options' && !optionsAvailable ? 'chart' : stageTab
@@ -468,39 +455,9 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
     setOptionFailure(null)
   }, [optionUnderlying, optionMonth])
 
-  /* ── 期权总览（WB-1）：只拉一条 /options/overview ────────────────── */
-  // 仅在透镜停在总览页时轮询（T 板页吃缓存：scanPrompt 与「返回总览」都要用）。
-  // includeIv 只在排序切 iv 时打开——否则九路 vol_analytics 会打爆网关。
-  const overviewRequestRef = useRef('')
-  usePoll(async () => {
-    if (activeLens !== 'options' || optionPaneView !== 'overview') return
-    const request = `${overviewSort}:${overviewSort === 'iv' ? '1' : '0'}`
-    overviewRequestRef.current = request
-    const res = await fetchOptionsOverview({ sort: overviewSort, includeIv: overviewSort === 'iv' })
-    if (overviewRequestRef.current !== request) return
-    if (res.ok) {
-      setOptionsOverview(res.data)
-      setOptionOverviewFailure(null)
-    } else {
-      setOptionsOverview(null)
-      setOptionOverviewFailure({ code: res.code, message: res.message })
-    }
-    setOptionOverviewLoaded(true)
-  }, OPTIONS_OVERVIEW_POLL_MS, [activeLens, optionPaneView, overviewSort])
-
-  /* ── 5 分钟闭环（WB-6）：页面不算箱体，只读宿主已算好的 loop ───────── */
-  usePoll(async () => {
-    if (activeLens !== 'options') return
-    const res = await fetchOptionsCycleLoop()
-    if (res.ok) {
-      setOptionsLoop(res.data)
-      setOptionLoopFailure(null)
-    } else {
-      setOptionsLoop(null)
-      setOptionLoopFailure({ code: res.code, message: res.message })
-    }
-    setOptionLoopLoaded(true)
-  }, OPTIONS_CYCLE_LOOP_POLL_MS, [activeLens])
+  /* ── 期权总览 / 5 分钟闭环（WB-1 / WB-6）：聚合快照由顶部 tab 薄壳
+   *  OptionsOverviewMiddleView 自取数并写入 optionsOverviewStore /
+   *  optionsCycleLoopStore；本透镜只读共享快照，不再重复打上游。 */
 
   /** 当前标的在闭环里的行（T 板箱体条与周期卡的 SSOT）。 */
   const optionCycleRow = useMemo(
@@ -511,13 +468,6 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   )
   /** T 板箱体条数据源：优先 loop 的本桶预报，闭环没该标的行才降级单独拉箱体。 */
   const optionForecast = optionCycleRow?.latest?.forecast ?? optionFallbackBox
-  /** underlying → 名称（闭环行只有代码，名字从总览借，避免再打一次行情）。 */
-  const optionNames = useMemo(() => {
-    const map: Record<string, string> = {}
-    for (const row of optionsOverview?.rows ?? []) map[row.underlying] = row.name
-    return map
-  }, [optionsOverview])
-
   // 降级拉箱：仅在「闭环已答且没有该标的行」时触发一次，不与宿主打分引擎抢算。
   useEffect(() => {
     if (activeLens !== 'options' || optionUnderlying === undefined || !optionLoopLoaded) return
@@ -964,38 +914,13 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   const tickerName = (ticker as { name?: string })?.name
   const displayName = (!isPlaceholderName ? rawName : (tickerName || rawName || symbol))
 
-  /* ── WB-1 点行进 T 板：resolve → 切全局标的 → 进 chain 页 ───────── */
-  const onPickOverviewRow = (row: OptionOverviewRow): void => {
-    if (selectInstrument === undefined) return
-    void fetchOptionsResolve(row.spotSymbol ?? row.underlying).then((res) => {
-      const spot = res.ok ? res.data.link?.spotSymbol : undefined
-      if (spot === undefined) return
-      selectInstrument({ market: 'cn', symbol: spot, name: row.name })
-      setOptionPane('chain')
-    })
-  }
-
-  /* ── WB-2 扫描入口：只预填 composer，不下单 ─────────────────────── */
-  const scanAll = fillComposer === undefined || optionsOverview === null
-    ? undefined
-    : (): void => { void fillComposer(optionsOverview.scanAllPrompt) }
-  const scanRow = fillComposer === undefined
-    ? undefined
-    : (row: OptionOverviewRow): void => { void fillComposer(row.scanPrompt) }
-  /** T 板操作条：用总览缓存里该标的的 scanPrompt；缓存没有则先拉一次再找。 */
+  /* ── WB-2 扫描入口（T 板操作条）：只预填 composer，不下单 ───────────────
+   *  总览快照由顶部 tab 薄壳写入 optionsOverviewStore；本透镜只读，不重复拉。 */
   const scanUnderlying = fillComposer === undefined || optionUnderlying === undefined
     ? undefined
     : (): void => {
-        const cached = optionsOverview?.rows.find(item => item.underlying === optionUnderlying)
-        if (cached !== undefined) {
-          void fillComposer(cached.scanPrompt)
-          return
-        }
-        void fetchOptionsOverview({ sort: overviewSort }).then((res) => {
-          if (!res.ok) return
-          const found = res.data.rows.find(item => item.underlying === optionUnderlying)
-          if (found !== undefined) void fillComposer(found.scanPrompt)
-        })
+        const cached = overviewSnap?.rows.find(item => item.underlying === optionUnderlying)
+        if (cached !== undefined) void fillComposer(cached.scanPrompt)
       }
 
   /** 期权合约 → Agent 下单请求文案（dry-run 优先；ETF ↔ 期权互联在客户端即打通）。
@@ -1033,10 +958,10 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
           <span>{fmtPercent(stats.pct)}</span>
         </span>
         {/* 「现货 ⇄ 期权」对等双透镜（2026-09-08 期权升格）：与次级页签视觉区分的
-            胶囊组，期权与 A 股现货平级。2026-09-09 起显隐判据是「挂了期权连接器」
-            （名册非空）而非「当前标的是那 9 只」——透镜落地页是九标的总览，停在
-            个股时也要能进。能不能进 T 板才看当前标的（optionsAvailable）。 */}
-        {optionsMounted && (
+            胶囊组，期权与 A 股现货平级。redesign（2026-09-09）：总览升格为顶部 tab 后，
+            期权透镜只服务注册标的（T 板/链）——显隐判据回到 optionsAvailable；
+            非注册标的（个股）不再给透镜入口，全市场扫描走中栏「期权总览」tab。 */}
+        {optionsAvailable && (
           <div className={css.lensToggle} role="tablist" aria-label="spot or options lens">
             <button
               type="button"
@@ -1054,7 +979,7 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
               aria-selected={activeLens === 'options'}
               className={css.lensTab}
               data-active={activeLens === 'options' ? 'true' : undefined}
-              onClick={() => { setLens('options'); setOptionPane('overview') }}
+              onClick={() => { setLens('options') }}
             >
               {t('lens.options')}
             </button>
@@ -1476,52 +1401,26 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
         </div>
       ) : activeLens === 'options' ? (
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {optionPaneView === 'overview'
-            ? (
-              <>
-                <OptionsOverview
-                  t={t}
-                  colorMode={colorMode}
-                  overview={optionsOverview}
-                  failure={optionOverviewFailure}
-                  loaded={optionOverviewLoaded}
-                  sort={overviewSort}
-                  onSortChange={setOverviewSort}
-                  onPickRow={onPickOverviewRow}
-                  {...(scanAll !== undefined ? { onScanAll: scanAll } : {})}
-                  {...(scanRow !== undefined ? { onScanRow: scanRow } : {})}
-                />
-                <OptionsCycleLoop
-                  t={t}
-                  loop={optionsLoop}
-                  failure={optionLoopFailure}
-                  loaded={optionLoopLoaded}
-                  names={optionNames}
-                />
-              </>
-            )
-            : (
-              <OptionsStage
-                t={t}
-                months={optionExpiries?.months ?? []}
-                selectedMonth={optionMonth}
-                onSelectMonth={setOptionMonth}
-                chain={optionChain}
-                failure={optionFailure}
-                loaded={optionChainLoaded}
-                colorMode={colorMode}
-                underlyingSymbol={symbol ?? ''}
-                underlyingName={displayName}
-                multiplier={optionUnderlyingRow?.multiplier ?? 10000}
-                heldQty={optionUnderlyingRow?.heldQty}
-                forecast={optionForecast}
-                onBackToOverview={() => { setOptionPane('overview') }}
-                onViewSpot={() => { setLens('spot'); setStageTab('chart') }}
-                onTradeSpot={() => { setTradeDeskOpen(true) }}
-                {...(scanUnderlying !== undefined ? { onScanUnderlying: scanUnderlying } : {})}
-                {...(sendLegToAgent !== undefined ? { onSendLegToAgent: sendLegToAgent } : {})}
-              />
-            )}
+          <OptionsStage
+            t={t}
+            months={optionExpiries?.months ?? []}
+            selectedMonth={optionMonth}
+            onSelectMonth={setOptionMonth}
+            chain={optionChain}
+            failure={optionFailure}
+            loaded={optionChainLoaded}
+            colorMode={colorMode}
+            underlyingSymbol={symbol ?? ''}
+            underlyingName={displayName}
+            multiplier={optionUnderlyingRow?.multiplier ?? 10000}
+            heldQty={optionUnderlyingRow?.heldQty}
+            forecast={optionForecast}
+            onBackToOverview={() => { stageActions.current.switchToOverview?.() }}
+            onViewSpot={() => { setLens('spot'); setStageTab('chart') }}
+            onTradeSpot={() => { setTradeDeskOpen(true) }}
+            {...(scanUnderlying !== undefined ? { onScanUnderlying: scanUnderlying } : {})}
+            {...(sendLegToAgent !== undefined ? { onSendLegToAgent: sendLegToAgent } : {})}
+          />
         </div>
       ) : viewTab === 'fundamentals' ? (
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
