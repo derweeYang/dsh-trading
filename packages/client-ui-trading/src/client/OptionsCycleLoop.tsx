@@ -21,8 +21,10 @@ import type {
 import type { MarketLocaleKey } from './contract.ts'
 import { fetchOptionsCycles } from './api.ts'
 import { fmtClock, fmtPrice } from './format.ts'
+import { rankCycleRows } from './cycle-rank.ts'
+import type { CycleTier } from './cycle-rank.ts'
 import {
-  CALIBRATION_KEY, REGIME_KEY, SESSION_REASON_KEY, TEMPLATE_KEY, VERDICT_KEY,
+  CALIBRATION_KEY, REGIME_KEY, SESSION_REASON_KEY, TEMPLATE_KEY, TIER_KEY, VERDICT_KEY,
 } from './option-vocabulary.ts'
 import css from './options-cycle-loop.module.css'
 
@@ -37,6 +39,11 @@ export interface OptionsCycleLoopProps {
   loaded: boolean
   /** underlying → 标的名（总览行提供；缺失回退代码）。 */
   names?: Readonly<Record<string, string>> | undefined
+  /**
+   * underlying → 近 5 交易日累计涨跌幅（%，由总览行 `cumulativeReturn(days)` 算出）。
+   * 用于「最强 / 最弱 / 中位」三档排前（口径与 WB-9 叠图同源）；缺席则不排序、全落 rest。
+   */
+  cum5d?: Readonly<Record<string, number>> | undefined
   /** 展开历史条数（交接单定 24）。 */
   historyLimit?: number
 }
@@ -57,7 +64,7 @@ function hitRateWidth(hitRate: number | undefined): string | undefined {
 }
 
 export function OptionsCycleLoop({
-  t, loop, failure, loaded, names, historyLimit = DEFAULT_HISTORY_LIMIT,
+  t, loop, failure, loaded, names, cum5d, historyLimit = DEFAULT_HISTORY_LIMIT,
 }: OptionsCycleLoopProps): React.JSX.Element {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [history, setHistory] = useState<readonly OptionCycle[]>([])
@@ -84,6 +91,9 @@ export function OptionsCycleLoop({
     })
     return () => { cancelled = true }
   }, [expanded, historyLimit])
+
+  // 最强 / 最弱 / 中位三档排前（WB-10）；累计值缺席时原样展示，不伪造强弱。
+  const ranked = loop === null ? [] : rankCycleRows(loop.rows, cum5d)
 
   return (
     <div className={css.root} data-dshtrading-options-cycle-loop="">
@@ -112,11 +122,12 @@ export function OptionsCycleLoop({
               ? <div className={css.notice}>{t('options.cycle.empty')}</div>
               : (
                 <div className={css.cards}>
-                  {loop.rows.map(row => (
+                  {ranked.map(({ row, tier }) => (
                     <CycleCard
                       key={row.underlying}
                       t={t}
                       row={row}
+                      tier={tier}
                       name={names?.[row.underlying]}
                       expanded={expanded === row.underlying}
                       onToggle={() => { setExpanded(expanded === row.underlying ? null : row.underlying) }}
@@ -135,13 +146,15 @@ export function OptionsCycleLoop({
 function CycleCard(props: {
   t: OptionsCycleLoopTranslate
   row: OptionCycleLoopRow
+  /** 机会档位（最强 / 最弱 / 中位 / 其余）；只影响排序与徽章，不改卡片内容。 */
+  tier: CycleTier
   name: string | undefined
   expanded: boolean
   onToggle: () => void
   history: readonly OptionCycle[]
   historyFailure: { code: string; message: string } | null
 }): React.JSX.Element {
-  const { t, row, name, expanded, onToggle, history, historyFailure } = props
+  const { t, row, tier, name, expanded, onToggle, history, historyFailure } = props
   const forecast = row.latest?.forecast
   const score = row.latest?.score
   const calibration = row.latest?.calibration
@@ -149,8 +162,14 @@ function CycleCard(props: {
   const rate = hitRateWidth(row.stats.hitRate)
 
   return (
-    <div className={css.card} data-expanded={expanded ? 'true' : undefined}>
+    <div className={css.card} data-dshtrading-cycle-card={row.underlying} data-tier={tier} data-expanded={expanded ? 'true' : undefined}>
       <button type="button" className={css.cardHead} onClick={onToggle} aria-expanded={expanded}>
+        {/* 档位徽章：只说明「为什么排前面」，不代表推荐强度；rest 不出徽章 */}
+        {tier !== 'rest' && (
+          <span className={css.tier} data-kind={tier} title={t('options.cycle.tier.hint')}>
+            {t(TIER_KEY[tier])}
+          </span>
+        )}
         <span className={css.cardName}>{name ?? row.underlying}</span>
         <span className={css.cardCode}>{row.underlying}</span>
         <span className={css.spacer} />

@@ -16,6 +16,7 @@ import { fetchOptionsOverview, fetchOptionsCycleLoop, fetchOptionsResolve } from
 import { colorModeStore } from './color-mode.ts'
 import { OptionsOverview } from './OptionsOverview.tsx'
 import { OptionsCycleLoop } from './OptionsCycleLoop.tsx'
+import { cumulativeReturn } from './option-insight.ts'
 import { stageActions, optionsOverviewStore, optionsCycleLoopStore } from './stage-actions.ts'
 import { usePoll } from './usePoll.ts'
 import type { StageViewProps } from './stage-views.ts'
@@ -108,6 +109,12 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
         loaded={cycleLoaded}
         names={overview?.rows.reduce<Record<string, string>>((map, row) => {
           map[row.underlying] = row.name
+          return map
+        }, {})}
+        cum5d={overview?.rows.reduce<Record<string, number>>((map, row) => {
+          // 与叠图同源：累计值算不出来就不进排名，也就不冒充最强/最弱
+          const cum = cumulativeReturn(row.days ?? [])
+          if (cum !== undefined) map[row.underlying] = cum
           return map
         }, {})}
       />

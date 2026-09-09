@@ -7,6 +7,12 @@
   gap: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+  /* 中视图是 flex column + overflow hidden：这里必须能收缩（min-height:0），
+     否则九张卡会把父容器撑爆、底部被裁掉（WB-10 修「遮挡」）；
+     高度不够时让 .cards 自己滚，而不是把卡片切掉一半。 */
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .bar {
@@ -14,6 +20,7 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  flex: 0 0 auto;
 }
 
 .title {
@@ -49,6 +56,7 @@
 }
 
 .workflow {
+  flex: 0 0 auto;
   font-size: 11px;
   color: var(--dsw-futu-text-secondary, #5f6672);
   background: var(--dsw-futu-bg-subtle, #f5f6f8);
@@ -70,9 +78,16 @@
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  /* 260px 下限：窄面板（期权透镜约 2 列）也能放下，不再把卡片挤成一列长龙 */
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-auto-rows: min-content;
+  align-content: start;
+  align-items: start;
   gap: 6px;
-  max-height: 260px;
+  /* 吃掉父容器剩下的高度并自行滚动（父容器不给高度时退回 300px 上限） */
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 300px;
   overflow: auto;
 }
 
@@ -84,10 +99,15 @@
   flex-direction: column;
   gap: 4px;
   background: var(--dsw-futu-bg-surface, #f7f8fa);
+  /* 内容一律不许溢出卡片：长标的名/长候选标签截断，不再压到邻居身上（WB-10 修「堆叠」） */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .card[data-expanded='true'] {
   border-color: var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.25));
+  /* 展开独占整行：历史 24 条把卡片撑高时不会被挤进同一行压扁邻居 */
+  grid-column: 1 / -1;
 }
 
 .cardHead {
@@ -101,17 +121,51 @@
   font: inherit;
   cursor: pointer;
   color: var(--dsw-futu-text-primary, #1a1e24);
+  width: 100%;
+  min-width: 0;
 }
 
 .cardName {
   font-size: 12px;
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cardCode {
   font-family: var(--dsw-futu-font-mono, ui-monospace, monospace);
   font-size: 11px;
   color: var(--dsw-futu-text-muted, #8e95a3);
+  flex: 0 0 auto;
+}
+
+/* 机会档位徽章：最强（红，涨）/ 最弱（绿，跌）/ 中位（中性） */
+.tier {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 1px 5px;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+}
+
+.tier[data-kind='strong'] {
+  background: var(--dsw-futu-up-bg, rgba(230, 69, 69, 0.08));
+  border-color: var(--dsw-futu-up-border, rgba(230, 69, 69, 0.22));
+  color: var(--dsw-futu-up, #e64545);
+}
+
+.tier[data-kind='weak'] {
+  background: var(--dsw-futu-down-bg, rgba(43, 164, 113, 0.08));
+  border-color: var(--dsw-futu-down-border, rgba(43, 164, 113, 0.22));
+  color: var(--dsw-futu-down, #2ba471);
+}
+
+.tier[data-kind='median'] {
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  color: var(--dsw-futu-text-secondary, #5f6672);
 }
 
 .rateWrap {
@@ -145,6 +199,7 @@
   align-items: center;
   gap: 5px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .sectionLabel {

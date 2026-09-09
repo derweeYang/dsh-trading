@@ -371,4 +371,66 @@ describe('OptionsCycleLoop', () => {
     // 命中率缺席（scored=0）→ 样本不足，不显示 0%
     expect(container.textContent).toContain('options.cycle.sampleShort')
   })
+
+  it('WB-10 机会排序：最强 / 最弱 / 中位排前三，并出示档位徽章', () => {
+    const codes = ['159915', '159901', '510300', '510500', '510050']
+    const loop: OptionCycleLoop = {
+      running: true,
+      horizonMin: 5,
+      rows: codes.map(code => ({
+        underlying: code,
+        stats: { n: 4, hits: 2, misses: 1, partials: 0, skipped: 1, hitRate: 0.5 },
+        latest: {
+          id: `${code}:1`,
+          underlying: code,
+          bucketStart: '2026-09-09T02:30:00.000Z',
+          asOf: '2026-09-09T02:30:00.000Z',
+          forecast: {
+            underlying: code, name: code, exchange: 'SSE', horizonMin: 5,
+            boxLow: 2.9, boxHigh: 3.1, regime: 'range_hold', session: 'regular',
+            candidates: [{ template: 'butterfly', bias: 'neutral', invalidIf: 'x', reason: 'y' }],
+          },
+          calibration: 'none',
+        },
+      })),
+    }
+    // 降序：510500(+3) → 510300(+1) → 510050(0，中位) → 159915(-1) → 159901(-4，最弱)
+    const cum5d = { '159915': -1, '159901': -4, '510300': 1, '510500': 3, '510050': 0 }
+    const { container } = renderLoop(loop, { cum5d })
+    const order = Array.from(container.querySelectorAll('[data-dshtrading-cycle-card]'))
+      .map(el => el.getAttribute('data-dshtrading-cycle-card'))
+    // 三档在前，其余（159915 / 510300）保持桥给的原始顺序
+    expect(order).toEqual(['510500', '159901', '510050', '159915', '510300'])
+    expect(order.slice(0, 3)).toEqual(['510500', '159901', '510050'])
+    expect(container.textContent).toContain('options.cycle.tier.strong')
+    expect(container.textContent).toContain('options.cycle.tier.weak')
+    expect(container.textContent).toContain('options.cycle.tier.median')
+    // 展开独占整行、不压扁邻居（CSS 契约）
+    expect(container.querySelector('[data-dshtrading-cycle-card="510500"]')?.getAttribute('data-tier')).toBe('strong')
+  })
+
+  it('WB-10 累计值缺席：不出档位徽章（不冒充最强 / 最弱）', () => {
+    const loop: OptionCycleLoop = {
+      running: true,
+      horizonMin: 5,
+      rows: [{
+        underlying: '510050',
+        stats: { n: 0, hits: 0, misses: 0, partials: 0, skipped: 0 },
+        latest: {
+          id: '510050:9',
+          underlying: '510050',
+          bucketStart: '2026-09-09T02:30:00.000Z',
+          asOf: '2026-09-09T02:30:00.000Z',
+          forecast: {
+            underlying: '510050', name: '华夏上证50ETF', exchange: 'SSE', horizonMin: 5,
+            boxLow: 2.9, boxHigh: 3.1, regime: 'range_hold', session: 'regular', candidates: [],
+          },
+          calibration: 'none',
+        },
+      }],
+    }
+    const { container } = renderLoop(loop)
+    expect(container.querySelector('[data-dshtrading-cycle-card="510050"]')?.getAttribute('data-tier')).toBe('rest')
+    expect(container.textContent).not.toContain('options.cycle.tier.strong')
+  })
 })

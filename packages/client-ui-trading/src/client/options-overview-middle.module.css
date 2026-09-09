@@ -1,7 +1,20 @@
 .root {
   display: flex;
   flex-direction: column;
+  gap: 8px;
   min-height: 0;
   overflow: hidden;
   flex: 1;
+}
+
+/* 上半区（总览 + 叠图）吃掉剩余高度并内部滚动；下半区（闭环）按内容取高、
+   空间不足时自己滚卡片——上下互不挤压，避免卡片被裁/堆叠（WB-10）。 */
+.root > :first-child {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.root > :last-child {
+  flex: 0 1 auto;
+  min-height: 0;
 }

@@ -8,6 +8,7 @@
  * 值全部是 `@dshtrading/api` 的联合字面量，用 `satisfies` 让缺项在编译期就红。
  */
 import type { MarketLocaleKey } from './contract.ts'
+import type { CycleTier } from './cycle-rank.ts'
 import type {
   OptionCycleVerdict, OptionIntradayCandidate, OptionIntradayRegime, OptionIntradaySession,
 } from '@dshtrading/api'
@@ -49,6 +50,16 @@ export const CALIBRATION_KEY = {
   widened: 'options.cycle.calibration.widened',
   suppressed: 'options.cycle.calibration.suppressed',
 } as const satisfies Record<'none' | 'widened' | 'suppressed', MarketLocaleKey>
+
+/**
+ * 机会档位徽章（WB-10）：最强 / 最弱 / 中位。
+ * `rest` 没有档位含义（既非两端也非中位），不出徽章——不出比贴个误导标签强。
+ */
+export const TIER_KEY = {
+  strong: 'options.cycle.tier.strong',
+  weak: 'options.cycle.tier.weak',
+  median: 'options.cycle.tier.median',
+} as const satisfies Record<Exclude<CycleTier, 'rest'>, MarketLocaleKey>
 
 /** 候选策略模板（标签，不是下单按钮）。 */
 export const TEMPLATE_KEY = {
