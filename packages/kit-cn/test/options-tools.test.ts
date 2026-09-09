@@ -3,6 +3,8 @@ import type { CnOptionsService, OptionChain } from '@dshtrading/api'
 import {
   createGetOptionChainTool,
   createGetOptionExpiriesTool,
+  createGetOptionIntradayBoxTool,
+  createPutOptionBarRecommendationTool,
   createGetOptionPriceTool,
   createGetOptionStrategyTool,
   createGetOptionUnderlyingDailyTool,
@@ -91,6 +93,48 @@ describe('cn_get_option_chain', () => {
 
     await tool.execute({ underlying: '510050.SH' })
     expect('holdingQty' in (requests[1] as Record<string, unknown>)).toBe(false)
+  })
+
+  it('option-intraday-workflow 规定漏斗与禁止编造箱体', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const body = await readFile(new URL('../assets/skills/option-intraday-workflow.md', import.meta.url), 'utf8')
+    expect(body).toContain('cn_get_option_intraday_box')
+    expect(body).toContain('/options/cycles/loop')
+    expect(body).toContain('option-intraday-workflow')
+    expect(body).toContain('禁止用「最近 5 根高低」')
+    expect(body).toContain('cn_get_option_strategy')
+    expect(body).toContain('cn_put_option_bar_recommendation')
+    expect(body).toContain('opportunity')
+    expect(body).toContain('no_trade')
+  })
+
+  it('cn_put_option_bar_recommendation 写入 no_edge 桩', async () => {
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { mkdtemp, readFile } = await import('node:fs/promises')
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-put-'))
+    const tool = createPutOptionBarRecommendationTool({
+      dataRoot: () => dir,
+      now: () => Date.parse('2026-09-08T01:45:00.000Z'),
+    })
+    const out = await tool.execute({
+      recommendation: JSON.stringify({
+        bucketStart: '2026-09-08T01:45:00.000Z',
+        asOf: '2026-09-08T01:45:12.000Z',
+        session: 'regular',
+        opportunity: 'no_edge',
+        edge: 'calibrated',
+        logic: '',
+        playbook: '',
+        invalidIf: '',
+        picks: [],
+        noTrade: true,
+        skipReason: 'calibrated',
+      }),
+    })
+    expect(out).toContain('"ok":true')
+    const text = await readFile(path.join(dir, 'recommendations', '2026-09-08.jsonl'), 'utf8')
+    expect(text).toContain('no_edge')
   })
 
   it('cn-risk-checklist mentions ETF option obligation margin', async () => {
@@ -232,5 +276,37 @@ describe('阶段 3 内核上桥：vol_analytics / underlying_daily / price / par
       .rejects.toThrow(/tradingCnOptions is not mounted/)
     await expect(createOptionParityCheckTool().execute({ underlying: '510050.SH', expiryMonth: '2609' }))
       .rejects.toThrow(/tradingCnOptions is not mounted/)
+    await expect(createGetOptionIntradayBoxTool().execute({ underlying: '510050.SH' }))
+      .rejects.toThrow(/tradingCnOptions is not mounted/)
+  })
+
+  it('cn_get_option_intraday_box 序列化箱体 JSON；未知名抛错；不回传原始 K 线', async () => {
+    const asOf = '2026-09-08T02:30:00.000Z'
+    const klines = Array.from({ length: 60 }, (_, i) => ({
+      openTime: Date.parse(asOf) - (60 - i) * 60_000,
+      open: 3, high: 3.002, low: 2.998, close: 3, volume: 100,
+      closeTime: Date.parse(asOf) - (59 - i) * 60_000,
+    }))
+    const tool = createGetOptionIntradayBoxTool({
+      service: {
+        ...fakeService(emptyChain()),
+        listUnderlyings: async () => [{
+          underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF',
+          multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board',
+        }],
+      },
+      marketData: {
+        getTicker: async (symbol) => ({ symbol, price: 3, timestamp: 1 }),
+        getKlines: async () => klines,
+        subscribeTicker: () => ({ dispose() {} }),
+      },
+    })
+    expect(tool.name).toBe('cn_get_option_intraday_box')
+    const text = String(await tool.execute({ underlying: '510050.SH', asOf }))
+    expect(text).toContain('510050')
+    expect(text).toContain('range_hold')
+    expect(text).not.toContain('openTime')
+    await expect(tool.execute({ underlying: '600519.SH', asOf }))
+      .rejects.toThrow(/unknown underlying/)
   })
 })

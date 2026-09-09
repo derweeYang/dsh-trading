@@ -109,12 +109,15 @@ describe('composeScanPrompt', () => {
     expect(text).toContain('510050')
     expect(text).toContain('not investment advice')
     expect(text).toContain('do not place live orders')
+    expect(text).toContain('cn_get_option_intraday_box')
+    expect(text).toContain('option-intraday-workflow')
     const all = composeScanAllPrompt([
       rowish('510050', 1),
       rowish('510300', -0.5),
     ])
     expect(all).toContain('510050 5d=1.0%')
     expect(all).toContain('not investment advice')
+    expect(all).toContain('cn_get_option_intraday_box')
   })
 })
 

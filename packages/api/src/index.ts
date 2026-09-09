@@ -474,6 +474,152 @@ export interface OptionOverview {
   readonly scanAllPrompt: string
 }
 
+/** 1 分钟箱体会话门（Asia/Shanghai）。regular 以外一律 no_trade。 */
+export type OptionIntradaySession = 'regular' | 'open15' | 'lunch' | 'close5' | 'closed'
+
+/** 5 分钟箱体状态机。no_trade 时 candidates 为空。 */
+export type OptionIntradayRegime =
+  | 'range_hold'
+  | 'mean_revert'
+  | 'breakout'
+  | 'vol_expand'
+  | 'no_trade'
+
+export type OptionIntradayBias = 'up' | 'down' | 'neutral'
+
+/** 箱体状态机给出的策略候选（最多 2 条；模板名与 strategy 工具对齐）。 */
+export interface OptionIntradayCandidate {
+  readonly template: 'covered_call' | 'collar' | 'vertical' | 'straddle' | 'butterfly'
+  readonly bias: OptionIntradayBias
+  /** 英文失效条件，供 LLM 原样引用，不得改写数字。 */
+  readonly invalidIf: string
+  readonly reason: string
+}
+
+/**
+ * 单标的 1 分钟 → 5 分钟箱体（桥 / agent 工具同源纯函数）。
+ * 行情不足或非连续竞价中段时只给 regime=no_trade，不编造箱沿。
+ */
+export interface OptionIntradayBoxRow {
+  readonly underlying: string
+  readonly name: string
+  readonly exchange: 'SSE' | 'SZSE' | 'SYNTH'
+  readonly spotSymbol?: string
+  /** 同源双挂对侧（300/500/科创50）；单挂缺席。 */
+  readonly twinUnderlying?: string
+  readonly last?: number
+  readonly horizonMin: 5
+  readonly boxLow?: number
+  readonly boxHigh?: number
+  readonly halfWidth?: number
+  /** 近 30 根 1 分钟对数收益标准差。 */
+  readonly sigma1?: number
+  readonly atr14?: number
+  readonly vwap?: number
+  readonly donchianHigh?: number
+  readonly donchianLow?: number
+  /** 近 5 根均量 / 近 30 根均量。 */
+  readonly volumeRatio?: number
+  readonly regime: OptionIntradayRegime
+  readonly bias?: OptionIntradayBias
+  readonly session: OptionIntradaySession
+  readonly noTradeReason?: OptionIntradaySession | 'insufficient' | 'calibrated'
+  readonly candidates: readonly OptionIntradayCandidate[]
+}
+
+export interface OptionIntradayBox {
+  readonly asOf: string
+  readonly horizonMin: 5
+  readonly lookback: 60
+  readonly rows: readonly OptionIntradayBoxRow[]
+}
+
+/** 上一周期箱体 vs 已走完的 5 根 1 分钟 K。 */
+export type OptionCycleVerdict = 'hit' | 'partial' | 'miss' | 'skipped'
+
+export interface OptionCycleScore {
+  readonly verdict: OptionCycleVerdict
+  readonly barCount: number
+  readonly closeInside?: boolean
+  readonly pathInside?: boolean
+  readonly directionHit?: boolean
+  readonly regimeHit?: boolean
+  readonly realizedLast?: number
+  readonly realizedHigh?: number
+  readonly realizedLow?: number
+  readonly skipReason?: 'no_trade' | 'insufficient' | 'no_box'
+}
+
+export type OptionCycleCalibration = 'none' | 'widened' | 'suppressed'
+
+/** 一个 5 分钟桶：先写 forecast，下一桶补 score。 */
+export interface OptionCycle {
+  readonly id: string
+  readonly underlying: string
+  readonly bucketStart: string
+  readonly asOf: string
+  readonly forecast: OptionIntradayBoxRow
+  readonly score?: OptionCycleScore
+  readonly calibration: OptionCycleCalibration
+}
+
+export interface OptionCycleStats {
+  readonly n: number
+  readonly hits: number
+  readonly misses: number
+  readonly partials: number
+  readonly skipped: number
+  readonly hitRate?: number
+}
+
+export interface OptionCycleLoopRow {
+  readonly underlying: string
+  readonly latest?: OptionCycle
+  readonly stats: OptionCycleStats
+}
+
+export interface OptionCycleLoop {
+  readonly running: boolean
+  readonly horizonMin: 5
+  readonly lastBucket?: string
+  readonly rows: readonly OptionCycleLoopRow[]
+}
+
+/** 5 分钟 K 智能体：赚哪类钱（闭集）。 */
+export type OptionBarOpportunity =
+  | 'theta_rent'
+  | 'rv_vs_iv'
+  | 'direction_delta'
+  | 'mean_reversion'
+  | 'covered_yield'
+  | 'no_edge'
+
+export type OptionBarSkipReason = 'session' | 'calibrated' | 'overlap' | 'launch_failed'
+
+export interface OptionBarPick {
+  readonly underlying: string
+  readonly regime: OptionIntradayRegime
+  readonly template: OptionIntradayCandidate['template']
+  readonly cycleId: string
+  readonly legs?: readonly unknown[]
+}
+
+/** 一根 5 分钟 K 的全市场推荐（或跳过桩）。 */
+export interface OptionBarRecommendation {
+  readonly bucketStart: string
+  readonly asOf: string
+  readonly session: OptionIntradaySession
+  readonly opportunity: OptionBarOpportunity
+  readonly edge: string
+  readonly logic: string
+  readonly playbook: string
+  readonly invalidIf: string
+  readonly picks: readonly OptionBarPick[]
+  readonly noTrade: boolean
+  readonly skipReason?: OptionBarSkipReason
+  readonly previousScore?: { readonly cycleId: string; readonly verdict: OptionCycleVerdict }
+}
+
 /** 股票市场标的基本面与财务估值快照（CN）。 */
 export interface StockFundamentals {
   /** 标的规范符号（如 600519.SH）。 */

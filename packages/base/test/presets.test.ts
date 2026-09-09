@@ -56,7 +56,7 @@ it('composes all installed-market subsets deterministically, preserving connecto
           if (preset.id === 'trader') {
             // kit row is split out of the market block and rewritten with the trader whitelist (#70)
             expect(text).toContain(connectorRowsOf(contribution.market, contribution.traderRows))
-            expect(text).toContain(`skills: ["${contribution.market}-risk-checklist","trading-strategy-paradigms","indicator-authoring","trading-notes-setup"]`)
+            expect(text).toContain(`skills: ["${contribution.market}-risk-checklist","option-intraday-workflow","trading-strategy-paradigms","indicator-authoring","trading-notes-setup"]`)
           } else {
             expect(text).toContain(contribution.traderRows) // master keeps the market block verbatim (full kit catalog)
           }

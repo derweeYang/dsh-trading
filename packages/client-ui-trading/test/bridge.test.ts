@@ -1166,4 +1166,128 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
       overview: { rows: [{ underlying: '510050', days: [] }] },
     })
   })
+
+  it('GET /options/intraday-box：1m 箱体；horizon 非法 400；未知名 UNSUPPORTED；行情失败不整页失败', async () => {
+    const asOf = '2026-09-08T02:30:00.000Z'
+    const klines = Array.from({ length: 60 }, (_, i) => ({
+      openTime: Date.parse(asOf) - (60 - i) * 60_000,
+      open: 3,
+      high: 3.002,
+      low: 2.998,
+      close: 3,
+      volume: 100,
+      closeTime: Date.parse(asOf) - (59 - i) * 60_000,
+    }))
+    const base = linkedHost()
+    const bridge = new TradingBridge({
+      ...base,
+      getMarketService: () => fakeService({
+        getTicker: async (symbol) => ({ symbol, price: 3, timestamp: 1 }),
+        getKlines: async (_symbol, interval) => {
+          expect(interval).toBe('1m')
+          return klines
+        },
+      }),
+      getCnOptions: () => ({
+        ...base.getCnOptions!(),
+        listUnderlyings: async () => [
+          { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
+          { underlying: '910050', exchange: 'SYNTH', name: 'synth50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'synth' },
+        ],
+      }),
+    })
+    const { payload } = await dispatchBridgeRequest(
+      bridge, 'GET', '/options/intraday-box', new URLSearchParams({ underlying: '510050.SH', asOf }),
+    )
+    const box = (payload as { box: { horizonMin: number; rows: Array<Record<string, unknown>> } }).box
+    expect(box.horizonMin).toBe(5)
+    expect(box.rows).toHaveLength(1)
+    expect(box.rows[0]).toMatchObject({ underlying: '510050', spotSymbol: '510050.SH', regime: 'range_hold' })
+    expect(box.rows[0]?.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ template: 'butterfly' }),
+    ]))
+
+    await expect(dispatchBridgeRequest(
+      bridge, 'GET', '/options/intraday-box', new URLSearchParams({ horizon: '15' }),
+    )).rejects.toMatchObject({ status: 400 })
+
+    await expect(dispatchBridgeRequest(
+      bridge, 'GET', '/options/intraday-box', new URLSearchParams({ underlying: '600519.SH' }),
+    )).rejects.toMatchObject({ code: 'TRADING_UNSUPPORTED_SYMBOL' })
+
+    const broken = new TradingBridge({
+      ...base,
+      getMarketService: () => fakeService({
+        getKlines: async () => { throw new Error('1m down') },
+        getTicker: async () => { throw new Error('quote down') },
+      }),
+      getCnOptions: () => ({
+        ...base.getCnOptions!(),
+        listUnderlyings: async () => ([
+          { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
+        ]),
+      }),
+    })
+    const failed = await dispatchBridgeRequest(
+      broken, 'GET', '/options/intraday-box', new URLSearchParams({ asOf }),
+    )
+    expect(failed.payload).toMatchObject({
+      ok: true,
+      box: { rows: [{ underlying: '510050', regime: 'no_trade', noTradeReason: 'insufficient' }] },
+    })
+  })
+
+  it('POST /options/cycles/tick：同桶幂等；下一桶给上一箱补分', async () => {
+    const t0 = '2026-09-08T02:30:00.000Z'
+    const t1 = '2026-09-08T02:35:00.000Z'
+    const t1Ms = Date.parse(t1)
+    // 箱体要 ≥31 根 1m；打分窗口是 (t0, t1]。末 5 根收在 3 附近 → range_hold hit。
+    const klines = Array.from({ length: 60 }, (_, i) => {
+      const closeTime = t1Ms - (59 - i) * 60_000
+      return {
+        openTime: closeTime - 60_000, open: 3, high: 3.002, low: 2.998,
+        close: 3, volume: 80, closeTime,
+      }
+    })
+    const base = linkedHost()
+    const bridge = new TradingBridge({
+      ...base,
+      getMarketService: () => fakeService({
+        getTicker: async (symbol) => ({ symbol, price: 3, timestamp: 1 }),
+        getKlines: async () => klines,
+      }),
+      getCnOptions: () => ({
+        ...base.getCnOptions!(),
+        listUnderlyings: async () => [
+          { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
+        ],
+      }),
+    })
+    const first = await dispatchBridgeRequest(
+      bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf: t0 },
+    )
+    expect((first.payload as { ticked: boolean }).ticked).toBe(true)
+    const firstForecast = (first.payload as {
+      loop: { rows: Array<{ latest?: { forecast: { regime: string } } }> }
+    }).loop.rows[0]?.latest?.forecast
+    expect(firstForecast?.regime).toBe('range_hold')
+    const again = await dispatchBridgeRequest(
+      bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf: t0 },
+    )
+    expect((again.payload as { ticked: boolean }).ticked).toBe(false)
+
+    await dispatchBridgeRequest(
+      bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf: t1 },
+    )
+    const { payload } = await dispatchBridgeRequest(
+      bridge, 'GET', '/options/cycles', new URLSearchParams({ underlying: '510050', limit: '8' }),
+    )
+    const cycles = (payload as { cycles: Array<{ score?: { verdict: string }; bucketStart: string }> }).cycles
+    expect(cycles.length).toBeGreaterThanOrEqual(2)
+    const scored = cycles.find((row) => row.score !== undefined)
+    expect(scored?.score?.verdict).toBe('hit')
+
+    const loop = await dispatchBridgeRequest(bridge, 'GET', '/options/cycles/loop', new URLSearchParams())
+    expect((loop.payload as { loop: { rows: Array<{ underlying: string }> } }).loop.rows[0]?.underlying).toBe('510050')
+  })
 })

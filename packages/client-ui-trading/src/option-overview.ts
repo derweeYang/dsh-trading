@@ -140,8 +140,9 @@ export function composeScanPrompt(input: {
     input.ivPercentile !== undefined ? `IV percentile ${input.ivPercentile.toFixed(2)}.` : undefined,
     input.divergence === 'weak_rally' ? 'Volume-price: rally on shrinking volume.' : undefined,
     input.divergence === 'accelerating_sell' ? 'Volume-price: decline on rising volume.' : undefined,
-    'Use cn_get_option_chain / cn_get_option_iv / cn_get_option_vol_analytics / cn_get_option_strategy.',
-    'Technical analysis only; not investment advice. Prefill legs — do not place live orders.',
+    'Call cn_get_option_intraday_box for the 5-minute box JSON; do not invent box levels.',
+    'Then cn_get_option_chain / cn_get_option_iv / cn_get_option_vol_analytics / cn_get_option_strategy.',
+    'Follow option-intraday-workflow. Technical analysis only; not investment advice. Prefill legs — do not place live orders.',
   ]
   return lines.filter((line): line is string => line !== undefined).join(' ')
 }
@@ -154,7 +155,8 @@ export function composeScanAllPrompt(rows: readonly OptionOverviewRow[]): string
   return (
     `Scan these China ETF option underlyings for timing and structure: ${summary}. `
     + 'Rank by 5-day strength and volume confirmation. '
-    + 'Use option chain / IV / vol_analytics / strategy tools. '
+    + 'Call cn_get_option_intraday_box for the 5-minute box; do not invent levels. '
+    + 'Then chain / IV / vol_analytics / strategy. Follow option-intraday-workflow. '
     + 'Technical analysis only; not investment advice. Prefill legs — do not place live orders.'
   )
 }

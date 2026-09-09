@@ -35,7 +35,16 @@ import { TaskActionError } from './tasks/ledger.ts'
 import { registerTasksTools } from './tasks/tools.ts'
 import { TASKS_ACTION_BYTES_LIMIT, parseTasksEnvelope } from './client/tasks-protocol.ts'
 import { TradingTasksService } from './tasks/service.ts'
-import type { SessionCommandDispatcher, SessionGateway } from './tasks/runner.ts'
+import { TasksRunner, type SessionCommandDispatcher, type SessionGateway } from './tasks/runner.ts'
+import { OptionBarAgentHost } from './option-bar-agent.ts'
+import {
+  appendJsonlLine,
+  cyclesPath,
+  optionsDataRoot,
+  readJsonl,
+  shanghaiCalendarDate,
+} from '@dshtrading/kit-cn'
+import type { OptionCycle } from '@dshtrading/api'
 
 /** webServer / connection 的最小结构面（避免对本仓未安装的宿主包产生类型依赖）。 */
 interface WebServerLike {
@@ -180,6 +189,16 @@ export function apply(ctx: Context): void {
       ) as import('@dshtrading/api').CnOptionsTradeService | undefined,
     })
     const bridge = new TradingBridge(host)
+    const optionDataRoot = (): string => optionsDataRoot(process.env, process.cwd())
+    bridge.onCycleWrite = async (cycle) => {
+      const date = shanghaiCalendarDate(Date.parse(cycle.asOf) || Date.now())
+      await appendJsonlLine(cyclesPath(optionDataRoot(), date), cycle)
+    }
+    void readJsonl<OptionCycle>(cyclesPath(optionDataRoot(), shanghaiCalendarDate(Date.now())))
+      .then((rows) => { bridge.hydrateOptionCycles(rows) })
+      .catch((error: unknown) => {
+        console.error('[dsh-trading/options-cycle] replay failed:', error)
+      })
 
     // 右缘竖栏「定时任务」Host 面：文件账本 + cron 调度 + 会话 runner（web 宿主
     // 专属；目录锁被另一个活宿主持有时降级为 503——特性不挂、宿主照跑）。宿主
@@ -209,6 +228,45 @@ export function apply(ctx: Context): void {
         return () => { tasks.dispose() }
       }, 'dsh-trading-client-ui-trading: scheduled-tasks service')
     }
+    const barRunner = new TasksRunner(
+      () => resolveHostService('typertGateway') as SessionGateway | undefined,
+      () => resolveHostService('commands') as SessionCommandDispatcher | undefined,
+      () => resolveHostService('workspaceRegistry') as import('./tasks/service.ts').WorkspaceDirectoryLike | undefined,
+    )
+    const barAgent = new OptionBarAgentHost({
+      dataRoot: optionDataRoot,
+      runner: () => barRunner,
+      workspaceId: () => {
+        const registry = resolveHostService('workspaceRegistry') as import('./tasks/service.ts').WorkspaceDirectoryLike | undefined
+        return registry?.list()[0]?.id
+      },
+      log: (message, error) => { console.error(`[dsh-trading/option-bar] ${message}`, error) },
+    })
+    ctx.effect(() => {
+      bridge.startOptionCycleLoop()
+      const tick = (): void => {
+        void bridge.optionCycleTick().then((result) => {
+          const nowMs = Date.parse(result.asOf)
+          return barAgent.afterTick({
+            ticked: result.ticked,
+            loop: result.loop,
+            nowMs: Number.isFinite(nowMs) ? nowMs : Date.now(),
+          })
+        }).catch((error: unknown) => {
+          const code = error instanceof Error && 'code' in error
+            ? String((error as { code?: unknown }).code)
+            : ''
+          if (code === 'TRADING_NOT_IMPLEMENTED') return
+          console.error('[dsh-trading/options-cycle] tick failed:', error)
+        })
+      }
+      tick()
+      const timer = setInterval(tick, 30_000)
+      return () => {
+        clearInterval(timer)
+        bridge.stopOptionCycleLoop()
+      }
+    }, 'dsh-trading-client-ui-trading: option cycle loop')
     const route = {
       kind: 'prefix' as const,
       path: '/dshtrading/api',

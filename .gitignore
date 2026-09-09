@@ -14,3 +14,8 @@ __pycache__/
 
 # git worktree isolated workspaces
 worktrees/
+
+# ETF option bar agent ledgers (keep README / seed)
+data/options/cycles/
+data/options/recommendations/
+data/options/reviews/

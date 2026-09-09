@@ -67,7 +67,7 @@ const DELEGATES = [
 type RoleId = (typeof PRESET_IDS)[number]
 const KIT_SKILLS: Record<RoleId, (market: Market) => string[] | null> = {
   master: () => null,
-  trader: market => [`${market}-risk-checklist`, 'trading-strategy-paradigms', 'indicator-authoring', 'trading-notes-setup'],
+  trader: market => [`${market}-risk-checklist`, 'option-intraday-workflow', 'trading-strategy-paradigms', 'indicator-authoring', 'trading-notes-setup'],
   'instrument-researcher': () => ['knowledge-curation', 'trading-notes-setup'],
   'risk-reviewer': market => [`${market}-risk-checklist`, 'trading-notes-setup'],
 }

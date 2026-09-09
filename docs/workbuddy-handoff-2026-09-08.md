@@ -94,8 +94,9 @@
 - **入口**：总览「扫描标的」→ `fillComposer(overview.scanAllPrompt)`；
   行内 / T 板「AI 组合建议」→ `fillComposer(row.scanPrompt)`。prompt 已含
   标的、现价、5 日量价、底仓、不下单纪律。
-- agent 工具已齐（`cn_get_option_chain` / `iv` / `vol_analytics` / `strategy`，
-  `holdingQty` 已支持）。
+- agent 工具已齐（`cn_get_option_chain` / `iv` / `vol_analytics` / `strategy` /
+  `cn_get_option_intraday_box`，`holdingQty` 已支持）。scanPrompt 已要求先读箱体 JSON。
+  编排 skill：`option-intraday-workflow`。L2 桥：`GET /options/intraday-box`。
 - **呈现**：agent 回复经 toolview 渲染；策略卡片给「加载到 T 板」动作——
   把推荐的腿填进下单面板（preview 态，用户手动确认才 `POST /options/order`）。
 - **纪律**：LLM 只能预填，不能下单；实盘仍走双闸。
@@ -108,11 +109,135 @@ heldQty 徽章 + 「按底仓备兑」快捷键（holdingQty=heldQty 调 strateg
 
 ---
 
+## D. workbuddy 工单（期权总览 + 箱体 + 扫描，2026-09-08）
+
+**只改** `packages/client-ui-trading/src/client/**`（+ 本包 client 半测试）。
+不要改 `bridge.ts`、`option-overview.ts`、`kit-cn`、`@dshtrading/api`。
+类型从 `@dshtrading/api` 取：`OptionOverview` / `OptionOverviewRow` /
+`OptionIntradayBox` / `OptionIntradayBoxRow` / `OptionCycleLoop` / `OptionCycle`。
+形状见 `docs/options-bridge.md`。
+文案进 `locales.ts` + `contract.ts`，zh/en 同步，跑 `pnpm i18n:check`。
+本页不构成投资建议；扫描按钮只 `fillComposer`，不下单。
+
+建议顺序：**WB-0 → WB-1 → WB-6 → WB-2 → WB-3 → WB-4 → WB-5**。
+WB-1 可先交付（总览能用）；WB-6 是闭环可视化，优先于再造一套箱体轮询。
+
+### WB-0  桥 fetch（`src/client/api.ts`）
+
+补下列，风格对齐现有 `fetchOptionsUnderlyings`（`OptionsOutcome` + `optionsFailure`）：
+
+| 函数 | 路由 | 成功取出 |
+|---|---|---|
+| `fetchOptionsOverview({ sort?, includeIv? })` | `GET /dshtrading/api/options/overview` | `wire.overview` |
+| `fetchOptionsIntradayBox({ underlying?, asOf? })` | `GET /dshtrading/api/options/intraday-box` | `wire.box` |
+| `fetchOptionsCycleLoop()` | `GET /dshtrading/api/options/cycles/loop` | `wire.loop` |
+| `fetchOptionsCycles({ underlying?, limit? })` | `GET /dshtrading/api/options/cycles` | `wire.cycles` |
+
+- `includeIv` 默认 **false**（不要默认 `1`，九路 vol_analytics 会打爆网关）。
+- `horizon` 不要做成 UI 选项，写死 `5` 或不传。
+- 未挂连接器 → `TRADING_NOT_IMPLEMENTED`，与现有期权页签显隐同一判据。
+- 单测：mock `getJson`，断言 query 字符串（`sort=strength`、无 `includeIv` 或 `=0`）。
+
+### WB-1  九标的总览页（C1）
+
+期权透镜落地页，**不要**一进「期权」就画当前自选的 T 板。
+
+1. 新组件（建议）`src/client/OptionsOverview.tsx` + 同名 css module。
+2. `QuoteStage`：`activeLens === 'options'` 时先总览；点行再进现有 `OptionsStage`。
+   点行：`fetchOptionsResolve(row.spotSymbol ?? row.underlying)` → 用 `link.spotSymbol`
+   切现货选择（与现有现货⇄期权透镜同一套），再 `setLens('options')` 进 T 板。
+3. **只拉** `fetchOptionsOverview({ sort })`。禁止拼 ticker/kline/positions。
+4. 行字段：`last` / `changePct` / `return5d` / `volumeRatio` / `strengthScore` /
+   `heldQty` / `optionQty` / `divergence`。**缺键按行容错**，不要整页空白。
+5. T-5：`days[]` 五格，`changePct` 色深，`volumeSurge` 边框。
+6. 排序控件：`strength`（默认）/ `iv` / `holdings`。切到 `iv` 时才
+   `includeIv: true`。
+7. `divergence`：`weak_rally` / `accelerating_sell` 用词典，不要写死中文在 TSX。
+8. SYNTH 后端已剔除，UI 不必再滤。
+9. 总览失败：`NOT_IMPLEMENTED` 隐藏期权透镜（已有）；其它 code 行内/页顶原文。
+
+返回 T 板：总览行上给「返回总览」，不要丢排序状态。
+
+### WB-2  扫描入口（C2，只预填聊天框）
+
+`fillComposer` 已从 `QuoteStage` 注入。**原样**填桥给的英文 prompt，不要前端重写。
+
+| 按钮 | 文案键（自拟，zh/en 对齐） | 动作 |
+|---|---|---|
+| 总览顶栏 | `options.overview.scanAll` | `fillComposer(overview.scanAllPrompt)` |
+| 总览行内 | `options.overview.scanRow` | `fillComposer(row.scanPrompt)` |
+| T 板操作条 | `options.overview.scanRow` | 用总览缓存里该标的 `scanPrompt`；没有则先拉一次 overview 再按 `underlying` 查找 |
+
+- `fillComposer` 未注入 → 不渲染这三个按钮（与 `onSendLegToAgent` 同款）。
+- 现有「把合约交给 Agent」保持不动，不要和扫描按钮合并。
+- 扫描 prompt 已含「先读箱体、不下单」；UI 不必再拼一段英文纪律。
+
+### WB-3  5 分钟箱体条（L2，展示用）
+
+优先读 **WB-6** 的 `latest.forecast`，不要再单独狂轮 `intraday-box`。
+T 板若 loop 还没该标的行，才降级 `fetchOptionsIntradayBox({ underlying })`。
+`no_trade` / `calibrated` 只出示原因，不画假箱沿。候选模板是标签，不是下单按钮。
+
+### WB-6  闭环时间线（定时评估可视化，本轮优先）
+
+宿主已在 node 半每 30s 对齐上海 5 分钟桶（`POST /options/cycles/tick` 幂等）。
+页面 **不要** 自己 `setInterval` 去算箱体或打分。
+
+1. 新组件（建议）`src/client/OptionsCycleLoop.tsx`，挂在总览页上半或右侧。
+2. **只拉** `fetchOptionsCycleLoop()`；点某一标的再 `fetchOptionsCycles({ underlying, limit: 24 })` 画历史。
+3. 轮询 **30s**，`visibilityState === 'hidden'` 停。不要 5s。
+4. 每标的一张周期卡：
+   - 本桶：`latest.forecast` 的箱沿 / `regime` / `candidates` / `calibration`
+   - 上桶：`score.verdict`（`hit` / `partial` / `miss` / `skipped`）+
+     `realizedLast` vs `boxLow`–`boxHigh`（有 score 才画对照）
+   - 条带：`stats.hitRate`（缺席则显示「样本不足」）
+5. 工作流示意（静态，可用词典）：`L1 选场 → L2 出箱 → 等 5 分钟 → 对照已走完的 1m → 校准 → 下一桶`。
+   不要把 60 根 1m 画进总览。
+6. `loop.running === false` 显示「闭环未启动」（headless / 桥未挂），不要假装在走。
+7. `verdict` / `calibration` / `noTradeReason=calibrated` 全部进词典。
+
+这就是「下一周期评估上一根（上一桶 5 根 1 分钟）K 线执行结果」的页面。
+评估对象是**预报箱体 vs 已实现路径**，不是实盘成交。不要把 miss 自动变成下单。
+
+### WB-4  策略卡片 → T 板预填（C2 后半）
+
+agent 回复经现有 toolview。在策略结果上加「加载到 T 板」：
+
+1. 读 `cn_get_option_strategy` / `POST /options/strategy` 的 `legs[]`
+   （长代码 + side + qty）。不要用新浪短码。
+2. 切到对应标的 T 板、选到期月、把第一腿填进现有下单面板（preview）。
+3. **不要**自动 `POST /options/order`。用户点「提交委托」才走现有双闸。
+4. 若 toolview 一时挂不上按钮：WB-2 先交；本票可第二轮。
+
+### WB-5  词典、门禁、冒烟
+
+- 新键进 `contract.ts` + `locales.ts` zh/en。UI 字面量零豁免。
+- `pnpm --filter @dshtrading/client-ui-trading test` 全绿。
+- `pnpm i18n:check`。
+- `node scripts/typecheck-gate.mjs` 不超基线。
+- 视觉冒烟（trading-web）：总览九行、T-5、排序、扫描预填、T 板箱体条、
+  `no_trade` 空态、点行进 T 板再返回。桌面全屏截图不要；用宿主 HTTP +
+  headless Chrome（见 AGENTS.md UI 验证手法）。
+
+### 不要做
+
+- 不要在 client 重算 `strengthScore` / 箱体 / IV 分位。
+- 不要默认 `includeIv=1`。
+- 不要把 60 根 1m K 画进总览。
+- 不要改 node 半桥或 Python 内核。
+- 不要让扫描按钮直接下单。
+
+---
+
 ## 交接完成标准
 
 - [x] A1-A3 全部落地（`feat/etf-options` 已快进含市场收敛与必红测试改 cn 词汇）
 - [x] B 的交易面 + 互联接线（T 板下单 / ATM / 备兑 / 持仓条已在 client 半）
-- [ ] C1 总览页挂 `GET /options/overview`（后端已交缝）
-- [ ] C2 `fillComposer(scanPrompt / scanAllPrompt)` + 策略卡片加载到 T 板
-- [ ] `pnpm i18n:check`、typecheck-gate（C1/C2 词典一并过）
-- [ ] 视觉冒烟截图（trading-web profile）
+- [ ] **WB-0** overview / box / cycles fetch
+- [ ] **WB-1** 期权透镜落地 = 总览（`GET /options/overview`）
+- [ ] **WB-6** 闭环时间线（`GET /options/cycles/loop`）
+- [ ] **WB-2** `fillComposer(scanPrompt / scanAllPrompt)`
+- [ ] **WB-3** 箱体条（优先用 loop.latest.forecast）
+- [ ] **WB-4** 策略卡片加载到 T 板（可第二轮）
+- [ ] **WB-5** `pnpm i18n:check`、typecheck-gate、trading-web 冒烟
+

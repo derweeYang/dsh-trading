@@ -2,7 +2,7 @@
  * A 股工具箱插件（dsh-trading cn 切片）。
  *
  * 包含：
- *   1. skill provider：cn-risk-checklist、indicator-authoring、trading-strategy-paradigms、knowledge-curation 与 trading-notes-setup 随包分发；
+ *   1. skill provider：cn-risk-checklist、option-intraday-workflow、indicator-authoring、trading-strategy-paradigms、knowledge-curation 与 trading-notes-setup 随包分发；
  *   2. cn_get_news / cn_get_fundamentals / cn_get_option_* 工具；
  *   3. indicator_author 创作工具（Issue #19）；
  *   4. knowledge_ingest 与 knowledge_search 知识库工具（Issue #24）。
@@ -35,6 +35,8 @@ import {
   createGetOptionIvTool,
   createGetOptionPriceTool,
   createGetOptionStrategyTool,
+  createGetOptionIntradayBoxTool,
+  createPutOptionBarRecommendationTool,
   createGetOptionUnderlyingDailyTool,
   createGetOptionVolAnalyticsTool,
   createOptionParityCheckTool,
@@ -45,6 +47,9 @@ export * from './fundamentals.js'
 export * from './news.js'
 export * from './sentiment.js'
 export * from './options-tools.js'
+export * from './intraday-box.js'
+export * from './option-cycles.js'
+export * from './option-bar-ledger.js'
 
 // ── skill provider（host 面 skill 全局可见即可，本切片不改 skill 作用域） ─────────
 
@@ -55,6 +60,7 @@ const AUTHORING_BODY_URL = new URL('../assets/skills/indicator-authoring.md', im
 const STRATEGY_BODY_URL = new URL('../assets/skills/trading-strategy-paradigms.md', import.meta.url)
 const KNOWLEDGE_CURATION_BODY_URL = new URL('../assets/skills/knowledge-curation.md', import.meta.url)
 const JOURNAL_BODY_URL = new URL('../assets/skills/trading-notes-setup.md', import.meta.url)
+const INTRADAY_BODY_URL = new URL('../assets/skills/option-intraday-workflow.md', import.meta.url)
 const RESOURCE_BASE = {
   kind: 'directory',
   path: fileURLToPath(new URL('../assets/skills/', import.meta.url)),
@@ -116,7 +122,26 @@ const JOURNAL_CANDIDATE: SkillCandidate = {
   locator: JOURNAL_BODY_URL,
 }
 
-const SKILL_CANDIDATES = [CANDIDATE, AUTHORING_CANDIDATE, STRATEGY_CANDIDATE, KNOWLEDGE_CURATION_CANDIDATE, JOURNAL_CANDIDATE]
+const INTRADAY_CANDIDATE: SkillCandidate = {
+  name: 'option-intraday-workflow',
+  description:
+    'Use when scanning China ETF option underlyings for timing, 5-day relative strength, 1-minute boxes, 5-minute range, or LLM strategy recommendations.',
+  invocation: { modelInvocable: true, userInvocable: true },
+  provider: PROVIDER_NAME,
+  source: 'bundled',
+  resourceBase: RESOURCE_BASE,
+  rank: BUNDLED_SKILL_RANK,
+  locator: INTRADAY_BODY_URL,
+}
+
+const SKILL_CANDIDATES = [
+  CANDIDATE,
+  INTRADAY_CANDIDATE,
+  AUTHORING_CANDIDATE,
+  STRATEGY_CANDIDATE,
+  KNOWLEDGE_CURATION_CANDIDATE,
+  JOURNAL_CANDIDATE,
+]
 
 export const provider: SkillProvider = {
   name: PROVIDER_NAME,
@@ -218,11 +243,22 @@ export function apply(ctx: Context, config: Config): void {
   registerOnce(createGetOptionUnderlyingDailyTool({ getService: lookupOptions }))
   registerOnce(createGetOptionPriceTool({ getService: lookupOptions }))
   registerOnce(createOptionParityCheckTool({ getService: lookupOptions }))
-  const registry = serviceGetter.get?.('tradingMarketDataRegistry', false) as
-    | { active(m: string): { service: MarketDataService } | undefined }
-    | undefined
-  const marketData = registry?.active('cn')?.service
-    ?? serviceGetter.get?.('tradingCnMarketData', false) as MarketDataService | undefined
+  const lookupMarket = (): MarketDataService | undefined => {
+    const live = serviceGetter.get?.('tradingMarketDataRegistry', false) as
+      | { active(m: string): { service: MarketDataService } | undefined }
+      | undefined
+    return live?.active('cn')?.service
+      ?? serviceGetter.get?.('tradingCnMarketData', false) as MarketDataService | undefined
+  }
+  registerOnce(createGetOptionIntradayBoxTool({
+    getService: lookupOptions,
+    getMarketData: lookupMarket,
+  }))
+  registerOnce(createPutOptionBarRecommendationTool({
+    getService: lookupOptions,
+    getMarketData: lookupMarket,
+  }))
+  const marketData = lookupMarket()
   if (marketData !== undefined) {
     registerOnce(createGetIndicatorsTool({ marketData, market: 'cn' }))
   }

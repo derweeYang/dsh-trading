@@ -18,6 +18,10 @@
 | GET | `/dshtrading/api/options/implied-vol?underlying=&expiryMonth=&rate=&source=&priceField=` | 链截面 IV |
 | GET | `/dshtrading/api/options/vol-analytics?underlying=&expiryMonths=&asOf=&rate=&dividendYield=&source=` | 波动率分析（期限结构/skew/IV 分位/HV，透传） |
 | GET | `/dshtrading/api/options/overview?source=&sort=strength\|iv\|holdings&includeIv=0\|1` | 九标的总览（C1：现货/T-5/底仓/持仓聚合；`includeIv=1` 才打网关） |
+| GET | `/dshtrading/api/options/intraday-box?underlying=&horizon=5&asOf=` | 1 分钟 → 5 分钟箱体（L2；现货 1m K，不打期权网关） |
+| GET | `/dshtrading/api/options/cycles?underlying=&limit=` | 5 分钟闭环历史（先 forecast，下一桶补 score） |
+| GET | `/dshtrading/api/options/cycles/loop` | 九标的最新周期 + 命中率（页面可视化 SSOT） |
+| POST | `/dshtrading/api/options/cycles/tick` | 对齐当前上海 5 分钟桶（幂等；宿主 30s 心跳已在跑） |
 | POST | `/dshtrading/api/options/strategy` | 多腿模板 / 保证金（JSON body；阶段 4 起支持 `holdingQty`） |
 | POST | `/dshtrading/api/options/order` | 期权下单（阶段 3 交易面） |
 | DELETE | `/dshtrading/api/options/order?id=` | 期权撤单（阶段 3） |
@@ -152,6 +156,75 @@ GET /options/overview?sort=strength&includeIv=0
 - `scanPrompt` / `scanAllPrompt` 给 C2：`fillComposer` 原样预填。文案含
   「technical analysis / not investment advice / do not place live orders」。
   点行进 T 板仍用 `GET /options/resolve`。
+- `scanPrompt` / `scanAllPrompt` 要求先调 `cn_get_option_intraday_box`，禁止自编箱体。
+
+### intraday-box（1 分钟 → 5 分钟箱体，L2）
+
+```json
+GET /options/intraday-box?underlying=510050.SH&horizon=5&asOf=2026-09-08T02:30:00.000Z
+{
+  "ok": true,
+  "box": {
+    "asOf": "2026-09-08T02:30:00.000Z",
+    "horizonMin": 5,
+    "lookback": 60,
+    "rows": [{
+      "underlying": "510050",
+      "spotSymbol": "510050.SH",
+      "last": 3.0,
+      "boxLow": 2.991,
+      "boxHigh": 3.009,
+      "regime": "range_hold",
+      "session": "regular",
+      "candidates": [{ "template": "butterfly", "bias": "neutral", "invalidIf": "…", "reason": "…" }]
+    }]
+  }
+}
+```
+
+- `underlying` 可缺省或 `all` = 名册去 SYNTH 全表；指定未知名 → `TRADING_UNSUPPORTED_SYMBOL`。
+- `horizon` 只接受 `5`（或缺省）。`asOf` 可选 ISO，供回放；会话门按 Asia/Shanghai。
+- 计算在 `@dshtrading/kit-cn` 纯函数（σ√5 与 ATR√5 取宽、Donchian15、VWAP）。
+  开盘 15 分 / 午休边 5 分 / 尾盘 5 分 / 盘后 → `regime=no_trade`。
+- 现货 1m 走 `tradingCnMarketData`（iquant 支持 `1m`；腾讯会 `TRADING_UNSUPPORTED_INTERVAL`，该行 `no_trade`）。
+  单行失败不整页失败。不打期权网关。
+- agent 工具 `cn_get_option_intraday_box` 同源。编排见 skill `option-intraday-workflow`。
+- 本页不构成投资建议；箱体是执行滤网，不是期权定价主因。
+
+### cycles / loop（5 分钟闭环）
+
+宿主 node 半每 30s 调一次 tick，对齐 Asia/Shanghai 5 分钟桶（幂等）。
+**不要**用右侧栏 Agent cron 扫箱体——那是拉会话，不是打分引擎。
+
+```json
+GET /options/cycles/loop
+{
+  "ok": true,
+  "loop": {
+    "running": true,
+    "horizonMin": 5,
+    "lastBucket": "2026-09-08T02:30:00.000Z",
+    "rows": [{
+      "underlying": "510050",
+      "stats": { "n": 4, "hits": 2, "misses": 1, "partials": 0, "skipped": 1, "hitRate": 0.67 },
+      "latest": {
+        "id": "510050:1757305800000",
+        "bucketStart": "2026-09-08T02:30:00.000Z",
+        "forecast": { "regime": "range_hold", "boxLow": 2.99, "boxHigh": 3.01 },
+        "score": { "verdict": "hit", "closeInside": true, "barCount": 5 },
+        "calibration": "none"
+      }
+    }]
+  }
+}
+```
+
+- 本桶只写 `forecast`；**下一桶**用已走完的 5 根 1 分钟 K 给上一桶补 `score`。
+- `verdict`：`hit` / `partial` / `miss` / `skipped`（no_trade / K 线不足）。
+- 连续 3 次 miss → 下一桶 `calibration=suppressed`，`regime=no_trade`，`noTradeReason=calibrated`。
+- 内存环（每标的 48 桶），进程重启清空。不下单、不调 LLM。
+- `POST /options/cycles/tick` body `{ asOf? }` 供回放；页面只读 GET。成功体另含 `asOf`。
+- 新桶会追加 `data/options/cycles/YYYY-MM-DD.jsonl`。`regular` 时段事件触发一轮 trader（不是右侧栏 cron）。推荐写入 `data/options/recommendations/`；`close5` 写 `reviews/`（无 LLM）。见 [spec](specs/2026-09-08-option-bar-agent.md)。
 
 ## 阶段 3 交易面
 

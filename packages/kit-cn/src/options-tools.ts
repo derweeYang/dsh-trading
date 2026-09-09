@@ -1,12 +1,25 @@
 /**
  * CN ETF 期权 Agent 工具（只读）。服务来自 tradingCnOptions，不经过 CN 行情 provider。
+ * 例外：cn_get_option_intraday_box 读 CN 现货 1 分钟 K（iquant）。
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { CnOptionsService, OptionSource } from '@dshtrading/api'
+import type { CnOptionsService, MarketDataService, OptionSource } from '@dshtrading/api'
+import { BOX_HORIZON_MIN, collectIntradayBox } from './intraday-box.js'
+import {
+  appendJsonlLine,
+  normalizeRecommendation,
+  optionsDataRoot,
+  recommendationsPath,
+  shanghaiCalendarDate,
+} from './option-bar-ledger.js'
 
 export interface OptionToolOptions {
   service?: CnOptionsService
   getService?: () => CnOptionsService | undefined
+  marketData?: MarketDataService
+  getMarketData?: () => MarketDataService | undefined
+  now?: () => number
+  dataRoot?: () => string
 }
 
 function resolveService(options: OptionToolOptions): CnOptionsService {
@@ -15,6 +28,10 @@ function resolveService(options: OptionToolOptions): CnOptionsService {
     throw new Error('cn options tools: tradingCnOptions is not mounted (install @dshtrading/connector-options)')
   }
   return service
+}
+
+function resolveMarket(options: OptionToolOptions): MarketDataService | undefined {
+  return options.marketData ?? options.getMarketData?.()
 }
 
 function asSource(value: unknown): OptionSource | undefined {
@@ -482,4 +499,103 @@ export function createOptionParityCheckTool(options: OptionToolOptions = {}) {
       return JSON.stringify(report)
     },
   })
+}
+
+export function createGetOptionIntradayBoxTool(options: OptionToolOptions = {}) {
+  return defineTool({
+    name: 'cn_get_option_intraday_box',
+    description:
+      'Compute a deterministic 1-minute → 5-minute price box for China ETF option underlyings '
+      + '(sigma/ATR half-width, Donchian, VWAP, session gate, at most two strategy templates). '
+      + 'Omit underlying or pass "all" for the full non-SYNTH roster. Uses CN spot 1m klines (iquant). '
+      + 'Do not invent box levels — read this JSON. Read-only; not investment advice.',
+    parameters: {
+      underlying: {
+        type: 'string',
+        description: 'ETF code (510050 / 510050.SH) or "all"; omit = whole roster',
+      },
+      asOf: {
+        type: 'string',
+        description: 'Valuation instant ISO-8601; default = now (Asia/Shanghai session gate)',
+      },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: String(value) }],
+    },
+    async execute(raw) {
+      const args = (raw ?? {}) as { underlying?: unknown; asOf?: unknown }
+      const underlying = typeof args.underlying === 'string' ? args.underlying : undefined
+      const nowMs = parseAsOf(args.asOf) ?? options.now?.() ?? Date.now()
+      const roster = await resolveService(options).listUnderlyings()
+      const box = await collectIntradayBox({
+        roster,
+        nowMs,
+        ...optionalField('underlying', underlying),
+        ...optionalField('market', resolveMarket(options)),
+      })
+      if (
+        underlying !== undefined
+        && underlying.trim().toLowerCase() !== 'all'
+        && box.rows.length === 0
+      ) {
+        throw new Error(`cn_get_option_intraday_box: unknown underlying ${underlying}`)
+      }
+      return JSON.stringify({
+        horizonMin: BOX_HORIZON_MIN,
+        ...box,
+        note: 'Deterministic box JSON. Do not recompute levels. Not investment advice.',
+      })
+    },
+  })
+}
+
+export function createPutOptionBarRecommendationTool(options: OptionToolOptions = {}) {
+  return defineTool({
+    name: 'cn_put_option_bar_recommendation',
+    description:
+      'Persist one 5-minute-bar option recommendation JSON for the current Shanghai calendar day. '
+      + 'Call this before the six-section reply. Templates must be in that bucket\'s forecast.candidates. '
+      + 'Does not place orders. Not investment advice.',
+    parameters: {
+      recommendation: {
+        type: 'string',
+        description: 'JSON object: bucketStart, asOf, session, opportunity, edge, logic, playbook, invalidIf, picks, noTrade',
+      },
+      forecasts: {
+        type: 'string',
+        description: 'JSON map underlying -> box row (must include candidates). Required when picks is non-empty.',
+      },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: String(value) }],
+    },
+    async execute(raw) {
+      const args = (raw ?? {}) as { recommendation?: unknown; forecasts?: unknown }
+      const parsed = typeof args.recommendation === 'string'
+        ? JSON.parse(args.recommendation) as unknown
+        : args.recommendation
+      if (typeof parsed !== 'object' || parsed === null) {
+        throw new Error('cn_put_option_bar_recommendation: recommendation must be a JSON object')
+      }
+      let forecastByUnderlying: Record<string, import('@dshtrading/api').OptionIntradayBoxRow | undefined> = {}
+      if (typeof args.forecasts === 'string' && args.forecasts.trim() !== '') {
+        const mapped = JSON.parse(args.forecasts) as Record<string, import('@dshtrading/api').OptionIntradayBoxRow>
+        forecastByUnderlying = mapped
+      }
+      const row = normalizeRecommendation(parsed, forecastByUnderlying)
+      const nowMs = options.now?.() ?? Date.now()
+      const date = shanghaiCalendarDate(nowMs)
+      const root = options.dataRoot?.() ?? optionsDataRoot()
+      await appendJsonlLine(recommendationsPath(root, date), row)
+      return JSON.stringify({ ok: true, bucketStart: row.bucketStart, opportunity: row.opportunity })
+    },
+  })
+}
+
+function parseAsOf(value: unknown): number | undefined {
+  if (typeof value !== 'string' || value.trim() === '') return undefined
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms : undefined
 }

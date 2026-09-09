@@ -14,7 +14,7 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionExpiryCalendar, OptionImpliedVolResult, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
 import {
   OVERVIEW_KLINE_LIMIT,
   applyTicker,
@@ -25,7 +25,20 @@ import {
   sortOverviewRows,
   spotSymbolOf,
 } from './option-overview.ts'
-import { aggregateNews as aggregateCnNews, fetchCnFundamentalsPackage } from '@dshtrading/kit-cn'
+import {
+  aggregateNews as aggregateCnNews,
+  calibrateNextForecast,
+  collectIntradayBox,
+  CYCLE_HORIZON_MS,
+  cycleId,
+  fetchCnFundamentalsPackage,
+  OptionCycleBook,
+  realizedInWindow,
+  replayCyclesIntoBook,
+  scorePreviousCycle,
+  selectBoxTargets,
+  shanghaiBucketStartMs,
+} from '@dshtrading/kit-cn'
 import type { ChartActivationStore, CustomIndicatorRecord, CustomIndicatorStore, IndicatorInstance } from '@dshtrading/indicators'
 import { clampActivationParams, createMemoryChartActivationStore, createMemoryCustomIndicatorStore, resolveIndicatorSpec, sanitizeInstance, symbolScopeKey, withHiddenScopes } from '@dshtrading/indicators'
 import type { KnowledgeCard, KnowledgeCardStore } from '@dshtrading/knowledge'
@@ -287,6 +300,28 @@ export interface OptionPositionsWire {
 export interface OptionOverviewWire {
   ok: true
   overview: OptionOverview
+}
+
+export interface OptionIntradayBoxWire {
+  ok: true
+  box: OptionIntradayBox
+}
+
+export interface OptionCyclesWire {
+  ok: true
+  cycles: readonly OptionCycle[]
+}
+
+export interface OptionCycleLoopWire {
+  ok: true
+  loop: OptionCycleLoop
+}
+
+export interface OptionCycleTickWire {
+  ok: true
+  loop: OptionCycleLoop
+  ticked: boolean
+  asOf: string
 }
 
 /** GUI 期权下单体（与 GuiOrderBody 同语义：默认请求实盘，服务缝闸门兜底）。 */
@@ -611,8 +646,23 @@ export class TradingBridge {
   private readonly fundamentalsInflight = new Map<string, Promise<StockFundamentals>>()
   /** FX 兜底 fetcher（issue #65；host.fetchFxRates 注入正式实现时不走这里）。 */
   readonly #fallbackFxFetcher: FxRatesFetcher = createFallbackFxFetcher()
+  readonly #cycles = new OptionCycleBook()
+  /** 每条 upsert 后可选落盘；失败不得打断 tick。 */
+  onCycleWrite?: (cycle: OptionCycle) => Promise<void>
 
   constructor(private readonly host: BridgeHost) {}
+
+  hydrateOptionCycles(rows: readonly OptionCycle[]): void {
+    replayCyclesIntoBook(this.#cycles, rows)
+  }
+
+  startOptionCycleLoop(): void {
+    this.#cycles.running = true
+  }
+
+  stopOptionCycleLoop(): void {
+    this.#cycles.running = false
+  }
 
   /** 已安装（有行情服务）的市场清单 + 当前 provider slug。 */
   markets(): MarketsWire {
@@ -1105,6 +1155,130 @@ export class TradingBridge {
       ...(row.heldQty === undefined ? {} : { heldQty: row.heldQty }),
       ...(optionQty === undefined ? {} : { optionQty }),
       ...(ivPercentile === undefined ? {} : { ivPercentile }),
+    }
+  }
+
+  /**
+   * L2 1 分钟 → 5 分钟箱体。计算在 kit-cn 纯函数；本方法只拉名册 + 现货 1m K。
+   * 单行行情失败 → 该行 no_trade，不整页失败。horizon 只接受 5。
+   */
+  async optionIntradayBox(
+    underlyingRaw?: string,
+    horizonRaw?: string,
+    asOfRaw?: string,
+  ): Promise<OptionIntradayBoxWire> {
+    if (horizonRaw !== undefined && horizonRaw !== '' && horizonRaw !== '5') {
+      throw new BridgeProtocolError(400, 'intraday-box: horizon must be 5')
+    }
+    let nowMs = Date.now()
+    if (asOfRaw !== undefined && asOfRaw.trim() !== '') {
+      const parsed = Date.parse(asOfRaw)
+      if (!Number.isFinite(parsed)) throw new BridgeProtocolError(400, 'intraday-box: asOf must be ISO-8601')
+      nowMs = parsed
+    }
+    const roster = (await this.requireCnOptions().listUnderlyings()).filter((row) => row.exchange !== 'SYNTH')
+    const underlying = underlyingRaw?.trim() === '' ? undefined : underlyingRaw?.trim()
+    if (underlying !== undefined && selectBoxTargets(roster, underlying).length === 0) {
+      throw Object.assign(
+        new Error(`unknown option underlying ${underlying}`),
+        { code: 'TRADING_UNSUPPORTED_SYMBOL' },
+      )
+    }
+    const market = this.host.getMarketService('cn')
+    const box = await collectIntradayBox({
+      roster,
+      nowMs,
+      ...(underlying === undefined ? {} : { underlying }),
+      ...(market === undefined ? {} : { market }),
+    })
+    return { ok: true, box }
+  }
+
+  optionCycles(underlyingRaw?: string, limitRaw?: string): OptionCyclesWire {
+    this.requireCnOptions()
+    const limit = limitRaw === undefined || limitRaw.trim() === '' ? 12 : Number(limitRaw)
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new BridgeProtocolError(400, 'cycles: limit must be a positive integer')
+    }
+    const underlying = underlyingRaw?.trim() === '' ? undefined : underlyingRaw?.trim()
+    return { ok: true, cycles: this.#cycles.list(underlying, limit) }
+  }
+
+  async optionCycleLoop(): Promise<OptionCycleLoopWire> {
+    const roster = (await this.requireCnOptions().listUnderlyings()).filter((row) => row.exchange !== 'SYNTH')
+    return { ok: true, loop: this.#cycles.loop(roster.map((row) => row.underlying)) }
+  }
+
+  /**
+   * 5 分钟桶：给上一桶补分，再在 regular 会话开新预报。同桶幂等。
+   * 宿主 30s 心跳调用；POST 供回放 / 单测。
+   */
+  async optionCycleTick(asOfRaw?: string): Promise<OptionCycleTickWire> {
+    let nowMs = Date.now()
+    if (asOfRaw !== undefined && asOfRaw.trim() !== '') {
+      const parsed = Date.parse(asOfRaw)
+      if (!Number.isFinite(parsed)) throw new BridgeProtocolError(400, 'cycles/tick: asOf must be ISO-8601')
+      nowMs = parsed
+    }
+    const roster = (await this.requireCnOptions().listUnderlyings()).filter((row) => row.exchange !== 'SYNTH')
+    const market = this.host.getMarketService('cn')
+    const bucket = shanghaiBucketStartMs(nowMs)
+    const prevBucket = bucket - CYCLE_HORIZON_MS
+    this.#cycles.lastBucket = new Date(bucket).toISOString()
+    const box = await collectIntradayBox({
+      roster,
+      nowMs,
+      ...(market === undefined ? {} : { market }),
+    })
+    let ticked = false
+    for (const row of box.rows) {
+      const prev = this.#cycles.latest(row.underlying)
+      if (
+        prev !== undefined
+        && prev.score === undefined
+        && Date.parse(prev.bucketStart) === prevBucket
+        && market !== undefined
+        && row.spotSymbol !== undefined
+      ) {
+        let klines: readonly Kline[] = []
+        try {
+          klines = await market.getKlines(row.spotSymbol, '1m', 20)
+        } catch {
+          klines = []
+        }
+        const realized = realizedInWindow(klines, prevBucket, bucket)
+        await this.writeCycle({
+          ...prev,
+          score: scorePreviousCycle({ forecast: prev.forecast, realized }),
+        })
+      }
+      const existing = this.#cycles.latest(row.underlying)
+      if (existing?.id === cycleId(row.underlying, bucket)) continue
+      const { forecast, calibration } = calibrateNextForecast(row, this.#cycles.scores(row.underlying))
+      await this.writeCycle({
+        id: cycleId(row.underlying, bucket),
+        underlying: row.underlying,
+        bucketStart: new Date(bucket).toISOString(),
+        asOf: new Date(nowMs).toISOString(),
+        forecast,
+        calibration,
+      })
+      ticked = true
+    }
+    return {
+      ok: true,
+      ticked,
+      asOf: new Date(nowMs).toISOString(),
+      loop: this.#cycles.loop(roster.map((row) => row.underlying)),
+    }
+  }
+
+  private async writeCycle(cycle: import('@dshtrading/api').OptionCycle): Promise<void> {
+    const saved = this.#cycles.upsert(cycle)
+    try {
+      await this.onCycleWrite?.(saved)
+    } catch (error) {
+      console.error('[dsh-trading/options-cycle] persist failed:', error)
     }
   }
 
@@ -2062,6 +2236,28 @@ export async function dispatchBridgeRequest(
           ),
         }
       }
+      case '/options/intraday-box': {
+        return {
+          status: 200,
+          payload: await bridge.optionIntradayBox(
+            search.get('underlying') ?? undefined,
+            search.get('horizon') ?? undefined,
+            search.get('asOf') ?? undefined,
+          ),
+        }
+      }
+      case '/options/cycles': {
+        return {
+          status: 200,
+          payload: bridge.optionCycles(
+            search.get('underlying') ?? undefined,
+            search.get('limit') ?? undefined,
+          ),
+        }
+      }
+      case '/options/cycles/loop': {
+        return { status: 200, payload: await bridge.optionCycleLoop() }
+      }
       case '/orderbook': {
         const market = search.get('market') ?? ''
         const symbol = search.get('symbol') ?? ''
@@ -2230,6 +2426,12 @@ export async function dispatchBridgeRequest(
     }
     if (pathname === '/holdings/discard') {
       return { status: 200, payload: await bridge.discardHoldings(body) }
+    }
+    if (pathname === '/options/cycles/tick') {
+      const asOf = typeof body === 'object' && body !== null && typeof (body as { asOf?: unknown }).asOf === 'string'
+        ? (body as { asOf: string }).asOf
+        : undefined
+      return { status: 200, payload: await bridge.optionCycleTick(asOf) }
     }
     if (pathname === '/options/strategy') {
       return { status: 200, payload: await bridge.optionStrategy(body) }
