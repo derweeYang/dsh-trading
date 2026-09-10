@@ -6,15 +6,7 @@ import pytest
 
 from dsh_iquant_quote.errors import QuoteGatewayError
 
-from test_option_chain import _FakeQuoteClient, _backend
-
-
-@pytest.fixture(autouse=True)
-def _market_window_open(monkeypatch):
-    """默认按盘中跑；窗口短路行为另有专门测试。"""
-    monkeypatch.setattr(
-        "dsh_iquant_quote.live.trading_window_open", lambda moment=None: True
-    )
+from test_option_chain import _CLOSED_NOW, _FakeQuoteClient, _backend
 
 
 def test_ticker_uses_live_tick_when_drain_has_print():
@@ -91,20 +83,34 @@ def test_ticker_no_tick_and_no_daily_is_no_data():
     assert err.value.code == "NO_DATA"
 
 
-def test_ticker_closed_window_skips_drain_and_uses_daily(monkeypatch):
-    monkeypatch.setattr(
-        "dsh_iquant_quote.live.trading_window_open", lambda moment=None: False
-    )
+def test_ticker_after_hours_skips_subscribe_and_uses_daily():
     client = _FakeQuoteClient(
         [],
         ticks={
-            "510050": {
-                "last": 3.02,
-                "pre_close": 3.01,
-                "volume": 10,
-                "timestamp_ms": 9,
-            }
+            "510050": {"last": 9.99, "pre_close": 9.9, "volume": 1, "timestamp_ms": 1}
         },
+        bars_by_code={
+            "510050": [
+                {
+                    "timestamp_ms": 1,
+                    "open": 3.0,
+                    "high": 3.1,
+                    "low": 2.9,
+                    "close": 3.02,
+                    "volume": 50,
+                }
+            ]
+        },
+    )
+    row = _backend(client, now=_CLOSED_NOW).ticker("SH", "510050")
+    assert row["last"] == pytest.approx(3.02)
+    assert client.subscribed is None
+    assert client.history_calls == [("SH", "510050")]
+
+
+def test_klines_reuse_same_calendar_day_cache():
+    client = _FakeQuoteClient(
+        [],
         bars_by_code={
             "510050": [
                 {
@@ -112,13 +118,15 @@ def test_ticker_closed_window_skips_drain_and_uses_daily(monkeypatch):
                     "open": 1,
                     "high": 1,
                     "low": 1,
-                    "close": 2.91,
+                    "close": 3.0,
                     "volume": 1,
                 }
             ]
         },
     )
-    row = _backend(client).ticker("SH", "510050")
-    assert row["last"] == pytest.approx(2.91)  # 窗口外不订阅不 drain，直接日 K
-    assert client.subscribed is None
+    backend = _backend(client, now=_CLOSED_NOW)
+    first = backend.klines("SH", "510050", "1d", 8)
+    second = backend.klines("SH", "510050", "1d", 8)
+    assert first[0]["close"] == pytest.approx(3.0)
+    assert second[0]["close"] == pytest.approx(3.0)
     assert client.history_calls == [("SH", "510050")]

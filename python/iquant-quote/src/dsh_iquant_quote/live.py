@@ -63,6 +63,11 @@ class LiveBackend:
         self._as_of: date | None = None
         self._names_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._daily_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        self._klines_cache: dict[
+            tuple[str, str, str, int], tuple[date, list[dict[str, Any]]]
+        ] = {}
+        # 时钟可注入：测试钉在盘内/盘后，避免真实时段决定 drain 行为。
+        self._now: Callable[[], datetime] = lambda: datetime.now(tz=CST)
 
     def _ensure(self):
         if self._client is not None:
@@ -113,10 +118,23 @@ class LiveBackend:
     def klines(
         self, market: str, code: str, interval: str, limit: int
     ) -> list[dict[str, Any]]:
+        # 盘后同一自然日内日 K 不再变化，直接复用，盘后轮询不再每次打 SDK；
+        # 盘中不复用，保留当日未收盘 bar 的实时性。
+        key = (market, code, interval, limit)
+        today = self._now().date()
+        cached = self._klines_cache.get(key)
+        if (
+            cached is not None
+            and cached[0] == today
+            and not trading_window_open(self._now())
+        ):
+            return cached[1]
         period_ms = 86_400_000 if interval == "1d" else 60_000
         end_ms = int(time.time() * 1000)
         start_ms = end_ms - max(limit, 1) * period_ms * 2
-        return self.history_bars(market, code, start_ms, end_ms, limit, period_ms)
+        bars = self.history_bars(market, code, start_ms, end_ms, limit, period_ms)
+        self._klines_cache[key] = (today, bars)
+        return bars
 
     def instruments(self, market: str) -> list[dict[str, Any]]:
         cached = self._names_cache.get(market)
@@ -137,7 +155,9 @@ class LiveBackend:
         return out
 
     def snapshot(self, market: str, symbols: list[str]) -> list[dict[str, Any]]:
-        if (market or "").upper() in CN_LIVE_MARKETS and not trading_window_open():
+        if (market or "").upper() in CN_LIVE_MARKETS and not trading_window_open(
+            self._now()
+        ):
             raise QuoteGatewayError("NO_DATA", f"{market} outside trading window")
         client = self._ensure()
         codes = [str(item).split(".")[0] for item in symbols]
@@ -336,7 +356,9 @@ class LiveBackend:
     ) -> dict[str, dict[str, Any]]:
         if not codes:
             return {}
-        if (market or "").upper() in CN_LIVE_MARKETS and not trading_window_open():
+        if (market or "").upper() in CN_LIVE_MARKETS and not trading_window_open(
+            self._now()
+        ):
             return {}
         client = self._ensure()
         try:
