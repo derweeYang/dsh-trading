@@ -168,7 +168,7 @@ export function foldIvDaily(input: {
   })
 }
 
-/** 用 packets/*.jsonl 回填 iv-daily（每文件 last-wins）。活牌源没有 asOf 历史 IV，不能从行情网关反推。 */
+/** 用 packets/*.jsonl 回填 iv-daily（每文件 last-wins）。活牌 implied_vol 无 asOf；历史空洞走 replay_atm_iv。 */
 export async function backfillIvDailyFromPackets(root: string): Promise<OptionBarDailyIv[]> {
   const dir = path.join(root, 'packets')
   let names: string[]
@@ -193,6 +193,45 @@ export async function backfillIvDailyFromPackets(root: string): Promise<OptionBa
   const body = existing.length === 0 ? '' : `${existing.map((row) => JSON.stringify(row)).join('\n')}\n`
   await writeFile(file, body, 'utf8')
   return existing
+}
+
+/** 回放种子写入 iv-daily：已有 date+underlying（packet/日终）占主，不覆盖。 */
+export function mergeReplayIvDaily(
+  existing: readonly OptionBarDailyIv[],
+  replay: readonly OptionBarDailyIv[],
+): OptionBarDailyIv[] {
+  const map = new Map<string, OptionBarDailyIv>()
+  for (const row of existing) {
+    map.set(`${row.date}:${row.underlying}`, row)
+  }
+  for (const row of replay) {
+    if (row.atmIv === undefined || !Number.isFinite(row.atmIv)) continue
+    const key = `${row.date}:${row.underlying}`
+    if (map.has(key)) continue
+    map.set(key, {
+      date: row.date,
+      underlying: row.underlying,
+      atmIv: row.atmIv,
+      ...(row.hv20 === undefined ? {} : { hv20: row.hv20 }),
+    })
+  }
+  return [...map.values()].sort((left, right) => {
+    const byDate = left.date.localeCompare(right.date)
+    return byDate !== 0 ? byDate : left.underlying.localeCompare(right.underlying)
+  })
+}
+
+export async function applyReplayIvDaily(
+  root: string,
+  replay: readonly OptionBarDailyIv[],
+): Promise<OptionBarDailyIv[]> {
+  const existing = await readJsonl<OptionBarDailyIv>(ivDailyPath(root))
+  const merged = mergeReplayIvDaily(existing, replay)
+  const file = ivDailyPath(root)
+  await mkdir(path.dirname(file), { recursive: true })
+  const body = merged.length === 0 ? '' : `${merged.map((row) => JSON.stringify(row)).join('\n')}\n`
+  await writeFile(file, body, 'utf8')
+  return merged
 }
 
 export function latestPacketForBucket(

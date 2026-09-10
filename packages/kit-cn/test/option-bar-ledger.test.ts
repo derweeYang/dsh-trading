@@ -17,6 +17,7 @@ import {
   atmIvPercentile,
   foldIvDaily,
   backfillIvDailyFromPackets,
+  applyReplayIvDaily,
   makeSkipRecommendation,
   normalizeRecommendation,
   opportunityAllowed,
@@ -314,6 +315,21 @@ describe('atmIvPercentile / foldIvDaily', () => {
     ])
     const again = await backfillIvDailyFromPackets(dir)
     expect(again).toHaveLength(2)
+  })
+
+  it('回放种子不覆盖已有 packet 行', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-ivreplay-'))
+    await writeFile(path.join(dir, 'iv-daily.jsonl'), `${JSON.stringify({
+      date: '2026-09-10', underlying: '510050', atmIv: 0.14, hv20: 0.13,
+    })}\n`, 'utf8')
+    const rows = await applyReplayIvDaily(dir, [
+      { date: '2026-09-10', underlying: '510050', atmIv: 0.99 },
+      { date: '2026-08-20', underlying: '510050', atmIv: 0.17, hv20: 0.15 },
+    ])
+    expect(rows).toEqual([
+      { date: '2026-08-20', underlying: '510050', atmIv: 0.17, hv20: 0.15 },
+      { date: '2026-09-10', underlying: '510050', atmIv: 0.14, hv20: 0.13 },
+    ])
   })
 })
 

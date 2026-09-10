@@ -8,7 +8,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from dsh_options import chain, contracts, daily, pricing, strategy, underlying_daily, vol_analytics
+from dsh_options import (
+    chain,
+    contracts,
+    daily,
+    pricing,
+    replay_atm_iv,
+    strategy,
+    underlying_daily,
+    vol_analytics,
+)
 from dsh_options.protocol import OptionsError, run_cli
 
 
@@ -68,6 +77,10 @@ def _handle_strategy(request: dict[str, Any]) -> dict[str, Any]:
     return strategy.handle_strategy(request, _require_dir(request, "cacheDir"))
 
 
+def _handle_replay_atm_iv(request: dict[str, Any]) -> dict[str, Any]:
+    return replay_atm_iv.handle_replay_atm_iv(request, _require_dir(request, "cacheDir"))
+
+
 HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "underlyings": _handle_underlyings,
     "contracts": _handle_contracts,
@@ -79,6 +92,7 @@ HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "implied_vol": _handle_implied_vol,
     "parity_check": _handle_parity_check,
     "strategy": _handle_strategy,
+    "replay_atm_iv": _handle_replay_atm_iv,
 }
 
 

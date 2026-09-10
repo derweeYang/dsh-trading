@@ -32,6 +32,7 @@ def test_cli_subcommands_are_registered():
         "implied_vol",
         "parity_check",
         "price",
+        "replay_atm_iv",
         "strategy",
         "underlyings",
         "vol_analytics",

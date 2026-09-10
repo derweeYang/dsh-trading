@@ -35,7 +35,7 @@ IV × 量价交叉表只写在 skill / 口头纪律里时，定时桶智能体�
 
 `tagIvRegime` 在有次月 ATM 且近/次 ≥ 1.15 时打 `event_front`（优先于分位/HV）。总览缓存同一 5 分钟窗拉近月+次月 implied_vol，不打 vol_analytics。
 
-活牌 `implied_vol` 不支持 asOf（akshare/iquant 明文拒绝）。历史 IV **不能**从行情网关回放。回填只重放已落盘的 `packets/*.jsonl` 进 `iv-daily.jsonl`（每文件最新一包；launch 与 close5 都跑）。满 60 个交易日后才有本机分位。
+活牌 `implied_vol` 不支持 asOf（akshare/iquant 明文拒绝）。T 板不能按日回放。历史空洞改走合约日线回放，见 [iv-daily replay seed](2026-09-10-iv-daily-replay-seed.md)。packets 回填仍 last-wins；回放只补缺行。满 60 个交易日后才有本机分位。
 
 总览行现写 `ivRegime`（及可选 `hv20`）；`GET /options/bar-packet` 透出当天最新包。前端工单见
 [workbuddy-handoff-2026-09-10-iv-packet](../../../../docs/workbuddy-handoff-2026-09-10-iv-packet.md)。

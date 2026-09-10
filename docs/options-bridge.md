@@ -166,8 +166,8 @@ GET /options/overview?sort=strength&includeIv=0
   （`heldQty` 再 `optionQty`）。
 - 默认回填近月 `atmIv`（`implied_vol`，进程内 5 分钟缓存）；`includeIv=1` 才打 `vol_analytics` 分位。
   同行写 `ivRegime`（近/次月 ATM ≥ 1.15 → `event_front`；否则分位 ≥0.8 `rich` / ≤0.2 `cheap`；否则 `atmIv` 对 `hv20`）。
-  `nextAtmIv` 为次月 ATM。`hv20` 来自近 21 根日 K。`iv-daily.jsonl` 只从已落盘 packets 回填（活牌无 asOf 历史 IV）。满 60 日后补本机分位。
-  **不要把 `atmIv` 当成分位。** iQuant 无历史 IV 路径，`ivPercentile` 常缺席。任一路失败该行键缺席，不整页失败。
+  `nextAtmIv` 为次月 ATM。`hv20` 来自近 21 根日 K。  `iv-daily.jsonl` 优先从已落盘 packets 回填；历史空洞用 `replay_atm_iv`（iquant 合约日线 + 本库 BSM，`scripts/seed-iv-daily.mjs`）补缺失的 date+underlying，已有行不覆盖。活牌 `implied_vol` 仍拒绝 asOf。满 60 日后补本机分位。
+  **不要把 `atmIv` 当成分位。** 回放覆盖受「清单近月 + maxTermDays」限制，摘牌月补不回来。任一路失败该行键缺席，不整页失败。
   盘后标的现货走日 K 收盘（与 iquant `ticker` 同一回落），合约价走 T 板已有的日 K 回落。
 - `days` 最多 5 格：`changePct` 做色深，`volumeSurge`（当日量 / 5 日均量 > 1.5）做边框。
 - `scanPrompt` / `scanAllPrompt` 给 C2：`fillComposer` 原样预填。文案含
