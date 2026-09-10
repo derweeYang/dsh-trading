@@ -12,6 +12,8 @@ import type {
   OptionBarOpportunity,
   OptionBarPick,
   OptionBarRecommendation,
+  OptionBarSessionEvent,
+  OptionBarSessionRecord,
   OptionBarSkipReason,
   OptionCycle,
   OptionCycleLoop,
@@ -104,6 +106,10 @@ export function paperFillsPath(root: string, date: string): string {
 
 export function recommendationsPath(root: string, date: string): string {
   return path.join(root, 'recommendations', `${date}.jsonl`)
+}
+
+export function optionSessionsPath(root: string, date: string): string {
+  return path.join(root, 'sessions', `${date}.jsonl`)
 }
 
 export function reviewsPath(root: string, date: string): string {
@@ -359,6 +365,27 @@ export async function readJsonl<T>(filePath: string): Promise<T[]> {
 export function latestByKey<T>(rows: readonly T[], keyOf: (row: T) => string): T[] {
   const map = new Map<string, T>()
   for (const row of rows) map.set(keyOf(row), row)
+  return [...map.values()]
+}
+
+/**
+ * 聚合 sessions 台账事件：同一 bucketStart+sessionId 的 launch/settle 按字段 last-wins 合并。
+ * 容忍乱序、settle-only（launch 写失败）、launch-only（in-flight / 宿主重启）。
+ */
+export function foldOptionBarSessions(rows: readonly OptionBarSessionEvent[]): OptionBarSessionRecord[] {
+  const map = new Map<string, OptionBarSessionRecord>()
+  for (const row of rows) {
+    const key = `${row.bucketStart}|${row.sessionId ?? ''}`
+    const prev = map.get(key) ?? { bucketStart: row.bucketStart }
+    map.set(key, {
+      ...prev,
+      ...(row.sessionId === undefined ? {} : { sessionId: row.sessionId }),
+      ...(row.launchedAt === undefined ? {} : { launchedAt: row.launchedAt }),
+      ...(row.settledAt === undefined ? {} : { settledAt: row.settledAt }),
+      ...(row.outcome === undefined ? {} : { outcome: row.outcome }),
+      ...(row.error === undefined ? {} : { error: row.error }),
+    })
+  }
   return [...map.values()]
 }
 

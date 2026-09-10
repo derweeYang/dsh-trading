@@ -1513,11 +1513,13 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
       await dispatchBridgeRequest(
         bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf },
       )
+      // tryPaperManage 异步推进（tick 内 fire-and-forget）：轮询直到 getLastClose
+      // （1m×5）真的被调用再核对持仓——「未变化」断言立即成立，直接断言 spy 会竞态。
       await vi.waitFor(async () => {
+        expect(getKlines).toHaveBeenCalledWith('510050.SH', '1m', 5)
         const positions = JSON.parse(await readFile(path.join(dir, 'paper', 'positions.json'), 'utf8'))
         expect(positions).toEqual([plantedPosition])
       })
-      expect(getKlines).toHaveBeenCalledWith('510050.SH', '1m', 5)
     } finally {
       if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
       else process.env[OPTIONS_DATA_ENV] = prev

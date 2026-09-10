@@ -701,10 +701,44 @@ export interface OptionBarRecommendation {
   readonly noTrade: boolean
   readonly skipReason?: OptionBarSkipReason
   readonly previousScore?: { readonly cycleId: string; readonly verdict: OptionCycleVerdict }
+  /** 写入该行的 dsh 会话 id（工具侧从 exec.agent?.id 注入；宿主 skip 桩缺省）。 */
+  readonly sessionId?: string
+  /** 工具侧时钟时间戳（对照模型自报 asOf；宿主 skip 桩缺省）。 */
+  readonly hostAsOf?: string
+}
+
+/** bar agent 单桶 LLM 会话终局。no_rec = 会话 succeeded 但该桶无推荐行（模型没调工具）。 */
+export type OptionBarSessionOutcome = 'succeeded' | 'failed' | 'cancelled' | 'no_rec'
+
+/** sessions/{date}.jsonl 事件行：launch = 会话已建；settle = 终局（含 launch_failed）。 */
+export interface OptionBarSessionEvent {
+  readonly kind: 'launch' | 'settle'
+  readonly bucketStart: string
+  /** dsh 会话 id；launch_failed 且未建会话时缺省。 */
+  readonly sessionId?: string
+  /** launch 行携带（宿主时钟）。 */
+  readonly launchedAt?: string
+  /** settle 行携带。 */
+  readonly settledAt?: string
+  readonly outcome?: OptionBarSessionOutcome
+  /** failed / cancelled 时携带。 */
+  readonly error?: string
+}
+
+/** 读取侧聚合形态：同一 bucketStart+sessionId 的事件按字段 last-wins 合并。 */
+export interface OptionBarSessionRecord {
+  readonly bucketStart: string
+  readonly sessionId?: string
+  readonly launchedAt?: string
+  readonly settledAt?: string
+  readonly outcome?: OptionBarSessionOutcome
+  readonly error?: string
 }
 
 export const OPTION_PAPER_INITIAL_CASH = 100_000
 export const OPTION_MULTIPLIER = 10_000
+/** 模拟盘手续费（元/张，按每腿张数合计双边计）；可经工具/账本注入覆盖。 */
+export const OPTION_PAPER_FEE_PER_CONTRACT = 1.7
 
 export type PaperFillSkip =
   | 'duplicate_bucket'
@@ -716,11 +750,15 @@ export type PaperFillSkip =
 
 export type PaperFillReason = 'signal' | 'invalidIf' | 'close5' | 'session' | 'skipped'
 
+/** 成交价来源：工具侧链行情（last 回退 prevSettle）或模型 pick.legs 自报价。旧行缺省。 */
+export type OptionPaperPriceSource = 'last' | 'prev_settle' | 'pick'
+
 export interface PaperLegFill {
   readonly code: string
   readonly side: 'buy' | 'sell'
   readonly qty: number
   readonly fillPrice: number
+  readonly priceSource?: OptionPaperPriceSource
 }
 
 export interface PaperFill {
@@ -737,6 +775,8 @@ export interface PaperFill {
   readonly cashAfter: number
   readonly reason: PaperFillReason
   readonly skip?: PaperFillSkip
+  /** 手续费 = OPTION_PAPER_FEE_PER_CONTRACT × Σ(leg.qty)，开平双边；旧行缺省视为 0。 */
+  readonly feeCny?: number
 }
 
 export interface PaperPosition {
@@ -750,6 +790,8 @@ export interface PaperPosition {
   readonly boxLow?: number
   readonly boxHigh?: number
   readonly legs: readonly PaperLegFill[]
+  /** 开仓费用（平仓时并入该笔 realizedPnl）；旧持仓缺省视为 0。 */
+  readonly openFeeCny?: number
 }
 
 export interface PaperAccount {

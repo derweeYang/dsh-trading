@@ -139,6 +139,75 @@ describe('cn_get_option_chain', () => {
     await expect(access(path.join(dir, 'paper', 'fills', '2026-09-08.jsonl'))).rejects.toThrow()
   })
 
+  it('cn_put_option_bar_recommendation 注入 exec 会话身份与宿主时钟，模型伪造字段被丢弃', async () => {
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { access, mkdtemp, readFile } = await import('node:fs/promises')
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-put-exec-'))
+    const tool = createPutOptionBarRecommendationTool({
+      dataRoot: () => dir,
+      now: () => Date.parse('2026-09-10T05:40:23.000Z'),
+    })
+    type Exec = Parameters<typeof tool.execute>[1]
+    const exec = { agent: { id: 'sess-1' } } as Exec
+    await tool.execute({
+      recommendation: JSON.stringify({
+        bucketStart: '2026-09-10T05:40:00.000Z',
+        asOf: '2026-09-10T05:40:23.000Z',
+        session: 'regular',
+        opportunity: 'no_edge',
+        edge: 'calibrated',
+        logic: '',
+        playbook: '',
+        invalidIf: '',
+        picks: [],
+        noTrade: true,
+        // 模型伪造的宿主字段必须在 normalize 后被注入值覆盖。
+        sessionId: 'spoofed-session',
+        hostAsOf: '1970-01-01T00:00:00.000Z',
+        skipReason: 'calibrated',
+      }),
+    }, exec)
+    const lines = (await readFile(path.join(dir, 'recommendations', '2026-09-10.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
+
+    expect(lines).toHaveLength(1)
+    expect(lines[0]!.sessionId).toBe('sess-1')
+    expect(lines[0]!.hostAsOf).toBe('2026-09-10T05:40:23.000Z')
+    await expect(access(path.join(dir, 'paper', 'fills', '2026-09-10.jsonl'))).rejects.toThrow()
+  })
+
+  it('cn_put_option_bar_recommendation 无 exec 时 sessionId 缺省、hostAsOf 仍在', async () => {
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { mkdtemp, readFile } = await import('node:fs/promises')
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-put-noexec-'))
+    const tool = createPutOptionBarRecommendationTool({
+      dataRoot: () => dir,
+      now: () => Date.parse('2026-09-10T05:40:23.000Z'),
+    })
+    await tool.execute({
+      recommendation: JSON.stringify({
+        bucketStart: '2026-09-10T05:40:00.000Z',
+        asOf: '2026-09-10T05:40:23.000Z',
+        session: 'regular',
+        opportunity: 'no_edge',
+        edge: 'calibrated',
+        logic: '',
+        playbook: '',
+        invalidIf: '',
+        picks: [],
+        noTrade: true,
+        skipReason: 'calibrated',
+      }),
+    })
+    const lines = (await readFile(path.join(dir, 'recommendations', '2026-09-10.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
+
+    expect('sessionId' in (lines[0]!)).toBe(false)
+    expect(lines[0]!.hostAsOf).toBe('2026-09-10T05:40:23.000Z')
+  })
+
   it('cn_put_option_bar_recommendation 用注入行情写入 paper fill', async () => {
     const os = await import('node:os')
     const path = await import('node:path')
@@ -191,8 +260,15 @@ describe('cn_get_option_chain', () => {
 
     const fillsFile = path.join(dir, 'paper', 'fills', '2026-09-10.jsonl')
     await vi.waitFor(async () => {
-      expect(await readFile(fillsFile, 'utf8')).toContain('"reason":"signal"')
+      const text = await readFile(fillsFile, 'utf8')
+      expect(text).toContain('"reason":"signal"')
+      // 默认费率 1.7 元/张 × 2 张。
+      expect(text).toContain('"feeCny":3.4')
     })
+    const recs = (await readFile(path.join(dir, 'recommendations', '2026-09-10.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
+    expect('sessionId' in (recs[0]!)).toBe(false)
+    expect(recs[0]!.hostAsOf).toBe('2026-09-10T05:40:23.000Z')
   })
 
   it('cn_put_option_bar_recommendation 缺保证金服务时跳过 paper fill', async () => {

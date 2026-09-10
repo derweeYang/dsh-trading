@@ -15,6 +15,7 @@ import {
   loadPaperState,
   premiumCny,
   quoteFillPrice,
+  quoteFillPriceWithSource,
   resetPaperState,
   savePaperState,
   sizeQty,
@@ -80,6 +81,14 @@ describe('option-paper', () => {
     expect(quoteFillPrice({ code: 'x', strike: 1 }, 'buy')).toBeUndefined()
   })
 
+  it('quoteFillPriceWithSource marks last / prev_settle and rejects bad rows', () => {
+    expect(quoteFillPriceWithSource({ code: 'x', strike: 1, last: 0.05 })).toEqual({ price: 0.05, source: 'last' })
+    expect(quoteFillPriceWithSource({ code: 'x', strike: 1, prevSettle: 0.04 })).toEqual({ price: 0.04, source: 'prev_settle' })
+    expect(quoteFillPriceWithSource({ code: 'x', strike: 1, last: 0.05, prevSettle: 0.04 })?.source).toBe('last')
+    expect(quoteFillPriceWithSource({ code: 'x', strike: 1, last: -1, prevSettle: 0.04 })?.source).toBe('prev_settle')
+    expect(quoteFillPriceWithSource({ code: 'x', strike: 1 })).toBeUndefined()
+  })
+
   it('completeVerticalLegs down is bear call spread', () => {
     const out = completeVerticalLegs(chain, 'down', 1)
     expect(out.skip).toBeUndefined()
@@ -87,6 +96,7 @@ describe('option-paper', () => {
       'sell:588000C2609M01700',
       'buy:588000C2609M01750',
     ])
+    expect(out.legs.every((leg) => leg.priceSource === 'last')).toBe(true)
   })
 
   it('sizeQty respects maxContracts and cash', () => {
@@ -211,6 +221,38 @@ describe('option-paper', () => {
     })
     expect('fill' in r && r.fill.qty).toBe(2)
     expect('fill' in r ? r.fill.legs.map((leg) => leg.qty) : []).toEqual([2, 4, 2])
+    // fee 按每腿张数合计：1.7 × (2+4+2) = 13.6；模型自报价腿标 pick。
+    expect('fill' in r && r.fill.feeCny).toBeCloseTo(13.6, 10)
+    expect('fill' in r ? r.fill.legs.every((leg) => leg.priceSource === 'pick') : false).toBe(true)
+  })
+
+  it('decidePaperOpen fee defaults to 1.7 per contract across legs', () => {
+    const r = decidePaperOpen({
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      fillsToday: [],
+      chainFor: () => chain,
+      marginFor: () => 282,
+      nowIso: 't',
+      cash: 100_000,
+    })
+    // vertical qty=1 → 2 张 × 1.7 = 3.4；链补腿标 last。
+    expect('fill' in r && r.fill.feeCny).toBeCloseTo(3.4, 10)
+    expect('fill' in r ? r.fill.legs.every((leg) => leg.priceSource === 'last') : false).toBe(true)
+  })
+
+  it('decidePaperOpen feePerContract 0 omits feeCny', () => {
+    const r = decidePaperOpen({
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      fillsToday: [],
+      chainFor: () => chain,
+      marginFor: () => 282,
+      nowIso: 't',
+      cash: 100_000,
+      feePerContract: 0,
+    })
+    expect('fill' in r && 'feeCny' in r.fill).toBe(false)
   })
 
   it('failed margin lookup is no_quote', () => {
@@ -291,6 +333,63 @@ describe('option-paper', () => {
     expect(closed.account.cash).toBeGreaterThan(opened.account.cash - 1)
   })
 
+  it('applyOpen deducts feeCny and records openFeeCny; legacy fills stay fee-free', () => {
+    const base = { account: emptyPaperAccount('t'), positions: [], fills: [] } as const
+    const legacy = applyOpen(base, {
+      id: 'o1', bucketStart: 'b', asOf: 't', underlying: '588000', template: 'vertical',
+      offset: 'open', qty: 1, legs: [], premiumCny: 218, marginCny: 282, reason: 'signal',
+    } as never)
+    expect(legacy.account.cash).toBe(100_000 + 218 - 282)
+    expect(legacy.positions[0]?.openFeeCny).toBeUndefined()
+
+    const priced = applyOpen(base, {
+      id: 'o2', bucketStart: 'b', asOf: 't', underlying: '588000', template: 'vertical',
+      offset: 'open', qty: 1, legs: [], premiumCny: 218, marginCny: 282, reason: 'signal',
+      feeCny: 3.4,
+    } as never)
+    expect(priced.account.cash).toBe(100_000 + 218 - 282 - 3.4)
+    expect(priced.positions[0]?.openFeeCny).toBe(3.4)
+    expect(priced.fills[0]?.feeCny).toBe(3.4)
+  })
+
+  it('applyClose books both-side fees into realizedPnl; legacy positions only pay close fee', () => {
+    const base = { account: emptyPaperAccount('t'), positions: [], fills: [] } as const
+    const openLegs = [
+      { code: '588000C2609M01700', side: 'sell' as const, qty: 1, fillPrice: 0.0566 },
+      { code: '588000C2609M01750', side: 'buy' as const, qty: 1, fillPrice: 0.0348 },
+    ]
+    const closeLegs = [
+      { code: '588000C2609M01700', side: 'buy' as const, qty: 1, fillPrice: 0.05 },
+      { code: '588000C2609M01750', side: 'sell' as const, qty: 1, fillPrice: 0.03 },
+    ]
+    // openPremium = +218（sell 566 − buy 348）；closePremium = −200（buy 500 − sell 300）。
+    expect(premiumCny(openLegs)).toBeCloseTo(218, 6)
+    expect(premiumCny(closeLegs)).toBeCloseTo(-200, 6)
+
+    const withOpenFee = applyOpen(base, {
+      id: 'p1', bucketStart: 'b', asOf: 't', underlying: '588000', template: 'vertical',
+      offset: 'open', qty: 1, legs: openLegs, premiumCny: 218, marginCny: 282,
+      reason: 'signal', feeCny: 3.4,
+    } as never)
+    const closedPriced = applyClose(withOpenFee, '588000:b', closeLegs, 'close5', 't2')
+    // closeFee = 1.7×2 = 3.4；realizedPnl = (218−200) − 3.4 − 3.4 = 11.2。
+    expect(closedPriced.fills.at(-1)?.feeCny).toBeCloseTo(3.4, 10)
+    expect(closedPriced.account.realizedPnl).toBeCloseTo(18 - 3.4 - 3.4, 10)
+
+    const legacy = applyOpen(base, {
+      id: 'p2', bucketStart: 'b', asOf: 't', underlying: '588000', template: 'vertical',
+      offset: 'open', qty: 1, legs: openLegs, premiumCny: 218, marginCny: 282,
+      reason: 'signal',
+    } as never)
+    const closedLegacy = applyClose(legacy, '588000:b', closeLegs, 'close5', 't2')
+    // 旧持仓 openFeeCny 缺省 → 只扣 closeFee。
+    expect(closedLegacy.account.realizedPnl).toBeCloseTo(18 - 3.4, 10)
+
+    const closedFree = applyClose(legacy, '588000:b', closeLegs, 'close5', 't2', 0)
+    expect(closedFree.account.realizedPnl).toBeCloseTo(18, 10)
+    expect(closedFree.fills.at(-1) && 'feeCny' in closedFree.fills.at(-1)!).toBe(false)
+  })
+
   it('hasSuccessfulOpen ignores skipped fills', () => {
     expect(hasSuccessfulOpen([{
       id: 's', bucketStart: 'b', asOf: 't', offset: 'open', qty: 0, legs: [],
@@ -330,6 +429,29 @@ describe('option-paper', () => {
         boxHigh: box.boxHigh,
       }),
     ])
+  })
+
+  it('tryPaperOpen honors an injected feePerContract of 0', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-'))
+    await tryPaperOpen({
+      root,
+      date: '2026-09-10',
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      nowIso: '2026-09-10T05:40:23.000Z',
+      getChain: async () => chain,
+      getMargin: async () => 282,
+      feePerContract: 0,
+    })
+    const state = await loadPaperState(root, '2026-09-10', 'unused')
+
+    expect(state.fills).toHaveLength(1)
+    expect('feeCny' in (state.fills[0] ?? {})).toBe(false)
+    expect(state.positions[0]?.openFeeCny).toBeUndefined()
+    expect(state.account.cash).toBeCloseTo(
+      100_000 + premiumCny(state.fills[0]!.legs) - state.positions[0]!.marginCny,
+      6,
+    )
   })
 
   it('tryPaperOpen persists duplicate_bucket on a second call', async () => {
@@ -449,13 +571,19 @@ describe('option-paper', () => {
       nowIso: '2026-09-10T06:56:00.000Z',
       session: 'close5',
       calendarDate: '2026-09-10',
-      getMark: async (_code, side) => side === 'buy' ? 0.05 : 0.03,
+      getMark: async (_code, side) => side === 'buy'
+        ? { price: 0.05, source: 'last' }
+        : { price: 0.03, source: 'last' },
       getLastClose: async () => undefined,
     })
     const state = await loadPaperState(root, '2026-09-10', 'unused')
 
     expect(state.positions).toEqual([])
     expect(state.fills.at(-1)?.reason).toBe('close5')
+    // 平仓双边费：2 张 × 1.7 = 3.4；开仓 fill 同样带费。
+    expect(state.fills.at(-1)?.feeCny).toBeCloseTo(3.4, 10)
+    expect(state.fills[0]?.feeCny).toBeCloseTo(3.4, 10)
+    expect(state.fills.at(-1)?.legs.every((leg) => leg.priceSource === 'last')).toBe(true)
   })
 
   it('tryPaperManage skips one rejected mark and closes the other position', async () => {
@@ -498,7 +626,7 @@ describe('option-paper', () => {
       calendarDate: '2026-09-10',
       getMark: async (code) => {
         if (code === 'BAD') throw new Error('mark failed')
-        return 0.03
+        return { price: 0.03, source: 'last' }
       },
       getLastClose: async () => undefined,
     })
