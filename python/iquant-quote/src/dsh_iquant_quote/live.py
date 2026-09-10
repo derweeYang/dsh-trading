@@ -12,6 +12,23 @@ from dsh_iquant_quote.option_names import parse_option_name
 CST = timezone(timedelta(hours=8))
 DAY_MS = 86_400_000
 
+#: A 股现货/期权市场 token。HK 交易时段不同，不做窗口短路。
+CN_LIVE_MARKETS = {"SH", "SZ", "BJ", "SHO", "SZO"}
+
+
+def trading_window_open(moment: datetime | None = None) -> bool:
+    """A 股现货/ETF 期权可能产生新 tick 的时段：工作日 9:15–15:05（保守含集合竞价与收盘缓冲）。
+
+    窗口外必然无新行情，ticker/chain 直接走日 K 回落，省掉每次 2s 的 drain 死等；
+    节假日落在窗口内时仍走原 drain 路径，行为不变。
+    """
+    now = moment or datetime.now(tz=CST)
+    if now.weekday() >= 5:
+        return False
+    minute_of_day = now.hour * 60 + now.minute
+    return 9 * 60 + 15 <= minute_of_day <= 15 * 60 + 5
+
+
 DEFAULT_SDK_ROOT = r"D:\workspace\myquant\iquant_market_clean_fresh"
 DEFAULT_VENDOR_ROOT = r"D:\workspace\myquant\installed\国信iQuant策略交易平台"
 
@@ -61,7 +78,9 @@ class LiveBackend:
         try:
             from iquant.quote import QuoteClient
         except Exception as err:  # noqa: BLE001
-            raise QuoteGatewayError("NETWORK", f"cannot import iquant.quote: {err}") from err
+            raise QuoteGatewayError(
+                "NETWORK", f"cannot import iquant.quote: {err}"
+            ) from err
         client = QuoteClient(paths["api_dll"], paths["qmtquote"], paths["config"])
         try:
             client.login(allow_network_login=True)
@@ -91,7 +110,9 @@ class LiveBackend:
             "timestamp": daily["timestamp"],
         }
 
-    def klines(self, market: str, code: str, interval: str, limit: int) -> list[dict[str, Any]]:
+    def klines(
+        self, market: str, code: str, interval: str, limit: int
+    ) -> list[dict[str, Any]]:
         period_ms = 86_400_000 if interval == "1d" else 60_000
         end_ms = int(time.time() * 1000)
         start_ms = end_ms - max(limit, 1) * period_ms * 2
@@ -105,12 +126,19 @@ class LiveBackend:
         try:
             rows = client.get_instrument_names(market)
         except Exception as err:  # noqa: BLE001
-            raise QuoteGatewayError("NETWORK", f"instrument names failed: {err}") from err
-        out = [{"market": market, "code": row.get("code"), "name": row.get("name")} for row in rows]
+            raise QuoteGatewayError(
+                "NETWORK", f"instrument names failed: {err}"
+            ) from err
+        out = [
+            {"market": market, "code": row.get("code"), "name": row.get("name")}
+            for row in rows
+        ]
         self._names_cache[market] = (time.time(), out)
         return out
 
     def snapshot(self, market: str, symbols: list[str]) -> list[dict[str, Any]]:
+        if (market or "").upper() in CN_LIVE_MARKETS and not trading_window_open():
+            raise QuoteGatewayError("NO_DATA", f"{market} outside trading window")
         client = self._ensure()
         codes = [str(item).split(".")[0] for item in symbols]
         try:
@@ -140,9 +168,13 @@ class LiveBackend:
                 {
                     "symbol": f"{code}.{market}",
                     "last": float(snap.get("last") or 0),
-                    "preClose": float(snap.get("pre_close") or snap.get("preClose") or 0),
+                    "preClose": float(
+                        snap.get("pre_close") or snap.get("preClose") or 0
+                    ),
                     "volume": int(snap.get("volume") or 0),
-                    "timestamp": int(snap.get("timestamp_ms") or snap.get("timestamp") or 0),
+                    "timestamp": int(
+                        snap.get("timestamp_ms") or snap.get("timestamp") or 0
+                    ),
                 }
             )
         if not out:
@@ -200,8 +232,12 @@ class LiveBackend:
                 "low": float(bar.get("low") or 0),
                 "close": float(bar.get("close") or 0),
                 "volume": float(bar.get("volume") or 0),
-                "closeTime": int(bar.get("timestamp_ms") or bar.get("timestampMs") or 0),
-                "timestampMs": int(bar.get("timestamp_ms") or bar.get("timestampMs") or 0),
+                "closeTime": int(
+                    bar.get("timestamp_ms") or bar.get("timestampMs") or 0
+                ),
+                "timestampMs": int(
+                    bar.get("timestamp_ms") or bar.get("timestampMs") or 0
+                ),
             }
             for bar in bars[:limit]
         ]
@@ -211,12 +247,16 @@ class LiveBackend:
         if token in {"SH", "SZ"}:
             token = "SHO" if token == "SH" else "SZO"
         if token not in {"SHO", "SZO"}:
-            raise QuoteGatewayError("BAD_REQUEST", f"option instruments require SHO/SZO, got {market!r}")
+            raise QuoteGatewayError(
+                "BAD_REQUEST", f"option instruments require SHO/SZO, got {market!r}"
+            )
         needle = underlying.strip()
         as_of = self._as_of or date.today()
         out: list[dict[str, Any]] = []
         for row in self.instruments(token):
-            parsed = parse_option_name(str(row.get("name") or ""), market=token, as_of=as_of)
+            parsed = parse_option_name(
+                str(row.get("name") or ""), market=token, as_of=as_of
+            )
             if parsed is None or parsed.underlying != needle:
                 continue
             out.append(
@@ -234,13 +274,17 @@ class LiveBackend:
             )
         return out
 
-    def option_chain(self, market: str, underlying: str, expiry_month: str) -> dict[str, Any]:
+    def option_chain(
+        self, market: str, underlying: str, expiry_month: str
+    ) -> dict[str, Any]:
         token = (market or "").strip().upper()
         if token in {"SH", "SZ"}:
             token = "SHO" if token == "SH" else "SZO"
         month = (expiry_month or "").strip()
         if len(month) != 4 or not month.isdigit():
-            raise QuoteGatewayError("BAD_REQUEST", f"expiryMonth must be YYMM: {expiry_month!r}")
+            raise QuoteGatewayError(
+                "BAD_REQUEST", f"expiryMonth must be YYMM: {expiry_month!r}"
+            )
         rows = [
             row
             for row in self.option_instruments(token, underlying)
@@ -287,8 +331,12 @@ class LiveBackend:
             "puts": sorted(puts, key=lambda item: item["strike"]),
         }
 
-    def _collect_ticks(self, market: str, codes: list[str]) -> dict[str, dict[str, Any]]:
+    def _collect_ticks(
+        self, market: str, codes: list[str]
+    ) -> dict[str, dict[str, Any]]:
         if not codes:
+            return {}
+        if (market or "").upper() in CN_LIVE_MARKETS and not trading_window_open():
             return {}
         client = self._ensure()
         try:
@@ -318,7 +366,9 @@ class LiveBackend:
                 "last": float(snap.get("last") or 0),
                 "preClose": float(snap.get("pre_close") or snap.get("preClose") or 0),
                 "volume": int(snap.get("volume") or 0),
-                "timestamp": int(snap.get("timestamp_ms") or snap.get("timestamp") or 0),
+                "timestamp": int(
+                    snap.get("timestamp_ms") or snap.get("timestamp") or 0
+                ),
             }
         return out
 
@@ -331,7 +381,9 @@ class LiveBackend:
         end_ms = int(time.time() * 1000)
         start_ms = end_ms - 14 * DAY_MS
         try:
-            bars = self.history_bars(market, code, start_ms, end_ms, 8, timeout_ms=3_000)
+            bars = self.history_bars(
+                market, code, start_ms, end_ms, 8, timeout_ms=3_000
+            )
         except QuoteGatewayError:
             return None
         if not bars:
@@ -346,4 +398,3 @@ class LiveBackend:
         }
         self._daily_cache[(market, code)] = quote
         return quote
-

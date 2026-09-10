@@ -10,6 +10,14 @@ from dsh_iquant_quote.errors import QuoteGatewayError
 from dsh_iquant_quote.live import LiveBackend
 
 
+@pytest.fixture(autouse=True)
+def _market_window_open(monkeypatch):
+    """默认按盘中跑；窗口短路行为另有专门测试。"""
+    monkeypatch.setattr(
+        "dsh_iquant_quote.live.trading_window_open", lambda moment=None: True
+    )
+
+
 class _FakeRequest:
     def __init__(self, callback, bars):
         self._callback = callback
@@ -167,3 +175,35 @@ def test_option_chain_no_matching_names_is_no_data():
     with pytest.raises(QuoteGatewayError) as err:
         _backend(client).option_chain("SHO", "510050", "2609")
     assert err.value.code == "NO_DATA"
+
+
+def test_option_chain_closed_window_skips_tick_subscription(monkeypatch):
+    monkeypatch.setattr(
+        "dsh_iquant_quote.live.trading_window_open", lambda moment=None: False
+    )
+    client = _FakeQuoteClient(
+        [{"market": "SHO", "code": "10011255", "name": "50ETF购9月2650"}],
+        ticks={
+            "10011255": {
+                "last": 0.3658,
+                "pre_close": 0.35,
+                "volume": 1200,
+                "timestamp_ms": 1,
+            }
+        },
+        bars_by_code={
+            "10011255": [
+                {
+                    "timestamp_ms": 1_756_886_400_000,
+                    "open": 0.2,
+                    "high": 0.21,
+                    "low": 0.19,
+                    "close": 0.205,
+                    "volume": 50,
+                }
+            ]
+        },
+    )
+    chain = _backend(client).option_chain("SHO", "510050", "2609")
+    assert client.subscribed is None  # 窗口外不订阅
+    assert chain["calls"][0]["last"] == pytest.approx(0.205)  # 走日 K 回落
