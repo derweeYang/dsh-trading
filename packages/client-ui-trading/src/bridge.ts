@@ -1370,12 +1370,12 @@ export class TradingBridge {
     const nowIso = new Date(nowMs).toISOString()
     const state = await loadPaperState(optionsDataRoot(), shanghaiCalendarDate(nowMs), nowIso)
     const getMark = this.#paperMarkLookup()
-    const mtmRows = await Promise.all(state.positions.flatMap((position) => (
+    const marketValueRows = await Promise.all(state.positions.flatMap((position) => (
       position.legs.map(async (leg) => {
         const mark = await getMark(leg.code, leg.side)
         const price = mark ?? leg.fillPrice
         return (leg.side === 'buy' ? 1 : -1)
-          * (price - leg.fillPrice)
+          * price
           * leg.qty
           * OPTION_MULTIPLIER
       })
@@ -1384,7 +1384,9 @@ export class TradingBridge {
     return {
       ok: true,
       account: state.account,
-      equity: state.account.cash + marginCny + mtmRows.reduce((total, value) => total + value, 0),
+      equity: state.account.cash
+        + marginCny
+        + marketValueRows.reduce((total, value) => total + value, 0),
       positions: state.positions,
     }
   }

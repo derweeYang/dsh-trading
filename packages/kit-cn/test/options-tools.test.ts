@@ -195,6 +195,58 @@ describe('cn_get_option_chain', () => {
     })
   })
 
+  it('cn_put_option_bar_recommendation 缺保证金服务时跳过 paper fill', async () => {
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { mkdtemp, readFile } = await import('node:fs/promises')
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-put-paper-margin-'))
+    const tool = createPutOptionBarRecommendationTool({
+      dataRoot: () => dir,
+      now: () => Date.parse('2026-09-10T05:40:23.000Z'),
+      getChain: async () => ({
+        underlying: '588000',
+        expiryMonth: '2609',
+        source: 'iquant',
+        spot: 1.668,
+        calls: [
+          { code: '588000C2609M01700', strike: 1.7, last: 0.0566 },
+          { code: '588000C2609M01750', strike: 1.75, last: 0.0348 },
+        ],
+        puts: [],
+      }),
+    })
+    await tool.execute({
+      recommendation: JSON.stringify({
+        bucketStart: '2026-09-10T05:40:00.000Z',
+        asOf: '2026-09-10T05:40:23.000Z',
+        session: 'regular',
+        opportunity: 'mean_reversion',
+        edge: 'x',
+        logic: 'x',
+        playbook: 'x',
+        invalidIf: 'x',
+        picks: [{ underlying: '588000', regime: 'mean_revert', template: 'vertical', cycleId: '588000:1' }],
+        noTrade: false,
+      }),
+      forecasts: JSON.stringify({
+        '588000': {
+          underlying: '588000',
+          name: '科创50',
+          exchange: 'SSE',
+          horizonMin: 5,
+          regime: 'mean_revert',
+          session: 'regular',
+          candidates: [{ template: 'vertical', bias: 'down', invalidIf: 'x', reason: 'x' }],
+        },
+      }),
+    })
+
+    const fillsFile = path.join(dir, 'paper', 'fills', '2026-09-10.jsonl')
+    await vi.waitFor(async () => {
+      expect(await readFile(fillsFile, 'utf8')).toContain('"skip":"no_quote"')
+    })
+  })
+
   it('磁盘 ContextPacket 使 theta_rent + unknown 落盘失败', async () => {
     const os = await import('node:os')
     const path = await import('node:path')

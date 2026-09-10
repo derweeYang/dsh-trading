@@ -24,7 +24,7 @@ export interface OptionToolOptions {
   now?: () => number
   dataRoot?: () => string
   getChain?: (underlying: string) => Promise<OptionChain | undefined>
-  getMargin?: (legs: PaperFill['legs']) => Promise<number>
+  getMargin?: (legs: PaperFill['legs']) => Promise<number | undefined>
 }
 
 function resolveService(options: OptionToolOptions): CnOptionsService {
@@ -623,9 +623,9 @@ export function createPutOptionBarRecommendationTool(options: OptionToolOptions 
         },
         getMargin: async (legs) => {
           try {
-            return await options.getMargin?.(legs) ?? 0
+            return await options.getMargin?.(legs)
           } catch {
-            return 0
+            return undefined
           }
         },
       }).catch(() => {})

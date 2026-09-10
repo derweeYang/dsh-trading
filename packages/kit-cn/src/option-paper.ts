@@ -30,6 +30,24 @@ export interface PaperState {
 
 type PaperLegs = PaperFill['legs']
 type SkipReason = NonNullable<PaperFill['skip']>
+const paperStateLocks = new Map<string, Promise<void>>()
+
+async function withPaperStateLock<T>(root: string, task: () => Promise<T>): Promise<T> {
+  const previous = paperStateLocks.get(root) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const queued = previous.then(() => current)
+  paperStateLocks.set(root, queued)
+  await previous
+  try {
+    return await task()
+  } finally {
+    release()
+    if (paperStateLocks.get(root) === queued) paperStateLocks.delete(root)
+  }
+}
 
 export function emptyPaperAccount(nowIso: string): PaperAccount {
   return {
@@ -260,15 +278,20 @@ function explicitLegs(legs: readonly unknown[] | undefined): PaperLegs | undefin
       last?: unknown
       fillPrice?: unknown
       premium?: unknown
+      qty?: unknown
     }
     const price = [row.last, row.fillPrice, row.premium]
       .find((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    const qty = row.qty ?? 1
     if (
       typeof row.code !== 'string'
       || (row.side !== 'buy' && row.side !== 'sell')
       || price === undefined
+      || typeof qty !== 'number'
+      || !Number.isInteger(qty)
+      || qty <= 0
     ) return undefined
-    return { code: row.code, side: row.side, qty: 1, fillPrice: price }
+    return { code: row.code, side: row.side, qty, fillPrice: price }
   })
   return parsed.every((leg) => leg !== undefined) ? parsed as PaperLegs : undefined
 }
@@ -278,13 +301,20 @@ export function decidePaperOpen(input: {
   forecastByUnderlying: Readonly<Record<string, OptionIntradayBoxRow | undefined>>
   fillsToday: readonly PaperFill[]
   chainFor: (underlying: string) => OptionChain | undefined
-  marginFor: (legs: PaperLegs) => number
+  marginFor: (legs: PaperLegs) => number | undefined
   nowIso: string
   cash: number
 }): { fill: Omit<PaperFill, 'cashAfter'> } | { skip: PaperFill } | { noop: true } {
   const { rec } = input
-  if (rec.skipReason !== undefined || rec.noTrade) return { noop: true }
-  if (hasSuccessfulOpen(input.fillsToday, rec.bucketStart)) {
+  if (
+    rec.skipReason !== undefined
+    || rec.noTrade
+    || rec.session === 'close5'
+    || rec.session === 'closed'
+  ) return { noop: true }
+  if (input.fillsToday.some((fill) => (
+    fill.bucketStart === rec.bucketStart && fill.offset === 'open'
+  ))) {
     return { skip: skipFill(rec, input.nowIso, input.cash, 'duplicate_bucket') }
   }
 
@@ -320,6 +350,14 @@ export function decidePaperOpen(input: {
 
     let unitLegs = explicitLegs(pick.legs)
     if (unitLegs === undefined) {
+      if (pick.template !== 'vertical') {
+        lastFailure = {
+          reason: 'no_quote',
+          underlying: pick.underlying,
+          template: pick.template,
+        }
+        continue
+      }
       const chain = input.chainFor(pick.underlying)
       if (chain === undefined) {
         lastFailure = {
@@ -343,6 +381,14 @@ export function decidePaperOpen(input: {
 
     const premiumPer = premiumCny(unitLegs)
     const marginPer = input.marginFor(unitLegs)
+    if (marginPer === undefined || !Number.isFinite(marginPer) || marginPer < 0) {
+      lastFailure = {
+        reason: 'no_quote',
+        underlying: pick.underlying,
+        template: pick.template,
+      }
+      continue
+    }
     const qty = sizeQty(pick.maxContracts, input.cash, premiumPer, marginPer)
     if (qty === 0) {
       lastFailure = {
@@ -353,7 +399,7 @@ export function decidePaperOpen(input: {
       continue
     }
 
-    const legs = unitLegs.map((leg) => ({ ...leg, qty }))
+    const legs = unitLegs.map((leg) => ({ ...leg, qty: leg.qty * qty }))
     return {
       fill: {
         id: `${pick.underlying}:${rec.bucketStart}:open`,
@@ -435,18 +481,20 @@ export async function savePaperState(
 }
 
 export async function resetPaperState(root: string, nowIso: string): Promise<PaperState> {
-  const state: PaperState = {
-    account: emptyPaperAccount(nowIso),
-    positions: [],
-    fills: [],
-  }
-  const accountFile = paperAccountPath(root)
-  await mkdir(path.dirname(accountFile), { recursive: true })
-  await Promise.all([
-    writeFile(accountFile, `${JSON.stringify(state.account)}\n`, 'utf8'),
-    writeFile(paperPositionsPath(root), '[]\n', 'utf8'),
-  ])
-  return state
+  return await withPaperStateLock(root, async () => {
+    const state: PaperState = {
+      account: emptyPaperAccount(nowIso),
+      positions: [],
+      fills: [],
+    }
+    const accountFile = paperAccountPath(root)
+    await mkdir(path.dirname(accountFile), { recursive: true })
+    await Promise.all([
+      writeFile(accountFile, `${JSON.stringify(state.account)}\n`, 'utf8'),
+      writeFile(paperPositionsPath(root), '[]\n', 'utf8'),
+    ])
+    return state
+  })
 }
 
 export async function tryPaperOpen(input: {
@@ -456,8 +504,9 @@ export async function tryPaperOpen(input: {
   forecastByUnderlying: Readonly<Record<string, OptionIntradayBoxRow | undefined>>
   nowIso: string
   getChain: (underlying: string) => Promise<OptionChain | undefined>
-  getMargin: (legs: PaperFill['legs']) => Promise<number>
+  getMargin: (legs: PaperFill['legs']) => Promise<number | undefined>
 }): Promise<void> {
+  await withPaperStateLock(input.root, async () => {
   try {
     const state = await loadPaperState(input.root, input.date, input.nowIso)
     const gate = decidePaperOpen({
@@ -513,11 +562,22 @@ export async function tryPaperOpen(input: {
 
       try {
         const explicit = explicitLegs(pick.legs)
-        const chain = explicit === undefined ? await input.getChain(pick.underlying) : undefined
+        const chain = explicit === undefined && pick.template === 'vertical'
+          ? await input.getChain(pick.underlying)
+          : undefined
         const unitLegs = explicit ?? (
-          chain === undefined ? undefined : completeVerticalLegs(chain, candidate.bias, 1).legs
+          chain === undefined || pick.template !== 'vertical'
+            ? undefined
+            : completeVerticalLegs(chain, candidate.bias, 1).legs
         )
-        const margin = unitLegs === undefined ? 0 : await input.getMargin(unitLegs)
+        let margin: number | undefined
+        if (unitLegs !== undefined) {
+          try {
+            margin = await input.getMargin(unitLegs)
+          } catch {
+            margin = undefined
+          }
+        }
         const decision = decidePaperOpen({
           rec,
           forecastByUnderlying: input.forecastByUnderlying,
@@ -542,7 +602,14 @@ export async function tryPaperOpen(input: {
           return
         }
       } catch {
-        // A failed quote or margin lookup only disqualifies this pick.
+        lastSkip = skipFill(
+          rec,
+          input.nowIso,
+          state.account.cash,
+          'no_quote',
+          pick.underlying,
+          pick.template,
+        )
       }
     }
 
@@ -555,6 +622,7 @@ export async function tryPaperOpen(input: {
   } catch {
     // Paper-account failures must never break recommendation persistence.
   }
+  })
 }
 
 async function closeLegs(
@@ -584,6 +652,7 @@ export async function tryPaperManage(input: {
     volumeRatio?: number
   } | undefined>
 }): Promise<void> {
+  await withPaperStateLock(input.root, async () => {
   try {
     let state = await loadPaperState(input.root, input.date, input.nowIso)
     const currentDate = shanghaiCalendarDate(input.nowMs)
@@ -622,4 +691,5 @@ export async function tryPaperManage(input: {
   } catch {
     // Paper-account failures must never break cycle ticks.
   }
+  })
 }

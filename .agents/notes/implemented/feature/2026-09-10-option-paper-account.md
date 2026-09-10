@@ -10,7 +10,9 @@ Status: implemented
 
 ## Decision
 
-在宿主 `data/options/paper/` 维护单一虚拟账户，初始 `OPTION_PAPER_INITIAL_CASH`（100_000 CNY）。`normalizeRecommendation` 成功且 `noTrade=false`、无 skip 桩时，用当桶链价补腿、`maxContracts`（缺省 1）经 `sizeQty` 减张后开仓；成交价 `fillPrice` 取链行 `last ?? prevSettle`（链 wire 无 bid/ask）。tick 上解释 `invalidIf`，否则当日 `close5` 平仓。同一 `bucketStart` 全市场只成交第一笔过闸 combo，其余 pick 记 `one_fill`、后续推荐记 `duplicate_bucket`。只读桥三条 GET/POST；不打 `/options/order`，不设 `liveTrading`。与 `paper-trading-store` 隔离；本轮不改 `packages/client-ui-*/src/client/**`。
+在宿主 `data/options/paper/` 维护单一虚拟账户，初始 `OPTION_PAPER_INITIAL_CASH`（100_000 CNY）。`normalizeRecommendation` 成功且 `noTrade=false`、无 skip 桩、且会话不是 `close5|closed` 时开仓。仅 `vertical` 可用当桶链价自动补腿；其他模板必须提供含逐腿价格与数量比的完整 legs。`maxContracts`（缺省 1）经 `sizeQty` 得出 combo 张数，再乘各腿数量比；成交价 `fillPrice` 取链行 `last ?? prevSettle`（链 wire 无 bid/ask）。保证金服务缺失、异常或不返回有效值时按 `no_quote` 跳过，不以零保证金成交。
+
+tick 上解释 `invalidIf`，否则当日 `close5` 平仓。同一 `bucketStart` 的首个 live 尝试（成交或 `no_quote` 等 skip）即消费该桶，后续推荐记 `duplicate_bucket`。open/manage/reset 的 load-modify-save 共用按 data root 的进程内串行锁。只读桥三条 GET/POST；权益为 `cash + lockedMargin + signed current leg market value`，因此开仓价不变时仍等于初始资金；不打 `/options/order`，不设 `liveTrading`。与 `paper-trading-store` 隔离；本轮不改 `packages/client-ui-*/src/client/**`。
 
 ## Context & Efficiency Impact
 
@@ -30,6 +32,9 @@ Status: implemented
 
 - kit-cn 单测覆盖补腿、减张、幂等、平仓、reset、与 live 隔离；`pnpm --filter @dshtrading/api build` 与相关包 test 绿。
 - `fillPrice` 用 `last ?? prevSettle`；`sizeQty` 按 `abs(premiumPer) + marginPer` 递减张数（与单测一致）。
+- 只有 vertical 可自动补腿；显式 legs 保留各腿 ratio 并按 combo 张数缩放；保证金查询失败落 `no_quote`。
+- `close5|closed` 不开仓；首个 live skip 也消费 bucket；同进程并发 open/manage/reset 串行化。
+- cash 已净记权利金且扣除锁定保证金，桥权益按 `cash + lockedMargin + signed mark value` 计算，避免开仓权利金重复计入。
 - 乘数常量 `OPTION_MULTIPLIER`（10_000）与 `OPTION_PAPER_INITIAL_CASH` 在 `@dshtrading/api` 与 kit-cn 导出。
 - 宽闸会把 probe 行成交；靠 `duplicate_bucket` 与 `no_quote` 限损，不能消除烂推荐。
 - `invalidIf` 自然语言解释失败会拖到 close5，盘中破箱可能晚平。

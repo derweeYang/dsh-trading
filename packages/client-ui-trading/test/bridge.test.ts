@@ -675,6 +675,56 @@ describe('TradingBridge option paper account', () => {
       else process.env[OPTIONS_DATA_ENV] = prev
     }
   })
+
+  it('keeps equity at initial cash when opening marks are unchanged', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-equity-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const asOf = new Date().toISOString()
+    await mkdir(path.join(dir, 'paper'), { recursive: true })
+    await writeFile(path.join(dir, 'paper', 'account.json'), `${JSON.stringify({
+      currency: 'CNY',
+      initialCash: 100000,
+      cash: 99936,
+      realizedPnl: 0,
+      updatedAt: asOf,
+    })}\n`, 'utf8')
+    await writeFile(path.join(dir, 'paper', 'positions.json'), `${JSON.stringify([{
+      id: '588000:bucket',
+      underlying: '588000',
+      template: 'vertical',
+      openedBucketStart: asOf,
+      invalidIf: 'x',
+      qty: 1,
+      marginCny: 282,
+      legs: [
+        { code: '588000C2609M01700', side: 'sell', qty: 1, fillPrice: 0.0566 },
+        { code: '588000C2609M01750', side: 'buy', qty: 1, fillPrice: 0.0348 },
+      ],
+    }])}\n`, 'utf8')
+    const bridge = new TradingBridge({
+      ...fakeHost({}),
+      getCnOptions: () => ({
+        getOptionChain: async () => ({
+          underlying: '588000',
+          expiryMonth: '2609',
+          source: 'iquant',
+          calls: [
+            { code: '588000C2609M01700', strike: 1.7, last: 0.0566 },
+            { code: '588000C2609M01750', strike: 1.75, last: 0.0348 },
+          ],
+          puts: [],
+        }),
+      }),
+    } as BridgeHost)
+    try {
+      const account = await bridge.optionPaperAccount()
+      expect(account.equity).toBe(100000)
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
+  })
 })
 
 

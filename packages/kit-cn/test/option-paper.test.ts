@@ -108,6 +108,19 @@ describe('option-paper', () => {
     expect('noop' in r).toBe(true)
   })
 
+  it.each(['close5', 'closed'] as const)('decidePaperOpen %s session is noop', (session) => {
+    const r = decidePaperOpen({
+      rec: liveRec({ session }),
+      forecastByUnderlying: { '588000': box },
+      fillsToday: [],
+      chainFor: () => chain,
+      marginFor: () => 282,
+      nowIso: 't',
+      cash: 100_000,
+    })
+    expect('noop' in r).toBe(true)
+  })
+
   it('duplicate_bucket after successful open', () => {
     const first = decidePaperOpen({
       rec: liveRec(),
@@ -146,6 +159,94 @@ describe('option-paper', () => {
       cash: 100_000,
     })
     expect('skip' in r && r.skip.skip === 'no_quote').toBe(true)
+  })
+
+  it('butterfly without explicit priced legs is no_quote', () => {
+    const butterflyBox = {
+      ...box,
+      candidates: [{ ...box.candidates[0]!, template: 'butterfly' as const, bias: 'neutral' as const }],
+    }
+    const r = decidePaperOpen({
+      rec: liveRec({
+        opportunity: 'theta_rent',
+        picks: [{ underlying: '588000', regime: 'mean_revert', template: 'butterfly', cycleId: '588000:1' }],
+      }),
+      forecastByUnderlying: { '588000': butterflyBox },
+      fillsToday: [],
+      chainFor: () => chain,
+      marginFor: () => 282,
+      nowIso: 't',
+      cash: 100_000,
+    })
+    expect('skip' in r && r.skip.skip === 'no_quote').toBe(true)
+  })
+
+  it('explicit leg ratios are multiplied by combo size', () => {
+    const butterflyBox = {
+      ...box,
+      candidates: [{ ...box.candidates[0]!, template: 'butterfly' as const, bias: 'neutral' as const }],
+    }
+    const r = decidePaperOpen({
+      rec: liveRec({
+        opportunity: 'theta_rent',
+        picks: [{
+          underlying: '588000',
+          regime: 'mean_revert',
+          template: 'butterfly',
+          cycleId: '588000:1',
+          maxContracts: 2,
+          legs: [
+            { code: 'L1', side: 'buy', qty: 1, last: 0.01 },
+            { code: 'L2', side: 'sell', qty: 2, last: 0.02 },
+            { code: 'L3', side: 'buy', qty: 1, last: 0.01 },
+          ],
+        }],
+      }),
+      forecastByUnderlying: { '588000': butterflyBox },
+      fillsToday: [],
+      chainFor: () => undefined,
+      marginFor: () => 100,
+      nowIso: 't',
+      cash: 100_000,
+    })
+    expect('fill' in r && r.fill.qty).toBe(2)
+    expect('fill' in r ? r.fill.legs.map((leg) => leg.qty) : []).toEqual([2, 4, 2])
+  })
+
+  it('failed margin lookup is no_quote', () => {
+    const r = decidePaperOpen({
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      fillsToday: [],
+      chainFor: () => chain,
+      marginFor: () => undefined,
+      nowIso: 't',
+      cash: 100_000,
+    })
+    expect('skip' in r && r.skip.skip === 'no_quote').toBe(true)
+  })
+
+  it('a live no_quote attempt consumes its bucket', () => {
+    const first = decidePaperOpen({
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      fillsToday: [],
+      chainFor: () => undefined,
+      marginFor: () => 282,
+      nowIso: 't',
+      cash: 100_000,
+    })
+    expect('skip' in first && first.skip.skip).toBe('no_quote')
+    const second = decidePaperOpen({
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      fillsToday: 'skip' in first ? [first.skip] : [],
+      chainFor: () => chain,
+      marginFor: () => 282,
+      nowIso: 't2',
+      cash: 100_000,
+    })
+    expect('skip' in second && second.skip.skip).toBe('duplicate_bucket')
   })
 
   it('invalidIf needs box break and volume surge', () => {
@@ -285,6 +386,48 @@ describe('option-paper', () => {
     expect(requested).toEqual(['588000'])
     expect(state.positions).toHaveLength(1)
     expect(state.positions[0]?.underlying).toBe('588000')
+  })
+
+  it('tryPaperOpen persists no_quote when margin lookup throws', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-'))
+    await tryPaperOpen({
+      root,
+      date: '2026-09-10',
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      nowIso: '2026-09-10T05:40:23.000Z',
+      getChain: async () => chain,
+      getMargin: async () => { throw new Error('margin unavailable') },
+    })
+    const state = await loadPaperState(root, '2026-09-10', 'unused')
+
+    expect(state.positions).toEqual([])
+    expect(state.fills).toEqual([expect.objectContaining({ skip: 'no_quote' })])
+  })
+
+  it('serializes concurrent opens for the same bucket', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-'))
+    let chainCalls = 0
+    const input = {
+      root,
+      date: '2026-09-10',
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      nowIso: '2026-09-10T05:40:23.000Z',
+      getChain: async () => {
+        chainCalls += 1
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        return chain
+      },
+      getMargin: async () => 282,
+    }
+
+    await Promise.all([tryPaperOpen(input), tryPaperOpen({ ...input, nowIso: '2026-09-10T05:40:24.000Z' })])
+    const state = await loadPaperState(root, '2026-09-10', 'unused')
+
+    expect(chainCalls).toBe(1)
+    expect(state.positions).toHaveLength(1)
+    expect(state.fills.map((fill) => fill.skip ?? fill.reason)).toEqual(['signal', 'duplicate_bucket'])
   })
 
   it('tryPaperManage close5 flattens persisted positions', async () => {

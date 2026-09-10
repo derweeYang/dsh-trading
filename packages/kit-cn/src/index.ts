@@ -270,7 +270,7 @@ export function apply(ctx: Context, config: Config): void {
       try {
         const service = lookupOptions()
         const underlying = /^(\d{6})/.exec(legs[0]?.code ?? '')?.[1]
-        if (service === undefined || underlying === undefined) return 0
+        if (service === undefined || underlying === undefined) return undefined
         const result = await service.getStrategy({
           underlying,
           legs: legs.map((leg) => ({
@@ -281,9 +281,9 @@ export function apply(ctx: Context, config: Config): void {
             premium: leg.fillPrice,
           })),
         })
-        return result.margin?.totalInitial ?? 0
+        return result.margin?.totalInitial
       } catch {
-        return 0
+        return undefined
       }
     },
   }))
