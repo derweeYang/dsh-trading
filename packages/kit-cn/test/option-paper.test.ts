@@ -1,3 +1,6 @@
+import { mkdtemp, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { OptionBarRecommendation, OptionChain, OptionIntradayBoxRow } from '@dshtrading/api'
 import {
@@ -9,10 +12,19 @@ import {
   emptyPaperAccount,
   hasSuccessfulOpen,
   invalidIfTriggered,
+  loadPaperState,
   premiumCny,
   quoteFillPrice,
+  resetPaperState,
   sizeQty,
+  tryPaperManage,
+  tryPaperOpen,
 } from '../src/option-paper.js'
+import {
+  paperAccountPath,
+  paperFillsPath,
+  paperPositionsPath,
+} from '../src/option-bar-ledger.js'
 
 const chain: OptionChain = {
   underlying: '588000',
@@ -182,5 +194,101 @@ describe('option-paper', () => {
       id: 's', bucketStart: 'b', asOf: 't', offset: 'open', qty: 0, legs: [],
       premiumCny: 0, marginCny: 0, cashAfter: 0, reason: 'skipped', skip: 'no_quote',
     }], 'b')).toBe(false)
+  })
+
+  it('reset persists a fresh 100000 CNY account and empty positions', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-'))
+    const state = await resetPaperState(root, '2026-09-10T05:00:00.000Z')
+
+    expect(state.account.cash).toBe(100_000)
+    expect(JSON.parse(await readFile(paperAccountPath(root), 'utf8'))).toEqual(state.account)
+    expect(JSON.parse(await readFile(paperPositionsPath(root), 'utf8'))).toEqual([])
+  })
+
+  it('tryPaperOpen persists one position with recommendation invalidation context', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-'))
+    const input = {
+      root,
+      date: '2026-09-10',
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      nowIso: '2026-09-10T05:40:23.000Z',
+      getChain: async () => chain,
+      getMargin: async () => 282,
+    }
+
+    await tryPaperOpen(input)
+    const state = await loadPaperState(root, input.date, input.nowIso)
+
+    expect(state.fills).toHaveLength(1)
+    expect(state.positions).toEqual([
+      expect.objectContaining({
+        invalidIf: input.rec.invalidIf,
+        boxLow: box.boxLow,
+        boxHigh: box.boxHigh,
+      }),
+    ])
+  })
+
+  it('tryPaperOpen persists duplicate_bucket on a second call', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-'))
+    const input = {
+      root,
+      date: '2026-09-10',
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      nowIso: '2026-09-10T05:40:23.000Z',
+      getChain: async () => chain,
+      getMargin: async () => 282,
+    }
+
+    await tryPaperOpen(input)
+    await tryPaperOpen({ ...input, nowIso: '2026-09-10T05:40:24.000Z' })
+    const fills = (await readFile(paperFillsPath(root, input.date), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line))
+
+    expect(fills).toHaveLength(2)
+    expect(fills[1].skip).toBe('duplicate_bucket')
+  })
+
+  it('tryPaperManage close5 flattens persisted positions', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-'))
+    await tryPaperOpen({
+      root,
+      date: '2026-09-10',
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      nowIso: '2026-09-10T05:40:23.000Z',
+      getChain: async () => chain,
+      getMargin: async () => 282,
+    })
+
+    await tryPaperManage({
+      root,
+      date: '2026-09-10',
+      nowMs: Date.parse('2026-09-10T06:56:00.000Z'),
+      nowIso: '2026-09-10T06:56:00.000Z',
+      session: 'close5',
+      calendarDate: '2026-09-10',
+      getMark: async (_code, side) => side === 'buy' ? 0.05 : 0.03,
+      getLastClose: async () => undefined,
+    })
+    const state = await loadPaperState(root, '2026-09-10', 'unused')
+
+    expect(state.positions).toEqual([])
+    expect(state.fills.at(-1)?.reason).toBe('close5')
+  })
+
+  it('paper try operations swallow dependency failures', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-'))
+    await expect(tryPaperOpen({
+      root,
+      date: '2026-09-10',
+      rec: liveRec(),
+      forecastByUnderlying: { '588000': box },
+      nowIso: '2026-09-10T05:40:23.000Z',
+      getChain: async () => { throw new Error('chain failed') },
+      getMargin: async () => 282,
+    })).resolves.toBeUndefined()
   })
 })

@@ -90,6 +90,18 @@ export function cyclesPath(root: string, date: string): string {
   return path.join(root, 'cycles', `${date}.jsonl`)
 }
 
+export function paperAccountPath(root: string): string {
+  return path.join(root, 'paper', 'account.json')
+}
+
+export function paperPositionsPath(root: string): string {
+  return path.join(root, 'paper', 'positions.json')
+}
+
+export function paperFillsPath(root: string, date: string): string {
+  return path.join(root, 'paper', 'fills', `${date}.jsonl`)
+}
+
 export function recommendationsPath(root: string, date: string): string {
   return path.join(root, 'recommendations', `${date}.jsonl`)
 }

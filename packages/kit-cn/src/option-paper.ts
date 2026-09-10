@@ -1,14 +1,24 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import {
   OPTION_MULTIPLIER,
   OPTION_PAPER_INITIAL_CASH,
   type OptionBarRecommendation,
   type OptionChain,
   type OptionIntradayBoxRow,
+  type OptionIntradaySession,
   type OptionQuoteRow,
   type PaperAccount,
   type PaperFill,
   type PaperPosition,
 } from '@dshtrading/api'
+import {
+  paperAccountPath,
+  paperFillsPath,
+  paperPositionsPath,
+  readJsonl,
+  shanghaiCalendarDate,
+} from './option-bar-ledger.js'
 
 export { OPTION_MULTIPLIER, OPTION_PAPER_INITIAL_CASH }
 
@@ -122,11 +132,17 @@ export function hasSuccessfulOpen(
 
 export function applyOpen(
   state: PaperState,
-  fill: Omit<PaperFill, 'cashAfter' | 'id'> & { id?: string },
+  fill: Omit<PaperFill, 'cashAfter' | 'id'> & {
+    id?: string
+    invalidIf?: string
+    boxLow?: number
+    boxHigh?: number
+  },
 ): PaperState {
   const cash = state.account.cash + fill.premiumCny - fill.marginCny
   const id = fill.id ?? `${fill.underlying ?? 'unknown'}:${fill.bucketStart}`
-  const recorded: PaperFill = { ...fill, id, cashAfter: cash }
+  const { invalidIf = '', boxLow, boxHigh, ...fillRow } = fill
+  const recorded: PaperFill = { ...fillRow, id, cashAfter: cash }
   const position: PaperPosition | undefined = (
     fill.reason !== 'skipped'
     && fill.qty > 0
@@ -137,9 +153,11 @@ export function applyOpen(
       underlying: fill.underlying,
       template: fill.template,
       openedBucketStart: fill.bucketStart,
-      invalidIf: '',
+      invalidIf,
       qty: fill.qty,
       marginCny: fill.marginCny,
+      ...(boxLow === undefined ? {} : { boxLow }),
+      ...(boxHigh === undefined ? {} : { boxHigh }),
       legs: fill.legs,
     } : undefined
 
@@ -362,5 +380,200 @@ export function decidePaperOpen(input: {
       lastFailure.underlying,
       lastFailure.template,
     ),
+  }
+}
+
+async function readJsonFile<T>(file: string, fallback: T): Promise<T> {
+  try {
+    return JSON.parse(await readFile(file, 'utf8')) as T
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return fallback
+    throw error
+  }
+}
+
+export async function loadPaperState(
+  root: string,
+  date: string,
+  nowIso: string,
+): Promise<PaperState> {
+  const [account, positions, fills] = await Promise.all([
+    readJsonFile(paperAccountPath(root), emptyPaperAccount(nowIso)),
+    readJsonFile<PaperPosition[]>(paperPositionsPath(root), []),
+    readJsonl<PaperFill>(paperFillsPath(root, date)),
+  ])
+  return { account, positions, fills }
+}
+
+function fillCalendarDate(fill: PaperFill): string | undefined {
+  const time = Date.parse(fill.asOf)
+  return Number.isFinite(time) ? shanghaiCalendarDate(time) : undefined
+}
+
+export async function savePaperState(
+  root: string,
+  date: string,
+  state: PaperState,
+): Promise<void> {
+  const accountFile = paperAccountPath(root)
+  const positionsFile = paperPositionsPath(root)
+  const fillsFile = paperFillsPath(root, date)
+  await Promise.all([
+    mkdir(path.dirname(accountFile), { recursive: true }),
+    mkdir(path.dirname(fillsFile), { recursive: true }),
+  ])
+  const fills = state.fills.filter((fill) => fillCalendarDate(fill) === date)
+  await Promise.all([
+    writeFile(accountFile, `${JSON.stringify(state.account)}\n`, 'utf8'),
+    writeFile(positionsFile, `${JSON.stringify(state.positions)}\n`, 'utf8'),
+    writeFile(
+      fillsFile,
+      fills.length === 0 ? '' : `${fills.map((fill) => JSON.stringify(fill)).join('\n')}\n`,
+      'utf8',
+    ),
+  ])
+}
+
+export async function resetPaperState(root: string, nowIso: string): Promise<PaperState> {
+  const state: PaperState = {
+    account: emptyPaperAccount(nowIso),
+    positions: [],
+    fills: [],
+  }
+  const accountFile = paperAccountPath(root)
+  await mkdir(path.dirname(accountFile), { recursive: true })
+  await Promise.all([
+    writeFile(accountFile, `${JSON.stringify(state.account)}\n`, 'utf8'),
+    writeFile(paperPositionsPath(root), '[]\n', 'utf8'),
+  ])
+  return state
+}
+
+function legsKey(legs: PaperLegs): string {
+  return legs.map((leg) => `${leg.code}:${leg.side}:${leg.qty}:${leg.fillPrice}`).join('|')
+}
+
+export async function tryPaperOpen(input: {
+  root: string
+  date: string
+  rec: OptionBarRecommendation
+  forecastByUnderlying: Readonly<Record<string, OptionIntradayBoxRow | undefined>>
+  nowIso: string
+  getChain: (underlying: string) => Promise<OptionChain | undefined>
+  getMargin: (legs: PaperFill['legs']) => Promise<number>
+}): Promise<void> {
+  try {
+    const state = await loadPaperState(input.root, input.date, input.nowIso)
+    const chains = new Map<string, OptionChain | undefined>()
+    const margins = new Map<string, number>()
+
+    for (const pick of input.rec.picks) {
+      if (!pick.underlying || !pick.template) continue
+      let legs = explicitLegs(pick.legs)
+      if (legs === undefined) {
+        let chain = chains.get(pick.underlying)
+        if (!chains.has(pick.underlying)) {
+          chain = await input.getChain(pick.underlying)
+          chains.set(pick.underlying, chain)
+        }
+        const forecast = input.forecastByUnderlying[pick.underlying]
+        const candidate = forecast?.candidates.find((item) => item.template === pick.template)
+        if (chain !== undefined && candidate !== undefined) {
+          const completed = completeVerticalLegs(chain, candidate.bias, 1)
+          if (completed.skip === undefined) legs = completed.legs
+        }
+      }
+      if (legs !== undefined) margins.set(legsKey(legs), await input.getMargin(legs))
+    }
+
+    const decision = decidePaperOpen({
+      rec: input.rec,
+      forecastByUnderlying: input.forecastByUnderlying,
+      fillsToday: state.fills,
+      chainFor: (underlying) => chains.get(underlying),
+      marginFor: (legs) => margins.get(legsKey(legs)) ?? 0,
+      nowIso: input.nowIso,
+      cash: state.account.cash,
+    })
+    let next = state
+    if ('fill' in decision) {
+      const forecast = decision.fill.underlying === undefined
+        ? undefined
+        : input.forecastByUnderlying[decision.fill.underlying]
+      next = applyOpen(state, {
+        ...decision.fill,
+        invalidIf: input.rec.invalidIf,
+        ...(forecast?.boxLow === undefined ? {} : { boxLow: forecast.boxLow }),
+        ...(forecast?.boxHigh === undefined ? {} : { boxHigh: forecast.boxHigh }),
+      })
+    } else if ('skip' in decision) {
+      next = { ...state, fills: [...state.fills, decision.skip] }
+    }
+    if (!('noop' in decision)) await savePaperState(input.root, input.date, next)
+  } catch {
+    // Paper-account failures must never break recommendation persistence.
+  }
+}
+
+async function closeLegs(
+  position: PaperPosition,
+  getMark: (code: string, side: 'buy' | 'sell') => Promise<number | undefined>,
+): Promise<PaperLegs | undefined> {
+  const legs: PaperLegs[number][] = []
+  for (const leg of position.legs) {
+    const side = leg.side === 'sell' ? 'buy' : 'sell'
+    const fillPrice = await getMark(leg.code, side)
+    if (fillPrice === undefined) return undefined
+    legs.push({ code: leg.code, side, qty: leg.qty, fillPrice })
+  }
+  return legs
+}
+
+export async function tryPaperManage(input: {
+  root: string
+  date: string
+  nowMs: number
+  nowIso: string
+  session: OptionIntradaySession
+  calendarDate: string
+  getMark: (code: string, side: 'buy' | 'sell') => Promise<number | undefined>
+  getLastClose: (underlying: string) => Promise<{
+    lastClose: number
+    volumeRatio?: number
+  } | undefined>
+}): Promise<void> {
+  try {
+    let state = await loadPaperState(input.root, input.date, input.nowIso)
+    const currentDate = shanghaiCalendarDate(input.nowMs)
+    for (const position of [...state.positions]) {
+      const openedMs = Date.parse(position.openedBucketStart)
+      const openedDate = Number.isFinite(openedMs)
+        ? shanghaiCalendarDate(openedMs)
+        : input.calendarDate
+      let reason: 'invalidIf' | 'close5' | 'session' | undefined
+      if (currentDate !== openedDate) {
+        reason = 'session'
+      } else {
+        const market = await input.getLastClose(position.underlying)
+        if (market !== undefined && invalidIfTriggered({
+          invalidIf: position.invalidIf,
+          lastClose: market.lastClose,
+          ...(position.boxLow === undefined ? {} : { boxLow: position.boxLow }),
+          ...(position.boxHigh === undefined ? {} : { boxHigh: position.boxHigh }),
+          ...(market.volumeRatio === undefined ? {} : { volumeRatio: market.volumeRatio }),
+        })) {
+          reason = 'invalidIf'
+        } else if (input.session === 'close5') {
+          reason = 'close5'
+        }
+      }
+      if (reason === undefined) continue
+      const legs = await closeLegs(position, input.getMark)
+      if (legs === undefined) continue
+      state = applyClose(state, position.id, legs, reason, input.nowIso)
+    }
+    await savePaperState(input.root, input.date, state)
+  } catch {
+    // Paper-account failures must never break cycle ticks.
   }
 }
