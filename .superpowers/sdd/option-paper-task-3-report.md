@@ -48,3 +48,15 @@ Result: exit code 0, `Build complete`.
 
 - File persistence uses whole-file rewrites and is not protected by a cross-process lock; concurrent writers could race. Current Task 4–5 callers are expected to serialize through the host process.
 - The pre-existing unrelated IV replay edits in `option-bar-ledger.ts` were left untouched and excluded from this task's commit.
+
+## Important findings follow-up
+
+- `tryPaperOpen` now resolves chain and margin data only for the current eligible pick and stops after the first successful open. Duplicate-bucket decisions persist without calling either dependency.
+- Chain or margin failures are isolated to their pick; mark or last-close failures are isolated to their position.
+- Added regressions proving a failing second chain cannot prevent the first pick from opening and one rejected mark cannot prevent another position from closing during `close5`.
+
+Required command:
+
+`pnpm --filter @dshtrading/kit-cn test -- test/option-paper.test.ts`
+
+Result: exit code 0; `1 passed (1)` test file and `17 passed (17)` tests.

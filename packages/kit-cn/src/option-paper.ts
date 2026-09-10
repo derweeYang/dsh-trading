@@ -449,10 +449,6 @@ export async function resetPaperState(root: string, nowIso: string): Promise<Pap
   return state
 }
 
-function legsKey(legs: PaperLegs): string {
-  return legs.map((leg) => `${leg.code}:${leg.side}:${leg.qty}:${leg.fillPrice}`).join('|')
-}
-
 export async function tryPaperOpen(input: {
   root: string
   date: string
@@ -464,52 +460,98 @@ export async function tryPaperOpen(input: {
 }): Promise<void> {
   try {
     const state = await loadPaperState(input.root, input.date, input.nowIso)
-    const chains = new Map<string, OptionChain | undefined>()
-    const margins = new Map<string, number>()
-
-    for (const pick of input.rec.picks) {
-      if (!pick.underlying || !pick.template) continue
-      let legs = explicitLegs(pick.legs)
-      if (legs === undefined) {
-        let chain = chains.get(pick.underlying)
-        if (!chains.has(pick.underlying)) {
-          chain = await input.getChain(pick.underlying)
-          chains.set(pick.underlying, chain)
-        }
-        const forecast = input.forecastByUnderlying[pick.underlying]
-        const candidate = forecast?.candidates.find((item) => item.template === pick.template)
-        if (chain !== undefined && candidate !== undefined) {
-          const completed = completeVerticalLegs(chain, candidate.bias, 1)
-          if (completed.skip === undefined) legs = completed.legs
-        }
-      }
-      if (legs !== undefined) margins.set(legsKey(legs), await input.getMargin(legs))
-    }
-
-    const decision = decidePaperOpen({
-      rec: input.rec,
+    const gate = decidePaperOpen({
+      rec: { ...input.rec, picks: [] },
       forecastByUnderlying: input.forecastByUnderlying,
       fillsToday: state.fills,
-      chainFor: (underlying) => chains.get(underlying),
-      marginFor: (legs) => margins.get(legsKey(legs)) ?? 0,
+      chainFor: () => undefined,
+      marginFor: () => 0,
       nowIso: input.nowIso,
       cash: state.account.cash,
     })
-    let next = state
-    if ('fill' in decision) {
-      const forecast = decision.fill.underlying === undefined
-        ? undefined
-        : input.forecastByUnderlying[decision.fill.underlying]
-      next = applyOpen(state, {
-        ...decision.fill,
-        invalidIf: input.rec.invalidIf,
-        ...(forecast?.boxLow === undefined ? {} : { boxLow: forecast.boxLow }),
-        ...(forecast?.boxHigh === undefined ? {} : { boxHigh: forecast.boxHigh }),
+    if ('noop' in gate) return
+    if ('skip' in gate && gate.skip.skip === 'duplicate_bucket') {
+      await savePaperState(input.root, input.date, {
+        ...state,
+        fills: [...state.fills, gate.skip],
       })
-    } else if ('skip' in decision) {
-      next = { ...state, fills: [...state.fills, decision.skip] }
+      return
     }
-    if (!('noop' in decision)) await savePaperState(input.root, input.date, next)
+
+    let lastSkip = 'skip' in gate ? gate.skip : undefined
+    for (const pick of input.rec.picks) {
+      const rec = { ...input.rec, picks: [pick] }
+      if (!pick.underlying || !pick.template) {
+        const decision = decidePaperOpen({
+          rec,
+          forecastByUnderlying: input.forecastByUnderlying,
+          fillsToday: state.fills,
+          chainFor: () => undefined,
+          marginFor: () => 0,
+          nowIso: input.nowIso,
+          cash: state.account.cash,
+        })
+        if ('skip' in decision) lastSkip = decision.skip
+        continue
+      }
+
+      const forecast = input.forecastByUnderlying[pick.underlying]
+      const candidate = forecast?.candidates.find((item) => item.template === pick.template)
+      if (forecast === undefined || candidate === undefined) {
+        const decision = decidePaperOpen({
+          rec,
+          forecastByUnderlying: input.forecastByUnderlying,
+          fillsToday: state.fills,
+          chainFor: () => undefined,
+          marginFor: () => 0,
+          nowIso: input.nowIso,
+          cash: state.account.cash,
+        })
+        if ('skip' in decision) lastSkip = decision.skip
+        continue
+      }
+
+      try {
+        const explicit = explicitLegs(pick.legs)
+        const chain = explicit === undefined ? await input.getChain(pick.underlying) : undefined
+        const unitLegs = explicit ?? (
+          chain === undefined ? undefined : completeVerticalLegs(chain, candidate.bias, 1).legs
+        )
+        const margin = unitLegs === undefined ? 0 : await input.getMargin(unitLegs)
+        const decision = decidePaperOpen({
+          rec,
+          forecastByUnderlying: input.forecastByUnderlying,
+          fillsToday: state.fills,
+          chainFor: () => chain,
+          marginFor: () => margin,
+          nowIso: input.nowIso,
+          cash: state.account.cash,
+        })
+        if ('skip' in decision) {
+          lastSkip = decision.skip
+          continue
+        }
+        if ('fill' in decision) {
+          const next = applyOpen(state, {
+            ...decision.fill,
+            invalidIf: input.rec.invalidIf,
+            ...(forecast.boxLow === undefined ? {} : { boxLow: forecast.boxLow }),
+            ...(forecast.boxHigh === undefined ? {} : { boxHigh: forecast.boxHigh }),
+          })
+          await savePaperState(input.root, input.date, next)
+          return
+        }
+      } catch {
+        // A failed quote or margin lookup only disqualifies this pick.
+      }
+    }
+
+    if (lastSkip !== undefined) {
+      await savePaperState(input.root, input.date, {
+        ...state,
+        fills: [...state.fills, lastSkip],
+      })
+    }
   } catch {
     // Paper-account failures must never break recommendation persistence.
   }
@@ -546,31 +588,35 @@ export async function tryPaperManage(input: {
     let state = await loadPaperState(input.root, input.date, input.nowIso)
     const currentDate = shanghaiCalendarDate(input.nowMs)
     for (const position of [...state.positions]) {
-      const openedMs = Date.parse(position.openedBucketStart)
-      const openedDate = Number.isFinite(openedMs)
-        ? shanghaiCalendarDate(openedMs)
-        : input.calendarDate
-      let reason: 'invalidIf' | 'close5' | 'session' | undefined
-      if (currentDate !== openedDate) {
-        reason = 'session'
-      } else {
-        const market = await input.getLastClose(position.underlying)
-        if (market !== undefined && invalidIfTriggered({
-          invalidIf: position.invalidIf,
-          lastClose: market.lastClose,
-          ...(position.boxLow === undefined ? {} : { boxLow: position.boxLow }),
-          ...(position.boxHigh === undefined ? {} : { boxHigh: position.boxHigh }),
-          ...(market.volumeRatio === undefined ? {} : { volumeRatio: market.volumeRatio }),
-        })) {
-          reason = 'invalidIf'
-        } else if (input.session === 'close5') {
-          reason = 'close5'
+      try {
+        const openedMs = Date.parse(position.openedBucketStart)
+        const openedDate = Number.isFinite(openedMs)
+          ? shanghaiCalendarDate(openedMs)
+          : input.calendarDate
+        let reason: 'invalidIf' | 'close5' | 'session' | undefined
+        if (currentDate !== openedDate) {
+          reason = 'session'
+        } else {
+          const market = await input.getLastClose(position.underlying)
+          if (market !== undefined && invalidIfTriggered({
+            invalidIf: position.invalidIf,
+            lastClose: market.lastClose,
+            ...(position.boxLow === undefined ? {} : { boxLow: position.boxLow }),
+            ...(position.boxHigh === undefined ? {} : { boxHigh: position.boxHigh }),
+            ...(market.volumeRatio === undefined ? {} : { volumeRatio: market.volumeRatio }),
+          })) {
+            reason = 'invalidIf'
+          } else if (input.session === 'close5') {
+            reason = 'close5'
+          }
         }
+        if (reason === undefined) continue
+        const legs = await closeLegs(position, input.getMark)
+        if (legs === undefined) continue
+        state = applyClose(state, position.id, legs, reason, input.nowIso)
+      } catch {
+        // A failed market lookup only skips this position for the current tick.
       }
-      if (reason === undefined) continue
-      const legs = await closeLegs(position, input.getMark)
-      if (legs === undefined) continue
-      state = applyClose(state, position.id, legs, reason, input.nowIso)
     }
     await savePaperState(input.root, input.date, state)
   } catch {

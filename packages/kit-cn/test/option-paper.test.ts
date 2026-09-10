@@ -16,6 +16,7 @@ import {
   premiumCny,
   quoteFillPrice,
   resetPaperState,
+  savePaperState,
   sizeQty,
   tryPaperManage,
   tryPaperOpen,
@@ -243,12 +244,47 @@ describe('option-paper', () => {
     }
 
     await tryPaperOpen(input)
-    await tryPaperOpen({ ...input, nowIso: '2026-09-10T05:40:24.000Z' })
+    await tryPaperOpen({
+      ...input,
+      nowIso: '2026-09-10T05:40:24.000Z',
+      getChain: async () => { throw new Error('duplicate must not fetch chain') },
+      getMargin: async () => { throw new Error('duplicate must not fetch margin') },
+    })
     const fills = (await readFile(paperFillsPath(root, input.date), 'utf8'))
       .trim().split('\n').map((line) => JSON.parse(line))
 
     expect(fills).toHaveLength(2)
     expect(fills[1].skip).toBe('duplicate_bucket')
+  })
+
+  it('tryPaperOpen opens the first pick without fetching a failing second pick', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-'))
+    const secondBox = { ...box, underlying: '510050' }
+    const requested: string[] = []
+
+    await tryPaperOpen({
+      root,
+      date: '2026-09-10',
+      rec: liveRec({
+        picks: [
+          { underlying: '588000', regime: 'mean_revert', template: 'vertical', cycleId: '588000:1' },
+          { underlying: '510050', regime: 'mean_revert', template: 'vertical', cycleId: '510050:1' },
+        ],
+      }),
+      forecastByUnderlying: { '588000': box, '510050': secondBox },
+      nowIso: '2026-09-10T05:40:23.000Z',
+      getChain: async (underlying) => {
+        requested.push(underlying)
+        if (underlying === '510050') throw new Error('second chain failed')
+        return chain
+      },
+      getMargin: async () => 282,
+    })
+    const state = await loadPaperState(root, '2026-09-10', 'unused')
+
+    expect(requested).toEqual(['588000'])
+    expect(state.positions).toHaveLength(1)
+    expect(state.positions[0]?.underlying).toBe('588000')
   })
 
   it('tryPaperManage close5 flattens persisted positions', async () => {
@@ -277,6 +313,60 @@ describe('option-paper', () => {
 
     expect(state.positions).toEqual([])
     expect(state.fills.at(-1)?.reason).toBe('close5')
+  })
+
+  it('tryPaperManage skips one rejected mark and closes the other position', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-'))
+    const first = applyOpen(
+      { account: emptyPaperAccount('t'), positions: [], fills: [] },
+      {
+        bucketStart: '2026-09-10T05:40:00.000Z',
+        asOf: '2026-09-10T05:40:23.000Z',
+        underlying: '588000',
+        template: 'vertical',
+        offset: 'open',
+        qty: 1,
+        legs: [{ code: 'BAD', side: 'buy', qty: 1, fillPrice: 0.05 }],
+        premiumCny: -500,
+        marginCny: 0,
+        reason: 'signal',
+      },
+    )
+    const state = applyOpen(first, {
+      bucketStart: '2026-09-10T05:45:00.000Z',
+      asOf: '2026-09-10T05:45:23.000Z',
+      underlying: '510050',
+      template: 'vertical',
+      offset: 'open',
+      qty: 1,
+      legs: [{ code: 'GOOD', side: 'buy', qty: 1, fillPrice: 0.04 }],
+      premiumCny: -400,
+      marginCny: 0,
+      reason: 'signal',
+    })
+    await savePaperState(root, '2026-09-10', state)
+
+    await tryPaperManage({
+      root,
+      date: '2026-09-10',
+      nowMs: Date.parse('2026-09-10T06:56:00.000Z'),
+      nowIso: '2026-09-10T06:56:00.000Z',
+      session: 'close5',
+      calendarDate: '2026-09-10',
+      getMark: async (code) => {
+        if (code === 'BAD') throw new Error('mark failed')
+        return 0.03
+      },
+      getLastClose: async () => undefined,
+    })
+    const managed = await loadPaperState(root, '2026-09-10', 'unused')
+
+    expect(managed.positions.map((position) => position.underlying)).toEqual(['588000'])
+    expect(managed.fills.at(-1)).toEqual(expect.objectContaining({
+      underlying: '510050',
+      offset: 'close',
+      reason: 'close5',
+    }))
   })
 
   it('paper try operations swallow dependency failures', async () => {
