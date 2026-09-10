@@ -259,6 +259,33 @@ export function apply(ctx: Context, config: Config): void {
   registerOnce(createPutOptionBarRecommendationTool({
     getService: lookupOptions,
     getMarketData: lookupMarket,
+    getChain: async (underlying) => {
+      try {
+        return await lookupOptions()?.getOptionChain({ underlying })
+      } catch {
+        return undefined
+      }
+    },
+    getMargin: async (legs) => {
+      try {
+        const service = lookupOptions()
+        const underlying = /^(\d{6})/.exec(legs[0]?.code ?? '')?.[1]
+        if (service === undefined || underlying === undefined) return 0
+        const result = await service.getStrategy({
+          underlying,
+          legs: legs.map((leg) => ({
+            kind: 'option',
+            code: leg.code,
+            side: leg.side,
+            qty: leg.qty,
+            premium: leg.fillPrice,
+          })),
+        })
+        return result.margin?.totalInitial ?? 0
+      } catch {
+        return 0
+      }
+    },
   }))
   const marketData = lookupMarket()
   if (marketData !== undefined) {

@@ -4,7 +4,7 @@
  */
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { OptionBarContextPacket, OptionBarFact, OptionBarRecommendation, OptionCycle, OptionCycleLoop } from '@dshtrading/api'
+import type { CnOptionsService, OptionBarContextPacket, OptionBarFact, OptionBarRecommendation, OptionCycle, OptionCycleLoop } from '@dshtrading/api'
 import {
   OPTION_BAR_AGENT_PROMPT,
   appendJsonlLine,
@@ -22,6 +22,7 @@ import {
   shanghaiBucketStartMs,
   shouldWriteDailyReview,
   readJsonl,
+  tryPaperOpen,
   type DirectorTickContext,
   type LaneDecision,
   type TraderLane,
@@ -36,6 +37,7 @@ export interface OptionBarAgentOptions {
   log?: (message: string, error?: unknown) => void
   /** 总览口径事实（includeIv=0 + 缓存 atmIv）。失败则 packet 全 unknown。 */
   loadFacts?: (underlyings: readonly string[]) => Promise<readonly OptionBarFact[]>
+  getCnOptions?: () => CnOptionsService | undefined
 }
 
 export class OptionBarAgentHost {
@@ -219,6 +221,40 @@ export class OptionBarAgentHost {
   private async writeRec(root: string, date: string, row: OptionBarRecommendation): Promise<void> {
     try {
       await appendJsonlLine(recommendationsPath(root, date), row)
+      void tryPaperOpen({
+        root,
+        date,
+        rec: row,
+        forecastByUnderlying: {},
+        nowIso: row.asOf,
+        getChain: async (underlying) => {
+          try {
+            return await this.options.getCnOptions?.()?.getOptionChain({ underlying })
+          } catch {
+            return undefined
+          }
+        },
+        getMargin: async (legs) => {
+          try {
+            const service = this.options.getCnOptions?.()
+            const underlying = /^(\d{6})/.exec(legs[0]?.code ?? '')?.[1]
+            if (service === undefined || underlying === undefined) return 0
+            const result = await service.getStrategy({
+              underlying,
+              legs: legs.map((leg) => ({
+                kind: 'option',
+                code: leg.code,
+                side: leg.side,
+                qty: leg.qty,
+                premium: leg.fillPrice,
+              })),
+            })
+            return result.margin?.totalInitial ?? 0
+          } catch {
+            return 0
+          }
+        },
+      }).catch(() => {})
     } catch (error) {
       this.options.log?.('option-bar recommendation persist failed', error)
     }

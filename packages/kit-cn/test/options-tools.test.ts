@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CnOptionsService, OptionChain } from '@dshtrading/api'
 import {
   createGetOptionChainTool,
@@ -112,7 +112,7 @@ describe('cn_get_option_chain', () => {
   it('cn_put_option_bar_recommendation 写入 no_edge 桩', async () => {
     const os = await import('node:os')
     const path = await import('node:path')
-    const { mkdtemp, readFile } = await import('node:fs/promises')
+    const { access, mkdtemp, readFile } = await import('node:fs/promises')
     const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-put-'))
     const tool = createPutOptionBarRecommendationTool({
       dataRoot: () => dir,
@@ -136,6 +136,63 @@ describe('cn_get_option_chain', () => {
     expect(out).toContain('"ok":true')
     const text = await readFile(path.join(dir, 'recommendations', '2026-09-08.jsonl'), 'utf8')
     expect(text).toContain('no_edge')
+    await expect(access(path.join(dir, 'paper', 'fills', '2026-09-08.jsonl'))).rejects.toThrow()
+  })
+
+  it('cn_put_option_bar_recommendation 用注入行情写入 paper fill', async () => {
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { mkdtemp, readFile } = await import('node:fs/promises')
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-put-paper-'))
+    const tool = createPutOptionBarRecommendationTool({
+      dataRoot: () => dir,
+      now: () => Date.parse('2026-09-10T05:40:23.000Z'),
+      getChain: async () => ({
+        underlying: '588000',
+        expiryMonth: '2609',
+        source: 'iquant',
+        spot: 1.668,
+        calls: [
+          { code: '588000C2609M01650', strike: 1.65, last: 0.08 },
+          { code: '588000C2609M01700', strike: 1.7, last: 0.0566 },
+          { code: '588000C2609M01750', strike: 1.75, last: 0.0348 },
+        ],
+        puts: [],
+      }),
+      getMargin: async () => 282,
+    })
+    await tool.execute({
+      recommendation: JSON.stringify({
+        bucketStart: '2026-09-10T05:40:00.000Z',
+        asOf: '2026-09-10T05:40:23.000Z',
+        session: 'regular',
+        opportunity: 'mean_reversion',
+        edge: 'x',
+        logic: 'x',
+        playbook: 'x',
+        invalidIf: '1-minute close breaks Donchian',
+        picks: [{ underlying: '588000', regime: 'mean_revert', template: 'vertical', cycleId: '588000:1' }],
+        noTrade: false,
+      }),
+      forecasts: JSON.stringify({
+        '588000': {
+          underlying: '588000',
+          name: '科创50',
+          exchange: 'SSE',
+          horizonMin: 5,
+          regime: 'mean_revert',
+          session: 'regular',
+          boxLow: 1.66,
+          boxHigh: 1.67,
+          candidates: [{ template: 'vertical', bias: 'down', invalidIf: 'x', reason: 'x' }],
+        },
+      }),
+    })
+
+    const fillsFile = path.join(dir, 'paper', 'fills', '2026-09-10.jsonl')
+    await vi.waitFor(async () => {
+      expect(await readFile(fillsFile, 'utf8')).toContain('"reason":"signal"')
+    })
   })
 
   it('磁盘 ContextPacket 使 theta_rent + unknown 落盘失败', async () => {

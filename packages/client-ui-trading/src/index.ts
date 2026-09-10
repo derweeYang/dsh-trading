@@ -237,6 +237,7 @@ export function apply(ctx: Context): void {
     const barAgent = new OptionBarAgentHost({
       dataRoot: optionDataRoot,
       runner: () => barRunner,
+      getCnOptions: () => host.getCnOptions?.(),
       workspaceId: () => {
         const registry = resolveHostService('workspaceRegistry') as import('./tasks/service.ts').WorkspaceDirectoryLike | undefined
         return registry?.list()[0]?.id

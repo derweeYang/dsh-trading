@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises'
+import { access, mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -38,6 +38,7 @@ describe('OptionBarAgentHost', () => {
     const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(dir, '2026-09-08'))
     expect(recs[0]?.skipReason).toBe('session')
     expect(recs[0]?.opportunity).toBe('no_edge')
+    await expect(access(path.join(dir, 'paper', 'fills', '2026-09-08.jsonl'))).rejects.toThrow()
   })
 
   it('close5 把当天 packet 折进 iv-daily', async () => {

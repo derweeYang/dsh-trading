@@ -3,8 +3,9 @@
  * 例外：cn_get_option_intraday_box 读 CN 现货 1 分钟 K（iquant）。
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { CnOptionsService, MarketDataService, OptionSource } from '@dshtrading/api'
+import type { CnOptionsService, MarketDataService, OptionChain, OptionSource, PaperFill } from '@dshtrading/api'
 import { BOX_HORIZON_MIN, collectIntradayBox } from './intraday-box.js'
+import { tryPaperOpen } from './option-paper.js'
 import {
   appendJsonlLine,
   loadPacketForBucket,
@@ -22,6 +23,8 @@ export interface OptionToolOptions {
   getMarketData?: () => MarketDataService | undefined
   now?: () => number
   dataRoot?: () => string
+  getChain?: (underlying: string) => Promise<OptionChain | undefined>
+  getMargin?: (legs: PaperFill['legs']) => Promise<number>
 }
 
 function resolveService(options: OptionToolOptions): CnOptionsService {
@@ -605,6 +608,27 @@ export function createPutOptionBarRecommendationTool(options: OptionToolOptions 
         packetMap,
       )
       await appendJsonlLine(recommendationsPath(root, date), row)
+      void tryPaperOpen({
+        root,
+        date,
+        rec: row,
+        forecastByUnderlying,
+        nowIso: new Date(nowMs).toISOString(),
+        getChain: async (underlying) => {
+          try {
+            return await options.getChain?.(underlying)
+          } catch {
+            return undefined
+          }
+        },
+        getMargin: async (legs) => {
+          try {
+            return await options.getMargin?.(legs) ?? 0
+          } catch {
+            return 0
+          }
+        },
+      }).catch(() => {})
       return JSON.stringify({ ok: true, bucketStart: row.bucketStart, opportunity: row.opportunity })
     },
   })
