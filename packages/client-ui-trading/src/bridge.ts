@@ -14,11 +14,12 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
 import {
   OVERVIEW_KLINE_LIMIT,
   applyTicker,
   buildOverviewMetrics,
+  hv20FromKlines,
   composeScanAllPrompt,
   composeScanPrompt,
   extractAtmIv,
@@ -34,8 +35,13 @@ import {
   CYCLE_HORIZON_MS,
   cycleId,
   fetchCnFundamentalsPackage,
+  atmIvPercentile,
+  ivDailyPath,
+  loadLatestPacket,
   loadLatestRecommendation,
   OptionCycleBook,
+  readJsonl,
+  tagIvRegime,
   optionsDataRoot,
   realizedInWindow,
   replayCyclesIntoBook,
@@ -319,6 +325,11 @@ export interface OptionCyclesWire {
 export interface OptionCycleLoopWire {
   ok: true
   loop: OptionCycleLoop
+}
+
+export interface OptionBarPacketWire {
+  ok: true
+  packet?: OptionBarContextPacket
 }
 
 export interface OptionCycleTickWire {
@@ -654,7 +665,11 @@ export class TradingBridge {
   private readonly symbolsCache = new Map<string, { list: SymbolInfoWire[]; fetchedAt: number }>()
   private readonly fundamentalsCache = new Map<string, { pkg: StockFundamentals; fetchedAt: number }>()
   private readonly fundamentalsInflight = new Map<string, Promise<StockFundamentals>>()
-  readonly #atmIvCache = new Map<string, { value: number | undefined; fetchedAt: number }>()
+  readonly #atmIvCache = new Map<string, {
+    atmIv?: number
+    nextAtmIv?: number
+    fetchedAt: number
+  }>()
   /** FX 兜底 fetcher（issue #65；host.fetchFxRates 注入正式实现时不走这里）。 */
   readonly #fallbackFxFetcher: FxRatesFetcher = createFallbackFxFetcher()
   readonly #cycles = new OptionCycleBook()
@@ -1059,6 +1074,29 @@ export class TradingBridge {
   }
 
   /**
+   * 5 分钟桶 ContextPacket 事实：复用总览行（includeIv=0 + 缓存 atmIv），不打 vol_analytics。
+   */
+  async snapshotBarFacts(underlyings: readonly string[]): Promise<readonly OptionBarFact[]> {
+    const wanted = new Set(underlyings)
+    if (wanted.size === 0) return []
+    const roster = (await this.#withHeldQty(await this.requireCnOptions().listUnderlyings()))
+      .filter((row) => row.exchange !== 'SYNTH' && wanted.has(row.underlying))
+    const ivHistory = await readJsonl<OptionBarDailyIv>(ivDailyPath(optionsDataRoot()))
+    const built = await Promise.all(roster.map((row) => this.#overviewRow(row, undefined, false, undefined, ivHistory)))
+    return built.map((row) => ({
+      underlying: row.underlying,
+      ...(row.return5d === undefined ? {} : { return5d: row.return5d }),
+      ...(row.volumeRatio === undefined ? {} : { volumeRatio: row.volumeRatio }),
+      ...(row.divergence === undefined ? {} : { divergence: row.divergence }),
+      ...(row.heldQty === undefined ? {} : { heldQty: row.heldQty }),
+      ...(row.atmIv === undefined ? {} : { atmIv: row.atmIv }),
+      ...(row.nextAtmIv === undefined ? {} : { nextAtmIv: row.nextAtmIv }),
+      ...(row.hv20 === undefined ? {} : { hv20: row.hv20 }),
+      ...(row.ivPercentile === undefined ? {} : { ivPercentile: row.ivPercentile }),
+    }))
+  }
+
+  /**
    * C1 九标的总览：名册 + 现货 ticker/日 K + 底仓 + 期权持仓聚合。
    * 默认回填近月 ATM IV（implied_vol，5 分钟缓存）；includeIv=1 才打 vol_analytics 分位。
    * 任一路失败按行缺席，不整页失败。
@@ -1083,10 +1121,12 @@ export class TradingBridge {
     for (const pos of positions) {
       qtyByUnderlying.set(pos.underlying, (qtyByUnderlying.get(pos.underlying) ?? 0) + Math.abs(pos.quantity))
     }
-    const built = await Promise.all(rows.map((row) => this.#overviewRow(row, qtyByUnderlying.get(row.underlying), includeIv, typed)))
+    const ivHistory = await readJsonl<OptionBarDailyIv>(ivDailyPath(optionsDataRoot()))
+    const built = await Promise.all(rows.map((row) => this.#overviewRow(row, qtyByUnderlying.get(row.underlying), includeIv, typed, ivHistory)))
     const sorted = sortOverviewRows(built, sort)
     const rec = await loadLatestRecommendation(optionsDataRoot(), Date.now())
-    const withStrategy = attachOverviewStrategies(sorted, rec)
+    const packet = await loadLatestPacket(optionsDataRoot(), Date.now())
+    const withStrategy = attachOverviewStrategies(sorted, rec, packet)
     return {
       ok: true,
       overview: {
@@ -1104,6 +1144,7 @@ export class TradingBridge {
     optionQty: number | undefined,
     includeIv: boolean,
     source: 'akshare' | 'iquant' | 'synth' | undefined,
+    ivHistory: readonly OptionBarDailyIv[] = [],
   ): Promise<OptionOverviewRow> {
     const spotSymbol = spotSymbolOf(row.underlying, row.exchange)
     const link: UnderlyingLink | undefined = spotSymbol === undefined ? undefined : {
@@ -1142,7 +1183,22 @@ export class TradingBridge {
         ivPercentile = undefined
       }
     }
-    const atmIv = await this.#overviewAtmIv(row.underlying, source)
+    const ivSlice = await this.#overviewAtmIv(row.underlying, source)
+    const atmIv = ivSlice.atmIv
+    const nextAtmIv = ivSlice.nextAtmIv
+    const hv20 = hv20FromKlines(klines)
+    if (ivPercentile === undefined && atmIv !== undefined) {
+      const series = ivHistory
+        .filter((item) => item.underlying === row.underlying && item.atmIv !== undefined)
+        .map((item) => ({ date: item.date, atmIv: item.atmIv as number }))
+      ivPercentile = atmIvPercentile(series, atmIv)
+    }
+    const ivRegime = tagIvRegime({
+      ...(ivPercentile === undefined ? {} : { ivPercentile }),
+      ...(atmIv === undefined ? {} : { atmIv }),
+      ...(nextAtmIv === undefined ? {} : { nextAtmIv }),
+      ...(hv20 === undefined ? {} : { hv20 }),
+    })
     const scanPrompt = composeScanPrompt({
       underlying: row.underlying,
       name: row.name,
@@ -1172,47 +1228,82 @@ export class TradingBridge {
       ...(optionQty === undefined ? {} : { optionQty }),
       ...(ivPercentile === undefined ? {} : { ivPercentile }),
       ...(atmIv === undefined ? {} : { atmIv }),
+      ...(nextAtmIv === undefined ? {} : { nextAtmIv }),
+      ...(hv20 === undefined ? {} : { hv20 }),
+      ivRegime,
     }
+  }
+
+  /** 当天最新 ContextPacket（定时桶打标快照）。无文件 → 不写 packet 键。 */
+  async optionBarPacket(): Promise<OptionBarPacketWire> {
+    const packet = await loadLatestPacket(optionsDataRoot(), Date.now())
+    return packet === undefined ? { ok: true } : { ok: true, packet }
   }
 
   async #overviewAtmIv(
     underlying: string,
     source: 'akshare' | 'iquant' | 'synth' | undefined,
-  ): Promise<number | undefined> {
+  ): Promise<{ atmIv?: number; nextAtmIv?: number }> {
     const cached = this.#atmIvCache.get(underlying)
-    const ttl = cached?.value === undefined ? OVERVIEW_ATM_IV_MISS_TTL_MS : OVERVIEW_ATM_IV_TTL_MS
+    const ttl = cached === undefined || cached.atmIv === undefined
+      ? OVERVIEW_ATM_IV_MISS_TTL_MS
+      : OVERVIEW_ATM_IV_TTL_MS
     if (cached !== undefined && Date.now() - cached.fetchedAt < ttl) {
-      return cached.value
+      return {
+        ...(cached.atmIv === undefined ? {} : { atmIv: cached.atmIv }),
+        ...(cached.nextAtmIv === undefined ? {} : { nextAtmIv: cached.nextAtmIv }),
+      }
     }
     const value = await this.#fetchOverviewAtmIv(underlying, source)
-    this.#atmIvCache.set(underlying, { value, fetchedAt: Date.now() })
+    this.#atmIvCache.set(underlying, { ...value, fetchedAt: Date.now() })
     return value
+  }
+
+  async #monthAtmIv(
+    underlying: string,
+    expiryMonth: string,
+    source: 'akshare' | 'iquant' | 'synth' | undefined,
+  ): Promise<number | undefined> {
+    const query = {
+      underlying,
+      expiryMonth,
+      rate: OVERVIEW_IV_RATE,
+      ...(source === undefined ? {} : { source }),
+    }
+    const live = await this.requireCnOptions().getImpliedVol({ ...query, priceField: 'last' })
+    const fromLast = extractAtmIv(live)
+    if (fromLast !== undefined) return fromLast
+    const settle = await this.requireCnOptions().getImpliedVol({ ...query, priceField: 'prevSettle' })
+    return extractAtmIv(settle)
   }
 
   async #fetchOverviewAtmIv(
     underlying: string,
     source: 'akshare' | 'iquant' | 'synth' | undefined,
-  ): Promise<number | undefined> {
+  ): Promise<{ atmIv?: number; nextAtmIv?: number }> {
     try {
       const calendar = await this.requireCnOptions().getOptionExpiries({
         underlying,
         ...(source === undefined ? {} : { source }),
       })
-      const expiryMonth = calendar.months[0]?.expiryMonth
-      if (expiryMonth === undefined || expiryMonth.trim() === '') return undefined
-      const query = {
-        underlying,
-        expiryMonth,
-        rate: OVERVIEW_IV_RATE,
-        ...(source === undefined ? {} : { source }),
+      const near = calendar.months[0]?.expiryMonth
+      const next = calendar.months[1]?.expiryMonth
+      if (near === undefined || near.trim() === '') return {}
+      const atmIv = await this.#monthAtmIv(underlying, near, source)
+      let nextAtmIv: number | undefined
+      if (next !== undefined && next.trim() !== '') {
+        try {
+          nextAtmIv = await this.#monthAtmIv(underlying, next, source)
+        } catch {
+          nextAtmIv = undefined
+        }
       }
-      const live = await this.requireCnOptions().getImpliedVol({ ...query, priceField: 'last' })
-      const fromLast = extractAtmIv(live)
-      if (fromLast !== undefined) return fromLast
-      const settle = await this.requireCnOptions().getImpliedVol({ ...query, priceField: 'prevSettle' })
-      return extractAtmIv(settle)
+      return {
+        ...(atmIv === undefined ? {} : { atmIv }),
+        ...(nextAtmIv === undefined ? {} : { nextAtmIv }),
+      }
     } catch {
-      return undefined
+      return {}
     }
   }
 
@@ -2315,6 +2406,9 @@ export async function dispatchBridgeRequest(
       }
       case '/options/cycles/loop': {
         return { status: 200, payload: await bridge.optionCycleLoop() }
+      }
+      case '/options/bar-packet': {
+        return { status: 200, payload: await bridge.optionBarPacket() }
       }
       case '/orderbook': {
         const market = search.get('market') ?? ''

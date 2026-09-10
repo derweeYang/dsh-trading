@@ -1137,15 +1137,17 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
     expect(overview.rows[0]?.days).toHaveLength(5)
     expect(overview.rows[0]?.scanPrompt).toContain('not investment advice')
     expect(overview.rows[0]?.atmIv).toBeCloseTo(0.2, 5)
+    expect(overview.rows[0]?.ivRegime).toBe('unknown')
     expect(overview.scanAllPrompt).toContain('510050')
     expect(getVolAnalytics).not.toHaveBeenCalled()
 
     const withIv = await dispatchBridgeRequest(
       bridge, 'GET', '/options/overview', new URLSearchParams({ includeIv: '1', sort: 'iv' }),
     )
-    const ivOverview = (withIv.payload as { overview: { sort: string; rows: Array<{ ivPercentile?: number }> } }).overview
+    const ivOverview = (withIv.payload as { overview: { sort: string; rows: Array<{ ivPercentile?: number; ivRegime?: string }> } }).overview
     expect(ivOverview.sort).toBe('iv')
     expect(ivOverview.rows[0]?.ivPercentile).toBe(0.8)
+    expect(ivOverview.rows[0]?.ivRegime).toBe('rich')
     expect(getVolAnalytics).toHaveBeenCalled()
   })
 

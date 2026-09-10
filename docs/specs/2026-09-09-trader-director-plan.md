@@ -1,5 +1,7 @@
 # TraderDirector（交易员总控）Implementation Plan
 
+> **状态（2026-09-10）：** Phase 1 已落地，决策记录改为 [implemented](../../.agents/notes/implemented/architecture/2026-09-09-trader-director.md)。Risk/Behavior 仍 idle。下文勾选是执行当时的清单，不再当未开工。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 落地薄编排层 `TraderDirector`：三车道端口（opportunity / risk / behavior），Phase 1 只实现机会车道且对外行为与现 `OptionBarAgentHost` 等价。

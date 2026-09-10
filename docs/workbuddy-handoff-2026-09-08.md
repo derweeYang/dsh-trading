@@ -1,5 +1,8 @@
 # workbuddy 前端交接（2026-09-08 市场收敛 + 期权全链路）
 
+2026-09-10 增量（IV 制度 / ContextPacket 展示）：见
+[workbuddy-handoff-2026-09-10-iv-packet.md](./workbuddy-handoff-2026-09-10-iv-packet.md)。
+
 分工边界：`packages/client-ui-*/src/client/**` 归 workbuddy；桥（bridge.ts）、
 连接器、api 契约归后端。**交接面 = 稳定的桥 JSON**，契约细节见
 `docs/options-bridge.md`（期权端点权威文档）。本文件给三部分：A 删除涟漪修复

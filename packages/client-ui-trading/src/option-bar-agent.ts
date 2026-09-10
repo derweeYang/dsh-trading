@@ -4,14 +4,17 @@
  */
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { OptionBarRecommendation, OptionCycle, OptionCycleLoop } from '@dshtrading/api'
+import type { OptionBarContextPacket, OptionBarFact, OptionBarRecommendation, OptionCycle, OptionCycleLoop } from '@dshtrading/api'
 import {
   OPTION_BAR_AGENT_PROMPT,
   appendJsonlLine,
+  buildBarContextPacket,
   cyclesPath,
+  backfillIvDailyFromPackets,
   foldDailyReview,
   makeSkipRecommendation,
   opportunityDecide,
+  packetsPath,
   recommendationsPath,
   reviewsPath,
   sessionAt,
@@ -31,6 +34,8 @@ export interface OptionBarAgentOptions {
   runner?: () => TasksRunner | undefined
   workspaceId?: () => string | undefined
   log?: (message: string, error?: unknown) => void
+  /** 总览口径事实（includeIv=0 + 缓存 atmIv）。失败则 packet 全 unknown。 */
+  loadFacts?: (underlyings: readonly string[]) => Promise<readonly OptionBarFact[]>
 }
 
 export class OptionBarAgentHost {
@@ -103,11 +108,14 @@ export class OptionBarAgentHost {
 
     this.inFlight = true
     try {
+      const asOf = new Date(ctx.nowMs).toISOString()
+      const packet = await this.buildPacket(ctx.loop, bucketStart, asOf)
+      await this.writePacket(root, date, packet)
       const workspaceId = this.options.workspaceId?.()
       const sessionId = await runner.launch({
         id: `option-bar-${bucketStart}`,
         title: `ETF option bar ${bucketStart}`,
-        prompt: `${OPTION_BAR_AGENT_PROMPT}\n\nbucketStart=${bucketStart}\nasOf=${new Date(ctx.nowMs).toISOString()}`,
+        prompt: `${OPTION_BAR_AGENT_PROMPT}\n\nbucketStart=${bucketStart}\nasOf=${asOf}\nContextPacket=${JSON.stringify(packet)}`,
         agentPreset: 'trader',
         ...(workspaceId === undefined ? {} : { workspaceId }),
       })
@@ -138,6 +146,11 @@ export class OptionBarAgentHost {
     const md = foldDailyReview({ date, cycles, recommendations })
     await mkdir(path.dirname(reviewFile), { recursive: true })
     await writeFile(reviewFile, md, 'utf8')
+    try {
+      await backfillIvDailyFromPackets(root)
+    } catch (error) {
+      this.options.log?.('option-bar iv-daily backfill failed', error)
+    }
   }
 
   /** 兼容旧入口：单车道机会路径（无 Director）。 */
@@ -164,6 +177,42 @@ export class OptionBarAgentHost {
       if (inspection.outcome !== 'pending') this.settle()
     } catch (error) {
       this.options.log?.('option-bar inspect failed', error)
+    }
+  }
+
+  private async buildPacket(
+    loop: OptionCycleLoop,
+    bucketStart: string,
+    asOf: string,
+  ) {
+    const underlyings = loop.rows.map((row) => row.underlying)
+    let factsByUnderlying: Record<string, OptionBarFact | undefined> | undefined
+    if (this.options.loadFacts !== undefined && underlyings.length > 0) {
+      try {
+        const facts = await this.options.loadFacts(underlyings)
+        factsByUnderlying = Object.fromEntries(facts.map((item) => [item.underlying, item]))
+      } catch (error) {
+        this.options.log?.('option-bar loadFacts failed', error)
+      }
+    }
+    return buildBarContextPacket({
+      bucketStart,
+      asOf,
+      loop,
+      ...(factsByUnderlying === undefined ? {} : { factsByUnderlying }),
+    })
+  }
+
+  private async writePacket(
+    root: string,
+    date: string,
+    packet: OptionBarContextPacket,
+  ): Promise<void> {
+    try {
+      await appendJsonlLine(packetsPath(root, date), packet)
+      await backfillIvDailyFromPackets(root)
+    } catch (error) {
+      this.options.log?.('option-bar packet persist failed', error)
     }
   }
 

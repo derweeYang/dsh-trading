@@ -242,6 +242,14 @@ export function apply(ctx: Context): void {
         return registry?.list()[0]?.id
       },
       log: (message, error) => { console.error(`[dsh-trading/option-bar] ${message}`, error) },
+      loadFacts: async (underlyings) => {
+        try {
+          return await bridge.snapshotBarFacts(underlyings)
+        } catch (error) {
+          console.error('[dsh-trading/option-bar] snapshotBarFacts failed', error)
+          return []
+        }
+      },
     })
     const director = new TraderDirectorHost({ opportunity: barAgent })
     ctx.effect(() => {

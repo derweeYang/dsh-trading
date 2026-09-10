@@ -2,7 +2,7 @@
   {
     "title": "沪深 ETF 期权九标的与合约要素",
     "summary": "九只 ETF 期权欧式实物交割，乘数通常 10000，到期为当月第四个周三。",
-    "source": { "type": "manual", "url": "file:knowledge-stock/L2_rules/etf_options_rules.md", "author": "knowledge-stock", "publishedAt": "2026-09-04" },
+    "source": { "type": "manual", "url": "manual:knowledge-stock/L2_rules/etf_options_rules.md", "author": "knowledge-stock", "publishedAt": "2026-09-04" },
     "credibility": "high",
     "coreClaims": ["上交所五只、深交所四只", "乘数 10000 份/张", "到期日为到期月第四个星期三"],
     "factCheck": { "verified": ["交易所合约基本条款"], "discrepancies": [], "unverifiable": [] },
@@ -14,7 +14,7 @@
   {
     "title": "现货 T+1 与期权 T+0 不对称",
     "summary": "ETF 现货当日买入不能当日卖；期权当日可回转。组合腿必须分开记账。",
-    "source": { "type": "manual", "url": "file:knowledge-stock/L4_analysis/etf_options_spot_combos.md", "author": "knowledge-stock", "publishedAt": "2026-09-05" },
+    "source": { "type": "manual", "url": "manual:knowledge-stock/L4_analysis/etf_options_spot_combos.md", "author": "knowledge-stock", "publishedAt": "2026-09-05" },
     "credibility": "high",
     "coreClaims": ["现货 T+1", "期权 T+0", "当日现货风险只能用期权腿对冲"],
     "factCheck": { "verified": ["交易所交易规则"], "discrepancies": [], "unverifiable": [] },
@@ -25,7 +25,7 @@
   {
     "title": "义务仓保证金 12%/7% 与备兑免收",
     "summary": "短 call/短 put 按交易所 12%/7% 估算；备兑短 call 在现货覆盖时现金保证金为 0。以内核 JSON 为准。",
-    "source": { "type": "manual", "url": "file:knowledge-stock/L2_rules/etf_options_rules.md#margin", "author": "knowledge-stock", "publishedAt": "2026-09-04" },
+    "source": { "type": "manual", "url": "manual:knowledge-stock/L2_rules/etf_options_rules.md#margin", "author": "knowledge-stock", "publishedAt": "2026-09-04" },
     "credibility": "high",
     "coreClaims": ["义务仓系数 12%/7%", "备兑免额外保证金", "券商可能上浮"],
     "factCheck": { "verified": ["交易所保证金公式"], "discrepancies": ["券商上浮不是本仓内核"], "unverifiable": [] },
@@ -36,7 +36,7 @@
   {
     "title": "同源双挂先合并再选一只",
     "summary": "300/500/科创50 沪深双挂先合并，留链更厚的一只。twinUnderlying 是权威对侧。",
-    "source": { "type": "manual", "url": "file:docs/specs/2026-09-08-option-bar-agent.md", "author": "dsh-trading", "publishedAt": "2026-09-08" },
+    "source": { "type": "manual", "url": "manual:docs/specs/2026-09-08-option-bar-agent.md#twins", "author": "dsh-trading", "publishedAt": "2026-09-08" },
     "credibility": "high",
     "coreClaims": ["510300/159919", "510500/159922", "588000/588080"],
     "factCheck": { "verified": ["kit-cn twin map"], "discrepancies": [], "unverifiable": [] },
@@ -47,7 +47,7 @@
   {
     "title": "箱体只引用工具 JSON",
     "summary": "5 分钟箱体由 cn_get_option_intraday_box / cycles.loop 给出。禁止自绘高低点或把 1 分钟 K 贴进回复。",
-    "source": { "type": "manual", "url": "file:.agents/skills/option-intraday-workflow/SKILL.md", "author": "dsh-trading", "publishedAt": "2026-09-08" },
+    "source": { "type": "manual", "url": "manual:.agents/skills/option-intraday-workflow/SKILL.md#box", "author": "dsh-trading", "publishedAt": "2026-09-08" },
     "credibility": "high",
     "coreClaims": ["只引用 boxLow/boxHigh/regime/candidates/invalidIf", "禁止 *_get_klines"],
     "factCheck": { "verified": ["intraday-box 纯函数"], "discrepancies": [], "unverifiable": [] },
@@ -58,7 +58,7 @@
   {
     "title": "weak_rally 与 accelerating_sell 禁令",
     "summary": "五日强弱 weak_rally 不做多头卖方；accelerating_sell 不做无保护短 put。",
-    "source": { "type": "manual", "url": "file:.agents/skills/option-intraday-workflow/SKILL.md", "author": "dsh-trading", "publishedAt": "2026-09-08" },
+    "source": { "type": "manual", "url": "manual:.agents/skills/option-intraday-workflow/SKILL.md#divergence", "author": "dsh-trading", "publishedAt": "2026-09-08" },
     "credibility": "medium",
     "coreClaims": ["weak_rally 禁多头卖方", "accelerating_sell 禁裸短 put"],
     "factCheck": { "verified": ["overview divergence 字段"], "discrepancies": [], "unverifiable": ["未来样本外是否仍适用"] },
@@ -69,7 +69,7 @@
   {
     "title": "箱体候选模板地图",
     "summary": "现行 candidates 只出 butterfly / vertical / straddle。禁止发明 straddles 或备兑除非候选里有。",
-    "source": { "type": "manual", "url": "file:knowledge-stock/L3_methodology/etf_options_strategies.md", "author": "knowledge-stock", "publishedAt": "2026-09-04" },
+    "source": { "type": "manual", "url": "manual:knowledge-stock/L3_methodology/etf_options_strategies.md", "author": "knowledge-stock", "publishedAt": "2026-09-04" },
     "credibility": "medium",
     "coreClaims": ["range_hold→butterfly", "breakout/mean_revert→vertical", "vol_expand→straddle"],
     "factCheck": { "verified": ["candidatesFor"], "discrepancies": [], "unverifiable": [] },
@@ -80,7 +80,7 @@
   {
     "title": "反方：价差、到期、深市流动性",
     "summary": "5 分钟半宽小于买卖价差、临近到期 theta、深市空链、双挂选错腿 → no_trade。",
-    "source": { "type": "manual", "url": "file:.agents/skills/option-intraday-workflow/SKILL.md", "author": "dsh-trading", "publishedAt": "2026-09-08" },
+    "source": { "type": "manual", "url": "manual:.agents/skills/option-intraday-workflow/SKILL.md#contra", "author": "dsh-trading", "publishedAt": "2026-09-08" },
     "credibility": "high",
     "coreClaims": ["半宽 vs 价差", "第四个周三临近", "深市可能 TRADING_NO_DATA"],
     "factCheck": { "verified": ["skill 反方清单"], "discrepancies": [], "unverifiable": [] },
@@ -91,7 +91,7 @@
   {
     "title": "无 invalidIf 不谈买卖",
     "summary": "每笔必须有一句话可证伪假设和失效条件。证伪先停旧策略。",
-    "source": { "type": "manual", "url": "file:packages/base/src/presets.ts", "author": "dsh-trading", "publishedAt": "2026-09-06" },
+    "source": { "type": "manual", "url": "manual:packages/base/src/presets.ts#invalidIf", "author": "dsh-trading", "publishedAt": "2026-09-06" },
     "credibility": "high",
     "coreClaims": ["抄 invalidIf 不得改数字", "符合假设不自动加仓"],
     "factCheck": { "verified": ["DOCTRINE"], "discrepancies": [], "unverifiable": [] },
@@ -102,7 +102,7 @@
   {
     "title": "复盘只改剧本不改箱体公式",
     "summary": "盘后 reviews 是确定性汇总。样本不足 10 不改 skill。禁止用盈亏自动改 σ/ATR。",
-    "source": { "type": "manual", "url": "file:docs/specs/2026-09-08-option-bar-agent.md", "author": "dsh-trading", "publishedAt": "2026-09-08" },
+    "source": { "type": "manual", "url": "manual:docs/specs/2026-09-08-option-bar-agent.md#review", "author": "dsh-trading", "publishedAt": "2026-09-08" },
     "credibility": "high",
     "coreClaims": ["14:55 close5 写复盘 md", "不开盘后 LLM"],
     "factCheck": { "verified": ["spec §4.3"], "discrepancies": [], "unverifiable": [] },

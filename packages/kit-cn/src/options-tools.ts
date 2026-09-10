@@ -7,8 +7,10 @@ import type { CnOptionsService, MarketDataService, OptionSource } from '@dshtrad
 import { BOX_HORIZON_MIN, collectIntradayBox } from './intraday-box.js'
 import {
   appendJsonlLine,
+  loadPacketForBucket,
   normalizeRecommendation,
   optionsDataRoot,
+  packetByUnderlyingOf,
   recommendationsPath,
   shanghaiCalendarDate,
 } from './option-bar-ledger.js'
@@ -555,7 +557,8 @@ export function createPutOptionBarRecommendationTool(options: OptionToolOptions 
     name: 'cn_put_option_bar_recommendation',
     description:
       'Persist one 5-minute-bar option recommendation JSON for the current Shanghai calendar day. '
-      + 'Call this before the six-section reply. Templates must be in that bucket\'s forecast.candidates. '
+      +       'Call this before the six-section reply. Templates must be in that bucket\'s forecast.candidates. '
+      + 'IV/volume gates use the host ContextPacket for this bucketStart (do not relabel ivRegime). '
       + 'Does not place orders. Not investment advice.',
     parameters: {
       recommendation: {
@@ -584,10 +587,23 @@ export function createPutOptionBarRecommendationTool(options: OptionToolOptions 
         const mapped = JSON.parse(args.forecasts) as Record<string, import('@dshtrading/api').OptionIntradayBoxRow>
         forecastByUnderlying = mapped
       }
-      const row = normalizeRecommendation(parsed, forecastByUnderlying)
       const nowMs = options.now?.() ?? Date.now()
       const date = shanghaiCalendarDate(nowMs)
       const root = options.dataRoot?.() ?? optionsDataRoot()
+      const bucketStart = typeof (parsed as { bucketStart?: unknown }).bucketStart === 'string'
+        ? (parsed as { bucketStart: string }).bucketStart
+        : ''
+      const packet = bucketStart === '' ? undefined : await loadPacketForBucket(root, date, bucketStart)
+      const packetMap = packetByUnderlyingOf(packet)
+      const heldFromPacket = packet === undefined
+        ? undefined
+        : Object.fromEntries(packet.rows.map((item) => [item.underlying, item.heldQty]))
+      const row = normalizeRecommendation(
+        parsed,
+        forecastByUnderlying,
+        heldFromPacket,
+        packetMap,
+      )
       await appendJsonlLine(recommendationsPath(root, date), row)
       return JSON.stringify({ ok: true, bucketStart: row.bucketStart, opportunity: row.opportunity })
     },

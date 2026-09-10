@@ -463,6 +463,15 @@ export interface OptionOverviewRow {
   readonly ivPercentile?: number
   /** 近月 ATM 隐含波动率（0–1 年化）。总览默认从 implied_vol 回填，不打 vol_analytics。 */
   readonly atmIv?: number
+  /** 次月 ATM IV（年化）。与 atmIv 比，近/次 ≥ 1.15 → ivRegime=event_front。 */
+  readonly nextAtmIv?: number
+  /** 标的 20 日已实现波动率（日对数收益样本标准差 × √252）。日 K 不足 21 根则缺席。 */
+  readonly hv20?: number
+  /**
+   * 宿主打标的 IV 制度（与定时桶 ContextPacket 同一 `tagIvRegime`）。
+   * 新桥总是写此键；只有 atmIv、无分位/HV 时为 `unknown`。前端不得用 atmIv 冒充分位。
+   */
+  readonly ivRegime?: OptionIvRegime
   /** 当天最新 5 分钟 K 推荐落在该标的上的摘要；无账本则缺席。 */
   readonly strategy?: OptionOverviewStrategy
   /** C2：填进 composer 的扫描 prompt（技术分析，非投资建议）。 */
@@ -482,6 +491,8 @@ export interface OptionOverviewStrategy {
   readonly skipReason?: OptionBarSkipReason
   readonly bucketStart: string
   readonly invalidIf?: string
+  /** 该标的在当天最新 ContextPacket 上的制度；无 packet 则缺席，回落行上 `ivRegime`。 */
+  readonly ivRegime?: OptionIvRegime
 }
 
 export interface OptionOverview {
@@ -615,12 +626,64 @@ export type OptionBarOpportunity =
 
 export type OptionBarSkipReason = 'session' | 'calibrated' | 'overlap' | 'launch_failed'
 
+export type OptionIvRegime = 'rich' | 'cheap' | 'event_front' | 'skew_put' | 'skew_call' | 'unknown'
+
 export interface OptionBarPick {
   readonly underlying: string
   readonly regime: OptionIntradayRegime
   readonly template: OptionIntradayCandidate['template']
   readonly cycleId: string
   readonly legs?: readonly unknown[]
+  /** 必须与该桶 ContextPacket 同行一致；禁止模型改标。 */
+  readonly ivRegime?: OptionIvRegime
+}
+
+/** 定时桶注入的波动率/量价事实（宿主打标；模型只许引用）。 */
+export interface OptionBarFact {
+  readonly underlying: string
+  readonly return5d?: number
+  /** 5 日均量 / 20 日均量（总览口径，不是箱体 1 分钟量比）。 */
+  readonly volumeRatio?: number
+  readonly divergence?: 'weak_rally' | 'accelerating_sell'
+  readonly heldQty?: number
+  readonly atmIv?: number
+  /** 次月 ATM IV；与 atmIv 比期限结构。 */
+  readonly nextAtmIv?: number
+  readonly hv20?: number
+  readonly ivPercentile?: number
+}
+
+export interface OptionBarContextRow {
+  readonly underlying: string
+  readonly cycleId?: string
+  readonly regime: OptionIntradayRegime
+  readonly boxLow?: number
+  readonly boxHigh?: number
+  readonly candidates: readonly OptionIntradayCandidate['template'][]
+  readonly invalidIf?: string
+  readonly ivRegime: OptionIvRegime
+  readonly atmIv?: number
+  readonly nextAtmIv?: number
+  readonly hv20?: number
+  readonly ivPercentile?: number
+  readonly return5d?: number
+  readonly volumeRatio?: number
+  readonly divergence?: 'weak_rally' | 'accelerating_sell'
+  readonly heldQty?: number
+}
+
+export interface OptionBarContextPacket {
+  readonly bucketStart: string
+  readonly asOf: string
+  readonly rows: readonly OptionBarContextRow[]
+}
+
+/** 日终 ATM/HV 落盘一行（append-only；读时按 date+underlying 取最后一条）。 */
+export interface OptionBarDailyIv {
+  readonly date: string
+  readonly underlying: string
+  readonly atmIv?: number
+  readonly hv20?: number
 }
 
 /** 一根 5 分钟 K 的全市场推荐（或跳过桩）。 */

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { Kline, OptionOverviewRow } from '@dshtrading/api'
 import {
+  HV20_WINDOW,
   buildOverviewMetrics,
   composeScanAllPrompt,
   composeScanPrompt,
   extractAtmIv,
   extractIvPercentile,
+  hv20FromKlines,
   sortOverviewRows,
   spotSymbolOf,
 } from '../src/option-overview.ts'
@@ -64,6 +66,21 @@ describe('buildOverviewMetrics', () => {
     expect(metrics.return5d).toBeLessThan(0)
     expect(metrics.volumeRatio).toBeGreaterThan(1)
     expect(metrics.divergence).toBe('accelerating_sell')
+  })
+})
+
+describe('hv20FromKlines', () => {
+  it('收盘价不足 window+1 根 → 缺席', () => {
+    expect(hv20FromKlines([bar(1, 1, 10)])).toBeUndefined()
+    expect(hv20FromKlines(Array.from({ length: HV20_WINDOW }, (_, i) => bar(i + 1, 1 + i, 10)))).toBeUndefined()
+  })
+
+  it('交替收盘的年化 HV 与样本标准差 × √252 一致', () => {
+    const klines = Array.from({ length: HV20_WINDOW + 1 }, (_, i) => bar(i + 1, i % 2 === 0 ? 1 : 2, 10))
+    const a = Math.log(2)
+    const n = HV20_WINDOW
+    const expected = a * Math.sqrt(n / (n - 1)) * Math.sqrt(252)
+    expect(hv20FromKlines(klines)).toBeCloseTo(expected, 10)
   })
 })
 

@@ -6,9 +6,17 @@
 |---|---|
 | `cycles/YYYY-MM-DD.jsonl` | L0 每标的每桶一行（forecast，下一桶再追加带 score 的同行） |
 | `recommendations/YYYY-MM-DD.jsonl` | 每桶一条推荐或跳过桩 |
+| `packets/YYYY-MM-DD.jsonl` | 每桶一包 ContextPacket（宿主打标；落盘校验用） |
+| `iv-daily.jsonl` | 日终 ATM IV / HV20（append-only；满 60 点后给本机分位） |
 | `reviews/YYYY-MM-DD.md` | 当日首次进入 `close5` 的确定性复盘 |
-| `seed-cards.json` | 初始化知识卡片草稿（`knowledge_ingest`） |
+| `seed-cards.json` | 初始化知识卡片草稿；`source.url` 必须是 `manual:…` 去重键（`file:` 过不了校验） |
 
 覆盖路径：环境变量 `DSH_TRADING_OPTIONS_DATA`。
 
-流水 jsonl / md 已 gitignore。不要把权利金当制度写进 `seed-cards.json`。
+投影进本机 DSH 库（`~/.dsh/knowledge/cards.json`）：
+
+```text
+node --experimental-strip-types scripts/ingest-option-seed-cards.mjs
+```
+
+同源文件用 `#` 片段区分 URL，避免十张卡互相覆盖。流水 jsonl / md 已 gitignore。不要把权利金当制度写进 `seed-cards.json`。

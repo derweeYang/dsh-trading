@@ -1,8 +1,8 @@
 # Spec：交易员总控（TraderDirector）— 薄编排 + 三车道端口
 
 - 日期：2026-09-09
-- 状态：proposed（计划已就绪 → [plan](./2026-09-09-trader-director-plan.md)）
-- 决策记录：[`.agents/notes/proposed/architecture/2026-09-09-trader-director.md`](../../.agents/notes/proposed/architecture/2026-09-09-trader-director.md)
+- 状态：implemented（Phase 1：机会车道落地，Risk/Behavior 恒 idle → [plan](./2026-09-09-trader-director-plan.md)）
+- 决策记录：[`.agents/notes/implemented/architecture/2026-09-09-trader-director.md`](../../.agents/notes/implemented/architecture/2026-09-09-trader-director.md)
 - 前置：[ETF 期权 5 分钟 K 智能体](./2026-09-08-option-bar-agent.md)
 - 分工：Cursor / Claude 做 Director / Lane 契约与 node 半接线；workbuddy 不改 `packages/client-ui-*/src/client/**`
 

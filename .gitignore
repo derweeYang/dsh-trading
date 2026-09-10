@@ -19,3 +19,5 @@ worktrees/
 data/options/cycles/
 data/options/recommendations/
 data/options/reviews/
+data/options/packets/
+data/options/iv-daily.jsonl

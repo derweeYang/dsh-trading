@@ -17,7 +17,8 @@
 | GET | `/dshtrading/api/options/chain?underlying=&expiryMonth=&source=` | T 型报价（阶段 4 起桥侧回填 `spot`） |
 | GET | `/dshtrading/api/options/implied-vol?underlying=&expiryMonth=&rate=&source=&priceField=` | 链截面 IV |
 | GET | `/dshtrading/api/options/vol-analytics?underlying=&expiryMonths=&asOf=&rate=&dividendYield=&source=` | 波动率分析（期限结构/skew/IV 分位/HV，透传） |
-| GET | `/dshtrading/api/options/overview?source=&sort=strength\|iv\|holdings&includeIv=0\|1` | 九标的总览（C1：现货/T-5/底仓/持仓聚合；`includeIv=1` 才打网关） |
+| GET | `/dshtrading/api/options/overview?source=&sort=strength\|iv\|holdings&includeIv=0\|1` | 九标的总览（C1：现货/T-5/底仓/持仓聚合；`includeIv=1` 才打网关；行带 `ivRegime`） |
+| GET | `/dshtrading/api/options/bar-packet` | 当天最新 ContextPacket（定时桶宿主打标；无文件则只有 `{ ok:true }`） |
 | GET | `/dshtrading/api/options/intraday-box?underlying=&horizon=5&asOf=` | 1 分钟 → 5 分钟箱体（L2；现货 1m K，不打期权网关） |
 | GET | `/dshtrading/api/options/cycles?underlying=&limit=` | 5 分钟闭环历史（先 forecast，下一桶补 score） |
 | GET | `/dshtrading/api/options/cycles/loop` | 九标的最新周期 + 命中率（页面可视化 SSOT） |
@@ -139,6 +140,7 @@ GET /options/overview?sort=strength&includeIv=0
       "strengthScore": 0.96,
       "days": [{ "date": "2026-09-04", "changePct": 0.3, "volumeSurge": false }],
       "divergence": "weak_rally",
+      "ivRegime": "unknown",
       "heldQty": 20000,
       "optionQty": 2,
       "strategy": {
@@ -160,7 +162,9 @@ GET /options/overview?sort=strength&includeIv=0
 - `sort`：`strength`（默认，5 日动量 × 量能比）、`iv`（`ivPercentile`，缺席回落 `atmIv`）、`holdings`
   （`heldQty` 再 `optionQty`）。
 - 默认回填近月 `atmIv`（`implied_vol`，进程内 5 分钟缓存）；`includeIv=1` 才打 `vol_analytics` 分位。
-  iQuant 无历史 IV 路径，`ivPercentile` 常缺席。任一路失败该行键缺席，不整页失败。
+  同行写 `ivRegime`（近/次月 ATM ≥ 1.15 → `event_front`；否则分位 ≥0.8 `rich` / ≤0.2 `cheap`；否则 `atmIv` 对 `hv20`）。
+  `nextAtmIv` 为次月 ATM。`hv20` 来自近 21 根日 K。`iv-daily.jsonl` 只从已落盘 packets 回填（活牌无 asOf 历史 IV）。满 60 日后补本机分位。
+  **不要把 `atmIv` 当成分位。** iQuant 无历史 IV 路径，`ivPercentile` 常缺席。任一路失败该行键缺席，不整页失败。
   盘后标的现货走日 K 收盘（与 iquant `ticker` 同一回落），合约价走 T 板已有的日 K 回落。
 - `days` 最多 5 格：`changePct` 做色深，`volumeSurge`（当日量 / 5 日均量 > 1.5）做边框。
 - `scanPrompt` / `scanAllPrompt` 给 C2：`fillComposer` 原样预填。文案含
@@ -169,8 +173,33 @@ GET /options/overview?sort=strength&includeIv=0
 - `scanPrompt` / `scanAllPrompt` 要求先调 `cn_get_option_intraday_box`，禁止自编箱体。
 - `strategy`（可选）：当天 `data/options/recommendations/YYYY-MM-DD.jsonl` 最新
   一行投影到该标的。有 pick → `opportunity` + `template` + `edge`；无 pick /
-  全市场 stub → `opportunity=no_edge` + 可选 `skipReason`。无账本文件则**不写**
-  该键。不是现场算箱体，也不改排序。
+  全市场 stub → `opportunity=no_edge` + 可选 `skipReason`。当天最新 ContextPacket
+  同行会投影 `strategy.ivRegime`。无账本文件则**不写**该键。不是现场算箱体，也不改排序。
+
+### bar-packet（定时桶 ContextPacket）
+
+```json
+GET /options/bar-packet
+{
+  "ok": true,
+  "packet": {
+    "bucketStart": "2026-09-10T01:45:00.000Z",
+    "asOf": "2026-09-10T01:45:12.000Z",
+    "rows": [{
+      "underlying": "510050",
+      "regime": "range_hold",
+      "ivRegime": "unknown",
+      "candidates": ["butterfly"],
+      "volumeRatio": 0.8,
+      "divergence": "weak_rally",
+      "atmIv": 0.21
+    }]
+  }
+}
+```
+
+- 无当天 `data/options/packets/` → `{ ok: true }`，不写 `packet` 键。
+- `volumeRatio` 是总览 5d/20d，不是箱体 1 分钟量比。前端只展示，不算制度。
 
 ### intraday-box（1 分钟 → 5 分钟箱体，L2）
 

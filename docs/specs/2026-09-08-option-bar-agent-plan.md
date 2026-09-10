@@ -1,5 +1,7 @@
 # ETF 期权 5 分钟 K 智能体 Implementation Plan
 
+> **状态（2026-09-10）：** Phase 已落地，决策记录改为 [implemented](../../.agents/notes/implemented/feature/2026-09-08-option-bar-agent.md)。下文勾选是执行当时的清单，不再当未开工。
+
 > **For agentic workers:** 本会话按 inline 执行（用户已说「继续」）。规格：[2026-09-08-option-bar-agent.md](./2026-09-08-option-bar-agent.md)。
 
 **Goal:** regular 时段每根 5 分钟 K 开一轮 trader，把推荐（含赚哪类钱）落到本仓 `data/options/`；盘后确定性汇总，不开 LLM。

@@ -1,8 +1,8 @@
 # Spec：ETF 期权 5 分钟 K 智能体（落盘 + 交易时段推荐 + 确定性盘后复盘）
 
 - 日期：2026-09-08
-- 状态：proposed
-- 决策记录：[`.agents/notes/proposed/feature/2026-09-08-option-bar-agent.md`](../../.agents/notes/proposed/feature/2026-09-08-option-bar-agent.md)
+- 状态：implemented（交易日人工验收与 seed-cards ingest 见 Note Consequences）
+- 决策记录：[`.agents/notes/implemented/feature/2026-09-08-option-bar-agent.md`](../../.agents/notes/implemented/feature/2026-09-08-option-bar-agent.md)
 - 分工：Cursor / Claude 做契约、落盘、tick 触发、skill、种子卡片；workbuddy 只展示推荐卡与复盘，不改 `packages/client-ui-*/src/client/**` 以外的桥
 
 ## 1. 产品
@@ -144,7 +144,7 @@ data/options/
 
 - 预设：`trader`（禁止 master 三子代理）。
 - 由 tick **事件**拉起，复用 `TasksRunner.launch`，不登记成用户可改 cron 的右侧栏任务（避免和 L0 墙钟错位）。
-- Prompt 静态（Layer 2）：先 `knowledge_search`（首标签 `ETF期权`）→ 读 `GET /options/overview?sort=strength&includeIv=1` 与 `GET /options/cycles/loop` → 需要腿时 `cn_get_option_strategy`。禁止 `*_get_klines`、禁止下单工具、禁止动态包。
+- Prompt 静态（Layer 2）：先 `knowledge_search`（首标签 `ETF期权`）→ 只引用宿主注入的 `ContextPacket`（箱体 + 宿主打标的 `ivRegime` / 量价；见 [ContextPacket note](../../.agents/notes/implemented/feature/2026-09-10-option-bar-context-packet.md)）→ 需要腿时 `cn_get_option_strategy`。禁止 `*_get_klines`、禁止下单工具、禁止动态包、禁止用 `vol_analytics` 改 `ivRegime`。
 - 先写 recommendations 行，再输出六段给人看：`opportunity`+`edge` → 制度 → 模板 → 行权价相对箱体 → `invalidIf` → `playbook` 或 `no_trade`。
 - 上一桶已有 `score` 时，六段之前用一句话对照上次推荐是否被证伪。
 - 工具失败或会话启动失败：桩 `skipReason=launch_failed`，不重试本桶。

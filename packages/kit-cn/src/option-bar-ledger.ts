@@ -2,18 +2,24 @@
  * ETF 期权 5 分钟 K 智能体账本：路径、jsonl、机会校验、开会话决策、盘后折叠。
  * 纯函数 + 显式 fs 参数；不下单、不调 LLM。
  */
-import { appendFile, mkdir, readFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type {
+  OptionBarContextPacket,
+  OptionBarContextRow,
+  OptionBarDailyIv,
+  OptionBarFact,
   OptionBarOpportunity,
   OptionBarPick,
   OptionBarRecommendation,
   OptionBarSkipReason,
   OptionCycle,
+  OptionCycleLoop,
   OptionIntradayBoxRow,
   OptionIntradayCandidate,
   OptionIntradayRegime,
   OptionIntradaySession,
+  OptionIvRegime,
   OptionOverviewStrategy,
 } from '@dshtrading/api'
 import { OptionCycleBook } from './option-cycles.js'
@@ -45,10 +51,18 @@ export const OPTION_BAR_AGENT_PROMPT = [
   'Do not call *_get_klines. Do not place, cancel, or preview live orders.',
   'Read knowledge_search first (tag ETF期权). Then options overview (sort=strength, includeIv=1) and GET /options/cycles/loop (or cn_get_option_intraday_box).',
   'Templates must come from forecast.candidates. Prefill legs via cn_get_option_strategy only.',
+  'Use only the ContextPacket. Do not recompute IV, HV, boxes, or volume ratios. Quote ivRegime / divergence / invalidIf verbatim. If ivRegime=unknown, do not claim percentile.',
   'First call cn_put_option_bar_recommendation with one JSON object for this bucket (opportunity closed set + edge + logic + playbook).',
   'Then reply in six sections: opportunity+edge; regime thesis; why this template; strike vs box; invalidIf (copy JSON); playbook or no_trade.',
   'If the previous bucket has a score, open with one sentence: whether the last opportunity was falsified.',
 ].join(' ')
+
+export const IV_PERCENTILE_HIGH = 0.8
+export const IV_PERCENTILE_LOW = 0.2
+export const IV_HV_RICH = 1.3
+export const IV_HV_CHEAP = 0.7
+/** 近月 ATM / 次月 ATM ≥ 此值 → event_front（期限倒挂）。 */
+export const IV_EVENT_FRONT = 1.15
 
 export function optionsDataRoot(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
   const override = env[OPTIONS_DATA_ENV]
@@ -82,6 +96,191 @@ export function recommendationsPath(root: string, date: string): string {
 
 export function reviewsPath(root: string, date: string): string {
   return path.join(root, 'reviews', `${date}.md`)
+}
+
+export function packetsPath(root: string, date: string): string {
+  return path.join(root, 'packets', `${date}.jsonl`)
+}
+
+export function ivDailyPath(root: string): string {
+  return path.join(root, 'iv-daily.jsonl')
+}
+
+export const IV_PERCENTILE_WINDOW = 60
+
+export function atmIvPercentile(
+  history: readonly { readonly date: string; readonly atmIv: number }[],
+  currentIv: number,
+  window = IV_PERCENTILE_WINDOW,
+): number | undefined {
+  if (window < 2 || !Number.isFinite(currentIv)) return undefined
+  const byDate = new Map<string, number>()
+  for (const row of history) {
+    if (Number.isFinite(row.atmIv)) byDate.set(row.date, row.atmIv)
+  }
+  const values = [...byDate.entries()]
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([, iv]) => iv)
+  const last = values[values.length - 1]
+  const series = last === currentIv ? values : [...values, currentIv]
+  if (series.length < window) return undefined
+  const tail = series.slice(-window)
+  const current = tail[tail.length - 1]
+  if (current === undefined) return undefined
+  const below = tail.filter((item) => item < current).length
+  const equal = tail.filter((item) => item === current).length
+  return (below + 0.5 * equal) / window
+}
+
+export function foldIvDaily(input: {
+  readonly date: string
+  readonly existing: readonly OptionBarDailyIv[]
+  readonly packet: OptionBarContextPacket
+}): OptionBarDailyIv[] {
+  const map = new Map<string, OptionBarDailyIv>()
+  for (const row of input.existing) {
+    map.set(`${row.date}:${row.underlying}`, row)
+  }
+  for (const row of input.packet.rows) {
+    if (row.atmIv === undefined || !Number.isFinite(row.atmIv)) continue
+    map.set(`${input.date}:${row.underlying}`, {
+      date: input.date,
+      underlying: row.underlying,
+      atmIv: row.atmIv,
+      ...(row.hv20 === undefined ? {} : { hv20: row.hv20 }),
+    })
+  }
+  return [...map.values()].sort((left, right) => {
+    const byDate = left.date.localeCompare(right.date)
+    return byDate !== 0 ? byDate : left.underlying.localeCompare(right.underlying)
+  })
+}
+
+/** 用 packets/*.jsonl 回填 iv-daily（每文件 last-wins）。活牌源没有 asOf 历史 IV，不能从行情网关反推。 */
+export async function backfillIvDailyFromPackets(root: string): Promise<OptionBarDailyIv[]> {
+  const dir = path.join(root, 'packets')
+  let names: string[]
+  try {
+    names = await readdir(dir)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+  let existing = await readJsonl<OptionBarDailyIv>(ivDailyPath(root))
+  for (const name of names.sort()) {
+    if (!name.endsWith('.jsonl')) continue
+    const date = name.slice(0, -'.jsonl'.length)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
+    const packets = await readJsonl<OptionBarContextPacket>(path.join(dir, name))
+    const latest = packets[packets.length - 1]
+    if (latest === undefined) continue
+    existing = foldIvDaily({ date, existing, packet: latest })
+  }
+  const file = ivDailyPath(root)
+  await mkdir(path.dirname(file), { recursive: true })
+  const body = existing.length === 0 ? '' : `${existing.map((row) => JSON.stringify(row)).join('\n')}\n`
+  await writeFile(file, body, 'utf8')
+  return existing
+}
+
+export function latestPacketForBucket(
+  rows: readonly OptionBarContextPacket[],
+  bucketStart: string,
+): OptionBarContextPacket | undefined {
+  const matched = rows.filter((row) => row.bucketStart === bucketStart)
+  if (matched.length === 0) return undefined
+  return matched[matched.length - 1]
+}
+
+export async function loadPacketForBucket(
+  root: string,
+  date: string,
+  bucketStart: string,
+): Promise<OptionBarContextPacket | undefined> {
+  const rows = await readJsonl<OptionBarContextPacket>(packetsPath(root, date))
+  return latestPacketForBucket(rows, bucketStart)
+}
+
+export function packetByUnderlyingOf(
+  packet: OptionBarContextPacket | undefined,
+): Readonly<Record<string, OptionBarContextRow | undefined>> | undefined {
+  if (packet === undefined) return undefined
+  const map: Record<string, OptionBarContextRow | undefined> = {}
+  for (const row of packet.rows) map[row.underlying] = row
+  return map
+}
+
+function asUnitInterval(value: number): number {
+  return value > 1 ? value / 100 : value
+}
+
+export function tagIvRegime(input: {
+  readonly ivPercentile?: number
+  readonly atmIv?: number
+  readonly nextAtmIv?: number
+  readonly hv20?: number
+}): OptionIvRegime {
+  const atm = input.atmIv
+  const next = input.nextAtmIv
+  if (
+    atm !== undefined && next !== undefined
+    && Number.isFinite(atm) && next > 0
+    && atm / next >= IV_EVENT_FRONT
+  ) {
+    return 'event_front'
+  }
+  const rawPct = input.ivPercentile
+  if (rawPct !== undefined && Number.isFinite(rawPct)) {
+    const pct = asUnitInterval(rawPct)
+    if (pct >= IV_PERCENTILE_HIGH) return 'rich'
+    if (pct <= IV_PERCENTILE_LOW) return 'cheap'
+  }
+  const hv = input.hv20
+  if (atm !== undefined && hv !== undefined && Number.isFinite(atm) && hv > 0) {
+    if (atm > IV_HV_RICH * hv) return 'rich'
+    if (atm < IV_HV_CHEAP * hv) return 'cheap'
+  }
+  return 'unknown'
+}
+
+export function buildBarContextPacket(input: {
+  readonly bucketStart: string
+  readonly asOf: string
+  readonly loop: Pick<OptionCycleLoop, 'rows'>
+  readonly factsByUnderlying?: Readonly<Record<string, OptionBarFact | undefined>>
+}): OptionBarContextPacket {
+  const rows: OptionBarContextRow[] = []
+  for (const loopRow of input.loop.rows) {
+    const forecast = loopRow.latest?.forecast
+    const facts = input.factsByUnderlying?.[loopRow.underlying]
+    const ivRegime = tagIvRegime({
+      ...(facts?.ivPercentile === undefined ? {} : { ivPercentile: facts.ivPercentile }),
+      ...(facts?.atmIv === undefined ? {} : { atmIv: facts.atmIv }),
+      ...(facts?.nextAtmIv === undefined ? {} : { nextAtmIv: facts.nextAtmIv }),
+      ...(facts?.hv20 === undefined ? {} : { hv20: facts.hv20 }),
+    })
+    const templates = forecast?.candidates.map((item) => item.template) ?? []
+    const invalidIf = forecast?.candidates[0]?.invalidIf
+    rows.push({
+      underlying: loopRow.underlying,
+      ivRegime,
+      regime: forecast?.regime ?? 'no_trade',
+      candidates: templates,
+      ...(loopRow.latest?.id === undefined ? {} : { cycleId: loopRow.latest.id }),
+      ...(forecast?.boxLow === undefined ? {} : { boxLow: forecast.boxLow }),
+      ...(forecast?.boxHigh === undefined ? {} : { boxHigh: forecast.boxHigh }),
+      ...(invalidIf === undefined ? {} : { invalidIf }),
+      ...(facts?.atmIv === undefined ? {} : { atmIv: facts.atmIv }),
+      ...(facts?.nextAtmIv === undefined ? {} : { nextAtmIv: facts.nextAtmIv }),
+      ...(facts?.hv20 === undefined ? {} : { hv20: facts.hv20 }),
+      ...(facts?.ivPercentile === undefined ? {} : { ivPercentile: facts.ivPercentile }),
+      ...(facts?.return5d === undefined ? {} : { return5d: facts.return5d }),
+      ...(facts?.volumeRatio === undefined ? {} : { volumeRatio: facts.volumeRatio }),
+      ...(facts?.divergence === undefined ? {} : { divergence: facts.divergence }),
+      ...(facts?.heldQty === undefined ? {} : { heldQty: facts.heldQty }),
+    })
+  }
+  return { bucketStart: input.bucketStart, asOf: input.asOf, rows }
 }
 
 export async function appendJsonlLine(filePath: string, row: unknown): Promise<void> {
@@ -122,6 +321,7 @@ export function opportunityAllowed(input: {
   picks: readonly OptionBarPick[]
   forecastByUnderlying: Readonly<Record<string, OptionIntradayBoxRow | undefined>>
   heldQtyByUnderlying?: Readonly<Record<string, number | undefined>>
+  packetByUnderlying?: Readonly<Record<string, OptionBarContextRow | undefined>>
 }): string | undefined {
   const { opportunity, picks } = input
   if (opportunity === 'no_edge') {
@@ -142,8 +342,28 @@ export function opportunityAllowed(input: {
       return `template ${pick.template} is not in candidates for ${pick.underlying}`
     }
     if (opportunity === 'covered_yield') {
-      const held = input.heldQtyByUnderlying?.[pick.underlying] ?? 0
+      const held = input.heldQtyByUnderlying?.[pick.underlying]
+        ?? input.packetByUnderlying?.[pick.underlying]?.heldQty
+        ?? 0
       if (held < 10_000) return `covered_yield needs heldQty>=10000 for ${pick.underlying}`
+    }
+    const packet = input.packetByUnderlying?.[pick.underlying]
+    if (packet === undefined) continue
+    if (pick.ivRegime !== undefined && pick.ivRegime !== packet.ivRegime) {
+      return `pick ivRegime ${pick.ivRegime} disagrees with packet ivRegime ${packet.ivRegime}`
+    }
+    const ivRegime = packet.ivRegime
+    if (opportunity === 'theta_rent' && ivRegime !== 'rich' && ivRegime !== 'event_front') {
+      return `theta_rent forbids ivRegime ${ivRegime}`
+    }
+    if (opportunity === 'rv_vs_iv' && ivRegime === 'rich') {
+      return `rv_vs_iv forbids ivRegime ${ivRegime}`
+    }
+    if (opportunity === 'covered_yield' && packet.divergence === 'weak_rally') {
+      return `covered_yield forbids weak_rally`
+    }
+    if (opportunity === 'mean_reversion' && packet.divergence === 'accelerating_sell') {
+      return `mean_reversion forbids accelerating_sell`
     }
   }
   return undefined
@@ -153,6 +373,7 @@ export function normalizeRecommendation(
   raw: unknown,
   forecastByUnderlying: Readonly<Record<string, OptionIntradayBoxRow | undefined>>,
   heldQtyByUnderlying?: Readonly<Record<string, number | undefined>>,
+  packetByUnderlying?: Readonly<Record<string, OptionBarContextRow | undefined>>,
 ): OptionBarRecommendation {
   if (typeof raw !== 'object' || raw === null) throw new Error('recommendation must be an object')
   const row = raw as Record<string, unknown>
@@ -173,6 +394,7 @@ export function normalizeRecommendation(
     picks,
     forecastByUnderlying,
     ...(heldQtyByUnderlying === undefined ? {} : { heldQtyByUnderlying }),
+    ...(packetByUnderlying === undefined ? {} : { packetByUnderlying }),
   })
   if (error !== undefined) throw new Error(error)
   const skipReason = row.skipReason
@@ -307,6 +529,28 @@ export function sessionAt(nowMs: number): OptionIntradaySession {
   return sessionFlag(nowMs)
 }
 
+export function latestPacket(
+  rows: readonly OptionBarContextPacket[],
+): OptionBarContextPacket | undefined {
+  if (rows.length === 0) return undefined
+  return rows.reduce((best, row) =>
+    Date.parse(row.bucketStart) >= Date.parse(best.bucketStart) ? row : best)
+}
+
+export async function loadLatestPacket(
+  root: string,
+  nowMs: number,
+): Promise<OptionBarContextPacket | undefined> {
+  try {
+    const rows = await readJsonl<OptionBarContextPacket>(
+      packetsPath(root, shanghaiCalendarDate(nowMs)),
+    )
+    return latestPacket(rows)
+  } catch {
+    return undefined
+  }
+}
+
 export function latestRecommendation(
   rows: readonly OptionBarRecommendation[],
 ): OptionBarRecommendation | undefined {
@@ -349,9 +593,11 @@ export async function loadLatestRecommendation(
 export function overviewStrategyOf(
   underlying: string,
   rec: OptionBarRecommendation | undefined,
+  packetRow?: OptionBarContextRow,
 ): OptionOverviewStrategy | undefined {
   if (rec === undefined) return undefined
   const pick = rec.picks.find((item) => item.underlying === underlying)
+  const ivRegime = packetRow?.ivRegime ?? pick?.ivRegime
   if (pick !== undefined) {
     return {
       opportunity: rec.opportunity,
@@ -363,6 +609,7 @@ export function overviewStrategyOf(
       ...(rec.playbook === '' ? {} : { playbook: rec.playbook }),
       ...(rec.invalidIf === '' ? {} : { invalidIf: rec.invalidIf }),
       ...(rec.skipReason === undefined ? {} : { skipReason: rec.skipReason }),
+      ...(ivRegime === undefined ? {} : { ivRegime }),
     }
   }
   return {
@@ -373,16 +620,19 @@ export function overviewStrategyOf(
     ...(rec.logic === '' ? {} : { logic: rec.logic }),
     ...(rec.playbook === '' ? {} : { playbook: rec.playbook }),
     ...(rec.skipReason === undefined ? {} : { skipReason: rec.skipReason }),
+    ...(ivRegime === undefined ? {} : { ivRegime }),
   }
 }
 
 export function attachOverviewStrategies<T extends { readonly underlying: string }>(
   rows: readonly T[],
   rec: OptionBarRecommendation | undefined,
+  packet?: OptionBarContextPacket,
 ): Array<T & { strategy?: OptionOverviewStrategy }> {
   if (rec === undefined) return [...rows]
+  const byUnderlying = packetByUnderlyingOf(packet)
   return rows.map((row) => {
-    const strategy = overviewStrategyOf(row.underlying, rec)
+    const strategy = overviewStrategyOf(row.underlying, rec, byUnderlying?.[row.underlying])
     return strategy === undefined ? row : { ...row, strategy }
   })
 }

@@ -7,16 +7,23 @@ import { OptionCycleBook } from '../src/option-cycles.ts'
 import {
   appendJsonlLine,
   attachOverviewStrategies,
+  buildBarContextPacket,
   decideBarAgent,
   latestRecommendation,
   loadLatestRecommendation,
   foldDailyReview,
   latestByKey,
+  latestPacketForBucket,
+  atmIvPercentile,
+  foldIvDaily,
+  backfillIvDailyFromPackets,
   makeSkipRecommendation,
   normalizeRecommendation,
   opportunityAllowed,
   optionsDataRoot,
+  packetsPath,
   readJsonl,
+  tagIvRegime,
   replayCyclesIntoBook,
   sessionAt,
   shanghaiCalendarDate,
@@ -134,6 +141,180 @@ describe('opportunityAllowed / normalizeRecommendation', () => {
       forecastByUnderlying: forecasts,
     })).toMatch(/forbids picks/)
   })
+
+  it('有 packet 时 theta_rent 要求 ivRegime=rich|event_front', () => {
+    const packet = {
+      '510050': { underlying: '510050', ivRegime: 'unknown' as const, regime: 'range_hold' as const },
+    }
+    expect(opportunityAllowed({
+      opportunity: 'theta_rent',
+      picks: [{ underlying: '510050', regime: 'range_hold', template: 'butterfly', cycleId: '1' }],
+      forecastByUnderlying: forecasts,
+      packetByUnderlying: packet,
+    })).toMatch(/ivRegime/)
+    expect(opportunityAllowed({
+      opportunity: 'theta_rent',
+      picks: [{ underlying: '510050', regime: 'range_hold', template: 'butterfly', cycleId: '1' }],
+      forecastByUnderlying: forecasts,
+      packetByUnderlying: { '510050': { ...packet['510050'], ivRegime: 'rich' } },
+    })).toBeUndefined()
+  })
+
+  it('有 packet 时 rv_vs_iv 拒绝 rich；covered_yield 拒绝 weak_rally', () => {
+    const expand = forecast({
+      regime: 'vol_expand',
+      candidates: [{ template: 'straddle', bias: 'neutral', invalidIf: 'out', reason: 'x' }],
+    })
+    expect(opportunityAllowed({
+      opportunity: 'rv_vs_iv',
+      picks: [{ underlying: '510050', regime: 'vol_expand', template: 'straddle', cycleId: '1' }],
+      forecastByUnderlying: { '510050': expand },
+      packetByUnderlying: { '510050': { underlying: '510050', ivRegime: 'rich', regime: 'vol_expand' } },
+    })).toMatch(/ivRegime/)
+    expect(opportunityAllowed({
+      opportunity: 'covered_yield',
+      picks: [{ underlying: '510050', regime: 'range_hold', template: 'covered_call', cycleId: '1' }],
+      forecastByUnderlying: {
+        '510050': forecast({
+          candidates: [{ template: 'covered_call', bias: 'up', invalidIf: 'out', reason: 'x' }],
+        }),
+      },
+      heldQtyByUnderlying: { '510050': 10_000 },
+      packetByUnderlying: {
+        '510050': { underlying: '510050', ivRegime: 'unknown', regime: 'range_hold', divergence: 'weak_rally' },
+      },
+    })).toMatch(/weak_rally/)
+  })
+
+  it('模型改写 packet 的 ivRegime → 拒绝', () => {
+    expect(opportunityAllowed({
+      opportunity: 'theta_rent',
+      picks: [{
+        underlying: '510050',
+        regime: 'range_hold',
+        template: 'butterfly',
+        cycleId: '1',
+        ivRegime: 'rich',
+      }],
+      forecastByUnderlying: forecasts,
+      packetByUnderlying: { '510050': { underlying: '510050', ivRegime: 'cheap', regime: 'range_hold' } },
+    })).toMatch(/ivRegime/)
+  })
+})
+
+describe('tagIvRegime / buildBarContextPacket', () => {
+  it('分位与 IV/HV 打标；只有 atmIv 则为 unknown', () => {
+    expect(tagIvRegime({ ivPercentile: 0.85 })).toBe('rich')
+    expect(tagIvRegime({ ivPercentile: 15 })).toBe('cheap')
+    expect(tagIvRegime({ atmIv: 0.28, hv20: 0.18 })).toBe('rich')
+    expect(tagIvRegime({ atmIv: 0.12, hv20: 0.2 })).toBe('cheap')
+    expect(tagIvRegime({ atmIv: 0.22 })).toBe('unknown')
+    expect(tagIvRegime({ atmIv: 0.25, nextAtmIv: 0.2 })).toBe('event_front')
+    expect(tagIvRegime({ atmIv: 0.22, nextAtmIv: 0.21, hv20: 0.12 })).toBe('rich')
+  })
+
+  it('packet 从 loop + facts 组装；量比只取 facts 的 5d/20d，不抄箱体 1m 量比', () => {
+    const packet = buildBarContextPacket({
+      bucketStart: '2026-09-08T01:45:00.000Z',
+      asOf: '2026-09-08T01:45:12.000Z',
+      loop: {
+        rows: [{
+          underlying: '510050',
+          latest: {
+            id: '510050:1',
+            forecast: forecast({ volumeRatio: 2.2 }),
+          },
+        }],
+      },
+      factsByUnderlying: {
+        '510050': { underlying: '510050', return5d: 1.2, volumeRatio: 0.8, divergence: 'weak_rally', atmIv: 0.21 },
+      },
+    })
+    expect(packet.rows[0]).toMatchObject({
+      underlying: '510050',
+      cycleId: '510050:1',
+      regime: 'range_hold',
+      ivRegime: 'unknown',
+      volumeRatio: 0.8,
+      divergence: 'weak_rally',
+      atmIv: 0.21,
+    })
+    expect(packet.rows[0]?.volumeRatio).not.toBe(2.2)
+  })
+})
+
+describe('packets jsonl', () => {
+  it('按 bucketStart 取最后一包', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-pkt-'))
+    const file = packetsPath(dir, '2026-09-08')
+    await appendJsonlLine(file, { bucketStart: 'a', asOf: 't', rows: [] })
+    await appendJsonlLine(file, { bucketStart: 'b', asOf: 't', rows: [{ underlying: '510050', ivRegime: 'rich', regime: 'range_hold' }] })
+    await appendJsonlLine(file, { bucketStart: 'b', asOf: 't2', rows: [{ underlying: '510050', ivRegime: 'cheap', regime: 'range_hold' }] })
+    const latest = latestPacketForBucket(await readJsonl(file), 'b')
+    expect(latest?.asOf).toBe('t2')
+    expect(latest?.rows[0]?.ivRegime).toBe('cheap')
+  })
+})
+
+describe('atmIvPercentile / foldIvDaily', () => {
+  it('窗口不足不打分位；满窗用平均秩 0–1', () => {
+    const hist = Array.from({ length: 58 }, (_, i) => ({ date: `d${String(i + 1).padStart(2, '0')}`, atmIv: 0.1 + i * 0.001 }))
+    expect(atmIvPercentile(hist, 0.2, 60)).toBeUndefined()
+    const full = [...hist, { date: 'd59', atmIv: 0.16 }]
+    const pct = atmIvPercentile(full, 0.2, 60)
+    expect(pct).toBeGreaterThan(0.9)
+    expect(pct).toBeLessThanOrEqual(1)
+  })
+
+  it('同一日同一标的后写覆盖；缺 atmIv 的行不进序列', () => {
+    const rows = foldIvDaily({
+      date: '2026-09-10',
+      existing: [
+        { date: '2026-09-10', underlying: '510050', atmIv: 0.1 },
+        { date: '2026-09-09', underlying: '510050', atmIv: 0.18 },
+      ],
+      packet: {
+        bucketStart: 't',
+        asOf: 't',
+        rows: [
+          { underlying: '510050', ivRegime: 'unknown', regime: 'range_hold', candidates: [], atmIv: 0.22, hv20: 0.16 },
+          { underlying: '159915', ivRegime: 'unknown', regime: 'no_trade', candidates: [] },
+        ],
+      },
+    })
+    expect(rows.filter((row) => row.underlying === '510050')).toEqual([
+      { date: '2026-09-09', underlying: '510050', atmIv: 0.18 },
+      { date: '2026-09-10', underlying: '510050', atmIv: 0.22, hv20: 0.16 },
+    ])
+    expect(rows.some((row) => row.underlying === '159915')).toBe(false)
+  })
+
+  it('从 packets 目录回填 iv-daily（每文件取最新一包）', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-ivbf-'))
+    const packetsDir = path.join(dir, 'packets')
+    await mkdir(packetsDir, { recursive: true })
+    await writeFile(path.join(packetsDir, '2026-09-09.jsonl'), `${JSON.stringify({
+      bucketStart: 'a',
+      asOf: 't',
+      rows: [{ underlying: '510050', ivRegime: 'unknown', regime: 'range_hold', candidates: [], atmIv: 0.19 }],
+    })}\n`, 'utf8')
+    await writeFile(path.join(packetsDir, '2026-09-10.jsonl'), `${JSON.stringify({
+      bucketStart: 'b',
+      asOf: 't',
+      rows: [{ underlying: '510050', ivRegime: 'rich', regime: 'range_hold', candidates: [], atmIv: 0.22, nextAtmIv: 0.18 }],
+    })}\n${JSON.stringify({
+      bucketStart: 'c',
+      asOf: 't2',
+      rows: [{ underlying: '510050', ivRegime: 'event_front', regime: 'range_hold', candidates: [], atmIv: 0.24, nextAtmIv: 0.18 }],
+    })}\n`, 'utf8')
+    const rows = await backfillIvDailyFromPackets(dir)
+    expect(rows).toEqual([
+      { date: '2026-09-09', underlying: '510050', atmIv: 0.19 },
+      { date: '2026-09-10', underlying: '510050', atmIv: 0.24 },
+    ])
+    const again = await backfillIvDailyFromPackets(dir)
+    expect(again).toHaveLength(2)
+  })
 })
 
 describe('decideBarAgent', () => {
@@ -235,6 +416,16 @@ describe('attachOverviewStrategies', () => {
       logic: '箱体收窄，卖方占优',
       playbook: '取箱体 → butterfly → 记失效条件',
     })
+    const [withIv] = attachOverviewStrategies(
+      [{ underlying: '510050' }],
+      rec,
+      {
+        bucketStart: rec.bucketStart,
+        asOf: 't',
+        rows: [{ underlying: '510050', ivRegime: 'rich', regime: 'range_hold', candidates: ['butterfly'] }],
+      },
+    )
+    expect(withIv?.strategy?.ivRegime).toBe('rich')
     expect(latestRecommendation([rec, { ...rec, bucketStart: '2026-09-09T05:50:00.000Z' }])?.bucketStart)
       .toBe('2026-09-09T05:50:00.000Z')
   })

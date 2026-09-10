@@ -104,6 +104,7 @@ describe('cn_get_option_chain', () => {
     expect(body).toContain('禁止用「最近 5 根高低」')
     expect(body).toContain('cn_get_option_strategy')
     expect(body).toContain('cn_put_option_bar_recommendation')
+    expect(body).toContain('ContextPacket')
     expect(body).toContain('opportunity')
     expect(body).toContain('no_trade')
   })
@@ -135,6 +136,48 @@ describe('cn_get_option_chain', () => {
     expect(out).toContain('"ok":true')
     const text = await readFile(path.join(dir, 'recommendations', '2026-09-08.jsonl'), 'utf8')
     expect(text).toContain('no_edge')
+  })
+
+  it('磁盘 ContextPacket 使 theta_rent + unknown 落盘失败', async () => {
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises')
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-put-pkt-'))
+    await mkdir(path.join(dir, 'packets'), { recursive: true })
+    await writeFile(path.join(dir, 'packets', '2026-09-08.jsonl'), `${JSON.stringify({
+      bucketStart: '2026-09-08T01:45:00.000Z',
+      asOf: 't',
+      rows: [{ underlying: '510050', ivRegime: 'unknown', regime: 'range_hold', candidates: ['butterfly'] }],
+    })}\n`, 'utf8')
+    const tool = createPutOptionBarRecommendationTool({
+      dataRoot: () => dir,
+      now: () => Date.parse('2026-09-08T01:45:00.000Z'),
+    })
+    await expect(tool.execute({
+      recommendation: JSON.stringify({
+        bucketStart: '2026-09-08T01:45:00.000Z',
+        asOf: 't',
+        session: 'regular',
+        opportunity: 'theta_rent',
+        edge: 'x',
+        logic: 'x',
+        playbook: 'x',
+        invalidIf: 'x',
+        picks: [{ underlying: '510050', regime: 'range_hold', template: 'butterfly', cycleId: '1' }],
+        noTrade: false,
+      }),
+      forecasts: JSON.stringify({
+        '510050': {
+          underlying: '510050',
+          name: '50',
+          exchange: 'SSE',
+          horizonMin: 5,
+          regime: 'range_hold',
+          session: 'regular',
+          candidates: [{ template: 'butterfly', bias: 'neutral', invalidIf: 'x', reason: 'x' }],
+        },
+      }),
+    })).rejects.toThrow(/ivRegime/)
   })
 
   it('cn-risk-checklist mentions ETF option obligation margin', async () => {

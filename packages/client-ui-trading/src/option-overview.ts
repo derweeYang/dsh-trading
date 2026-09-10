@@ -11,9 +11,30 @@ import type {
   Ticker,
 } from '@dshtrading/api'
 
-export const OVERVIEW_KLINE_LIMIT = 20
+export const HV20_WINDOW = 20
+/** 日 K 根数：量能用近 20 根；HV20 需要 window+1 根收盘。 */
+export const OVERVIEW_KLINE_LIMIT = HV20_WINDOW + 1
 export const OVERVIEW_T5 = 5
 export const VOLUME_SURGE_RATIO = 1.5
+
+export function hv20FromKlines(klines: readonly Kline[]): number | undefined {
+  if (klines.length < HV20_WINDOW + 1) return undefined
+  const ordered = [...klines].sort((a, b) => a.closeTime - b.closeTime)
+  const closes = ordered.map((bar) => bar.close)
+  const logs: number[] = []
+  for (let i = 1; i < closes.length; i += 1) {
+    const prev = closes[i - 1]
+    const next = closes[i]
+    if (prev === undefined || next === undefined || prev <= 0 || next <= 0) return undefined
+    logs.push(Math.log(next / prev))
+  }
+  const tail = logs.slice(-HV20_WINDOW)
+  if (tail.length < HV20_WINDOW) return undefined
+  const mean = tail.reduce((sum, item) => sum + item, 0) / tail.length
+  const variance = tail.reduce((sum, item) => sum + (item - mean) ** 2, 0) / (tail.length - 1)
+  if (!Number.isFinite(variance) || variance < 0) return undefined
+  return Math.sqrt(variance) * Math.sqrt(252)
+}
 
 export function spotSymbolOf(
   underlying: string,

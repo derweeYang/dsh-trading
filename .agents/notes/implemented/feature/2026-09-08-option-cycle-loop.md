@@ -31,7 +31,7 @@ Status: implemented
 
 ## Consequences
 
-- 进程重启丢历史；要落盘再开文件账本。
+- 进程重启丢历史已由 [option-bar-agent](./2026-09-08-option-bar-agent.md) 的当日 jsonl 回放补上；环长度仍 48 桶/标的。
 - 闭环是研究预填，不是自动交易。miss ≠ 下单。
 - 契约见 [docs/options-bridge.md](../../../../docs/options-bridge.md)「cycles / loop」。
 - workbuddy 可视化见交接文档节 D **WB-6**。
