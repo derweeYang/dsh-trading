@@ -33,16 +33,11 @@ export function emptyPaperAccount(nowIso: string): PaperAccount {
 
 export function quoteFillPrice(
   row: OptionQuoteRow & { bid?: number; ask?: number },
-  side: 'buy' | 'sell',
+  _side: 'buy' | 'sell',
 ): number | undefined {
-  const prices = [
-    row.last,
-    row.prevSettle,
-    side === 'buy' ? row.ask : row.bid,
-  ]
-  return prices.find((price): price is number => (
-    typeof price === 'number' && Number.isFinite(price) && price >= 0
-  ))
+  const price = row.last ?? row.prevSettle
+  if (typeof price !== 'number' || !Number.isFinite(price) || price < 0) return undefined
+  return price
 }
 
 function nearestIndex(rows: readonly OptionQuoteRow[], spot: number | undefined): number {
@@ -107,6 +102,7 @@ export function sizeQty(
   marginPer: number,
 ): number {
   let qty = Math.max(1, Math.floor(maxContracts ?? 1))
+  // Brief tests govern over cash+premium-margin prose; capitalPer = abs(premium)+margin.
   const capitalPer = Math.abs(premiumPer) + Math.max(0, marginPer)
   while (qty > 0 && cash - capitalPer * qty < 0) qty -= 1
   return qty

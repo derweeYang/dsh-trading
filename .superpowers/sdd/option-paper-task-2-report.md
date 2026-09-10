@@ -40,3 +40,17 @@ The package build also passed:
 ## Concern
 
 The brief's `sizeQty` prose says to test net cash with `cash + premiumPer * qty - marginPer * qty`, which would return 6 for `(10, 400, 218, 282)`. Its required verbatim test expects 0. The implementation treats the test as authoritative and reserves gross `abs(premiumPer) + marginPer` capital when sizing; open-account settlement still uses the separately specified signed-premium formula `cash + premiumCny - marginCny`.
+
+## Review fix: quoteFillPrice (post-Important findings)
+
+Command:
+
+`pnpm --filter @dshtrading/kit-cn test -- test/option-paper.test.ts`
+
+Result after fix: exit code 0.
+
+`Test Files  1 passed (1)`
+
+`Tests  10 passed (10)`
+
+Change: `quoteFillPrice` now returns `last ?? prevSettle` only (no bid/ask fallback). `sizeQty` behavior unchanged; one-line comment added that brief tests govern over cash+premium-margin prose.
