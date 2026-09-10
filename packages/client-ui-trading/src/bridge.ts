@@ -14,7 +14,7 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
 import {
   OVERVIEW_KLINE_LIMIT,
   applyTicker,
@@ -39,15 +39,22 @@ import {
   ivDailyPath,
   loadLatestPacket,
   loadLatestRecommendation,
+  loadPaperState,
   OptionCycleBook,
+  OPTION_MULTIPLIER,
   readJsonl,
+  resetPaperState,
+  sessionFlag,
   tagIvRegime,
   optionsDataRoot,
+  quoteFillPrice,
   realizedInWindow,
   replayCyclesIntoBook,
   scorePreviousCycle,
   selectBoxTargets,
+  shanghaiCalendarDate,
   shanghaiBucketStartMs,
+  tryPaperManage,
 } from '@dshtrading/kit-cn'
 import type { ChartActivationStore, CustomIndicatorRecord, CustomIndicatorStore, IndicatorInstance } from '@dshtrading/indicators'
 import { clampActivationParams, createMemoryChartActivationStore, createMemoryCustomIndicatorStore, resolveIndicatorSpec, sanitizeInstance, symbolScopeKey, withHiddenScopes } from '@dshtrading/indicators'
@@ -1358,6 +1365,73 @@ export class TradingBridge {
     return { ok: true, loop: this.#cycles.loop(roster.map((row) => row.underlying)) }
   }
 
+  async optionPaperAccount(): Promise<OptionPaperAccountWire> {
+    const nowMs = Date.now()
+    const nowIso = new Date(nowMs).toISOString()
+    const state = await loadPaperState(optionsDataRoot(), shanghaiCalendarDate(nowMs), nowIso)
+    const getMark = this.#paperMarkLookup()
+    const mtmRows = await Promise.all(state.positions.flatMap((position) => (
+      position.legs.map(async (leg) => {
+        const mark = await getMark(leg.code, leg.side)
+        const price = mark ?? leg.fillPrice
+        return (leg.side === 'buy' ? 1 : -1)
+          * (price - leg.fillPrice)
+          * leg.qty
+          * OPTION_MULTIPLIER
+      })
+    )))
+    const marginCny = state.positions.reduce((total, position) => total + position.marginCny, 0)
+    return {
+      ok: true,
+      account: state.account,
+      equity: state.account.cash + marginCny + mtmRows.reduce((total, value) => total + value, 0),
+      positions: state.positions,
+    }
+  }
+
+  async optionPaperFills(limitRaw?: string): Promise<OptionPaperFillsWire> {
+    const limit = limitRaw === undefined || limitRaw.trim() === '' ? 48 : Number(limitRaw)
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new BridgeProtocolError(400, 'options paper fills: limit must be a positive integer')
+    }
+    const nowMs = Date.now()
+    const state = await loadPaperState(
+      optionsDataRoot(),
+      shanghaiCalendarDate(nowMs),
+      new Date(nowMs).toISOString(),
+    )
+    return { ok: true, fills: state.fills.slice(-limit).reverse() }
+  }
+
+  async resetOptionPaper(): Promise<OptionPaperAccountWire> {
+    const nowMs = Date.now()
+    const nowIso = new Date(nowMs).toISOString()
+    await resetPaperState(optionsDataRoot(), nowIso)
+    return await this.optionPaperAccount()
+  }
+
+  #paperMarkLookup(): (code: string, side: 'buy' | 'sell') => Promise<number | undefined> {
+    const service = this.host.getCnOptions?.()
+    const chains = new Map<string, Promise<OptionChain | undefined>>()
+    return async (code) => {
+      if (service === undefined) return undefined
+      const parsed = code.toUpperCase().match(/^(\d{6})[CP](\d{4})/)
+      if (parsed === null) return undefined
+      const [, underlying, expiryMonth] = parsed
+      const key = `${underlying}:${expiryMonth}`
+      let pending = chains.get(key)
+      if (pending === undefined) {
+        pending = service.getOptionChain({ underlying: underlying!, expiryMonth: expiryMonth! })
+          .catch(() => undefined)
+        chains.set(key, pending)
+      }
+      const chain = await pending
+      const row = [...(chain?.calls ?? []), ...(chain?.puts ?? [])]
+        .find((candidate) => candidate.code.toUpperCase() === code.toUpperCase())
+      return row === undefined ? undefined : quoteFillPrice(row, 'buy')
+    }
+  }
+
   /**
    * 5 分钟桶：给上一桶补分，再在 regular 会话开新预报。同桶幂等。
    * 宿主 30s 心跳调用；POST 供回放 / 单测。
@@ -1414,6 +1488,41 @@ export class TradingBridge {
       })
       ticked = true
     }
+    const date = shanghaiCalendarDate(nowMs)
+    const rowByUnderlying = new Map(box.rows.map((row) => [row.underlying, row]))
+    const getMark = this.#paperMarkLookup()
+    void tryPaperManage({
+      root: optionsDataRoot(),
+      date,
+      nowMs,
+      nowIso: new Date(nowMs).toISOString(),
+      session: sessionFlag(nowMs),
+      calendarDate: date,
+      getMark,
+      getLastClose: async (underlying) => {
+        const row = rowByUnderlying.get(underlying)
+        if (row?.last !== undefined && Number.isFinite(row.last)) {
+          return {
+            lastClose: row.last,
+            ...(row.volumeRatio === undefined ? {} : { volumeRatio: row.volumeRatio }),
+          }
+        }
+        if (market === undefined || row?.spotSymbol === undefined) return undefined
+        try {
+          const klines = await market.getKlines(row.spotSymbol, '1m', 5)
+          const lastClose = klines.at(-1)?.close
+          if (lastClose === undefined || !Number.isFinite(lastClose)) return undefined
+          return {
+            lastClose,
+            ...(row.volumeRatio === undefined ? {} : { volumeRatio: row.volumeRatio }),
+          }
+        } catch {
+          return undefined
+        }
+      },
+    }).catch((error) => {
+      console.error('[dsh-trading/options-paper] manage failed:', error)
+    })
     return {
       ok: true,
       ticked,
@@ -2375,6 +2484,12 @@ export async function dispatchBridgeRequest(
       case '/options/positions': {
         return { status: 200, payload: await bridge.optionPositions() }
       }
+      case '/options/paper/account': {
+        return { status: 200, payload: await bridge.optionPaperAccount() }
+      }
+      case '/options/paper/fills': {
+        return { status: 200, payload: await bridge.optionPaperFills(search.get('limit') ?? undefined) }
+      }
       case '/options/overview': {
         return {
           status: 200,
@@ -2584,6 +2699,9 @@ export async function dispatchBridgeRequest(
         ? (body as { asOf: string }).asOf
         : undefined
       return { status: 200, payload: await bridge.optionCycleTick(asOf) }
+    }
+    if (pathname === '/options/paper/reset') {
+      return { status: 200, payload: await bridge.resetOptionPaper() }
     }
     if (pathname === '/options/strategy') {
       return { status: 200, payload: await bridge.optionStrategy(body) }

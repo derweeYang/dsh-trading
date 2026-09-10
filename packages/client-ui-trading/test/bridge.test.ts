@@ -2,7 +2,7 @@
  * 行情桥单测：市场清单、批量报价（逐 symbol 独立成败 + 封顶）、K线透传与
  * 参数校验、请求分发路由与协议错误。宿主面全部用假件（不触网）。
  */
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -627,6 +627,53 @@ describe('errorPayload', () => {
       .toEqual({ code: 'TRADING_NETWORK', message: 'x' })
     expect(errorPayload(new Error('y')).code).toBe('TRADING_UNKNOWN')
     expect(errorPayload('boom')).toEqual({ code: 'TRADING_UNKNOWN', message: 'boom' })
+  })
+})
+
+describe('TradingBridge option paper account', () => {
+  it('GET account, GET fills, and POST reset use the configured data root', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-bridge-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const date = shanghaiCalendarDate(Date.now())
+    await mkdir(path.join(dir, 'paper', 'fills'), { recursive: true })
+    await writeFile(path.join(dir, 'paper', 'fills', `${date}.jsonl`), [
+      JSON.stringify({ id: 'old', bucketStart: 'a', asOf: 'a', offset: 'open', qty: 0, legs: [], premiumCny: 0, marginCny: 0, cashAfter: 100000, reason: 'skipped', skip: 'no_quote' }),
+      JSON.stringify({ id: 'new', bucketStart: 'b', asOf: 'b', offset: 'open', qty: 0, legs: [], premiumCny: 0, marginCny: 0, cashAfter: 100000, reason: 'skipped', skip: 'no_quote' }),
+    ].join('\n') + '\n', 'utf8')
+    const bridge = new TradingBridge(fakeHost({}))
+    try {
+      const account = await dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/account', new URLSearchParams(),
+      )
+      expect(account.payload).toMatchObject({
+        ok: true,
+        account: { initialCash: 100000, cash: 100000 },
+        equity: 100000,
+        positions: [],
+      })
+
+      const fills = await dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/fills', new URLSearchParams({ limit: '1' }),
+      )
+      expect(fills.payload).toMatchObject({ ok: true, fills: [{ id: 'new' }] })
+      await expect(dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/fills', new URLSearchParams({ limit: '0' }),
+      )).rejects.toMatchObject({ status: 400 })
+
+      const reset = await dispatchBridgeRequest(
+        bridge, 'POST', '/options/paper/reset', new URLSearchParams(),
+      )
+      expect(reset.payload).toMatchObject({
+        ok: true,
+        account: { initialCash: 100000, cash: 100000 },
+        equity: 100000,
+        positions: [],
+      })
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
   })
 })
 
@@ -1353,5 +1400,59 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
 
     const loop = await dispatchBridgeRequest(bridge, 'GET', '/options/cycles/loop', new URLSearchParams())
     expect((loop.payload as { loop: { rows: Array<{ underlying: string }> } }).loop.rows[0]?.underlying).toBe('510050')
+  })
+
+  it('POST /options/cycles/tick：close5 管理纸账户但不走下单服务', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-tick-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const asOf = '2026-09-08T06:56:00.000Z'
+    const date = shanghaiCalendarDate(Date.parse(asOf))
+    await mkdir(path.join(dir, 'paper'), { recursive: true })
+    await writeFile(path.join(dir, 'paper', 'account.json'), `${JSON.stringify({
+      currency: 'CNY', initialCash: 100000, cash: 99000, realizedPnl: 0, updatedAt: asOf,
+    })}\n`, 'utf8')
+    await writeFile(path.join(dir, 'paper', 'positions.json'), `${JSON.stringify([{
+      id: '510050:bucket',
+      underlying: '510050',
+      template: 'vertical',
+      openedBucketStart: '2026-09-08T06:50:00.000Z',
+      invalidIf: '1-minute close outside box',
+      qty: 1,
+      marginCny: 1000,
+      legs: [{ code: '510050C2609M02850', side: 'sell', qty: 1, fillPrice: 0.08 }],
+    }])}\n`, 'utf8')
+    const placeOptionOrder = vi.fn(async () => {
+      throw new Error('paper manage must never place orders')
+    })
+    const base = linkedHost()
+    const bridge = new TradingBridge({
+      ...base,
+      getCnOptions: () => ({
+        ...base.getCnOptions!(),
+        getOptionChain: async () => ({
+          underlying: '510050', expiryMonth: '2609', source: 'synth',
+          calls: [{ code: '510050C2609M02850', strike: 2.85, last: 0.07 }],
+          puts: [],
+        }),
+      }),
+      getCnOptionsTrade: () => ({
+        placeOptionOrder,
+        cancelOptionOrder: async () => {},
+        listOptionPositions: async () => [],
+      }),
+    })
+    try {
+      await dispatchBridgeRequest(
+        bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf },
+      )
+      await vi.waitFor(async () => {
+        expect(JSON.parse(await readFile(path.join(dir, 'paper', 'positions.json'), 'utf8'))).toEqual([])
+      })
+      expect(placeOptionOrder).not.toHaveBeenCalled()
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
   })
 })

@@ -22,7 +22,10 @@
 | GET | `/dshtrading/api/options/intraday-box?underlying=&horizon=5&asOf=` | 1 分钟 → 5 分钟箱体（L2；现货 1m K，不打期权网关） |
 | GET | `/dshtrading/api/options/cycles?underlying=&limit=` | 5 分钟闭环历史（先 forecast，下一桶补 score） |
 | GET | `/dshtrading/api/options/cycles/loop` | 九标的最新周期 + 命中率（页面可视化 SSOT） |
+| GET | `/dshtrading/api/options/paper/account` | 本地纸账户、持仓与按最新价计算的权益 |
+| GET | `/dshtrading/api/options/paper/fills?limit=` | 当日纸账户成交（默认 48 条，最新在前） |
 | POST | `/dshtrading/api/options/cycles/tick` | 对齐当前上海 5 分钟桶（幂等；宿主 30s 心跳已在跑） |
+| POST | `/dshtrading/api/options/paper/reset` | 重置纸账户现金与持仓（保留历史成交文件） |
 | POST | `/dshtrading/api/options/strategy` | 多腿模板 / 保证金（JSON body；阶段 4 起支持 `holdingQty`） |
 | POST | `/dshtrading/api/options/order` | 期权下单（阶段 3 交易面） |
 | DELETE | `/dshtrading/api/options/order?id=` | 期权撤单（阶段 3） |
