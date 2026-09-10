@@ -636,6 +636,7 @@ export interface OptionBarPick {
   readonly legs?: readonly unknown[]
   /** 必须与该桶 ContextPacket 同行一致；禁止模型改标。 */
   readonly ivRegime?: OptionIvRegime
+  readonly maxContracts?: number
 }
 
 /** 定时桶注入的波动率/量价事实（宿主打标；模型只许引用）。 */
@@ -700,6 +701,75 @@ export interface OptionBarRecommendation {
   readonly noTrade: boolean
   readonly skipReason?: OptionBarSkipReason
   readonly previousScore?: { readonly cycleId: string; readonly verdict: OptionCycleVerdict }
+}
+
+export const OPTION_PAPER_INITIAL_CASH = 100_000
+export const OPTION_MULTIPLIER = 10_000
+
+export type PaperFillSkip =
+  | 'duplicate_bucket'
+  | 'no_quote'
+  | 'no_forecast'
+  | 'no_cash'
+  | 'bad_template'
+  | 'one_fill'
+
+export type PaperFillReason = 'signal' | 'invalidIf' | 'close5' | 'session' | 'skipped'
+
+export interface PaperLegFill {
+  readonly code: string
+  readonly side: 'buy' | 'sell'
+  readonly qty: number
+  readonly fillPrice: number
+}
+
+export interface PaperFill {
+  readonly id: string
+  readonly bucketStart: string
+  readonly asOf: string
+  readonly underlying?: string
+  readonly template?: string
+  readonly offset: 'open' | 'close'
+  readonly qty: number
+  readonly legs: readonly PaperLegFill[]
+  readonly premiumCny: number
+  readonly marginCny: number
+  readonly cashAfter: number
+  readonly reason: PaperFillReason
+  readonly skip?: PaperFillSkip
+}
+
+export interface PaperPosition {
+  readonly id: string
+  readonly underlying: string
+  readonly template: string
+  readonly openedBucketStart: string
+  readonly invalidIf: string
+  readonly qty: number
+  readonly marginCny: number
+  readonly boxLow?: number
+  readonly boxHigh?: number
+  readonly legs: readonly PaperLegFill[]
+}
+
+export interface PaperAccount {
+  readonly currency: 'CNY'
+  readonly initialCash: number
+  readonly cash: number
+  readonly realizedPnl: number
+  readonly updatedAt: string
+}
+
+export interface OptionPaperAccountWire {
+  readonly ok: true
+  readonly account: PaperAccount
+  readonly equity: number
+  readonly positions: readonly PaperPosition[]
+}
+
+export interface OptionPaperFillsWire {
+  readonly ok: true
+  readonly fills: readonly PaperFill[]
 }
 
 /** 股票市场标的基本面与财务估值快照（CN）。 */
