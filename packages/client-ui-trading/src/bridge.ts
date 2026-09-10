@@ -1501,12 +1501,6 @@ export class TradingBridge {
       getMark,
       getLastClose: async (underlying) => {
         const row = rowByUnderlying.get(underlying)
-        if (row?.last !== undefined && Number.isFinite(row.last)) {
-          return {
-            lastClose: row.last,
-            ...(row.volumeRatio === undefined ? {} : { volumeRatio: row.volumeRatio }),
-          }
-        }
         if (market === undefined || row?.spotSymbol === undefined) return undefined
         try {
           const klines = await market.getKlines(row.spotSymbol, '1m', 5)

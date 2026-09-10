@@ -1402,6 +1402,78 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
     expect((loop.payload as { loop: { rows: Array<{ underlying: string }> } }).loop.rows[0]?.underlying).toBe('510050')
   })
 
+  it('POST /options/cycles/tick：invalidIf 用 1m K 线 close，不用 ticker last', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-invalidif-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const asOf = '2026-09-08T02:30:00.000Z'
+    const asOfMs = Date.parse(asOf)
+    await mkdir(path.join(dir, 'paper'), { recursive: true })
+    await writeFile(path.join(dir, 'paper', 'account.json'), `${JSON.stringify({
+      currency: 'CNY', initialCash: 100000, cash: 99000, realizedPnl: 0, updatedAt: asOf,
+    })}\n`, 'utf8')
+    const plantedPosition = {
+      id: '510050:bucket',
+      underlying: '510050',
+      template: 'vertical',
+      openedBucketStart: asOf,
+      invalidIf: '1-minute close outside box',
+      boxLow: 2.95,
+      boxHigh: 3.05,
+      qty: 1,
+      marginCny: 1000,
+      legs: [{ code: '510050C2609M02850', side: 'sell', qty: 1, fillPrice: 0.08 }],
+    }
+    await writeFile(path.join(dir, 'paper', 'positions.json'), `${JSON.stringify([plantedPosition])}\n`, 'utf8')
+    const klinesForBox = Array.from({ length: 60 }, (_, i) => {
+      const closeTime = asOfMs - (59 - i) * 60_000
+      return {
+        openTime: closeTime - 60_000, open: 3, high: 3.002, low: 2.998,
+        close: 3, volume: 100, closeTime,
+      }
+    })
+    const getKlines = vi.fn(async (_symbol: string, interval: string, limit?: number) => {
+      expect(interval).toBe('1m')
+      const count = limit ?? 60
+      const bars = klinesForBox.slice(-count)
+      if (count <= 5) {
+        return bars.map((bar, i) => (
+          i === bars.length - 1 ? { ...bar, close: 3 } : bar
+        ))
+      }
+      return bars
+    })
+    const base = linkedHost()
+    const bridge = new TradingBridge({
+      ...base,
+      getMarketService: () => fakeService({
+        getTicker: async (symbol) => ({ symbol, price: 3.2, timestamp: 1 }),
+        getKlines,
+      }),
+      getCnOptions: () => ({
+        ...base.getCnOptions!(),
+        getOptionChain: async () => ({
+          underlying: '510050', expiryMonth: '2609', source: 'synth',
+          calls: [{ code: '510050C2609M02850', strike: 2.85, last: 0.08 }],
+          puts: [],
+        }),
+      }),
+    })
+    try {
+      await dispatchBridgeRequest(
+        bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf },
+      )
+      await vi.waitFor(async () => {
+        const positions = JSON.parse(await readFile(path.join(dir, 'paper', 'positions.json'), 'utf8'))
+        expect(positions).toEqual([plantedPosition])
+      })
+      expect(getKlines).toHaveBeenCalledWith('510050.SH', '1m', 5)
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
+  })
+
   it('POST /options/cycles/tick：close5 管理纸账户但不走下单服务', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-tick-'))
     const prev = process.env[OPTIONS_DATA_ENV]
