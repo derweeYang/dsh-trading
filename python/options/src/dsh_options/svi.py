@@ -8,7 +8,6 @@ from typing import Any
 
 import numpy as np
 
-from dsh_options.protocol import OptionsError
 
 MIN_SVI_KNOTS = 5
 SVI_METHOD = "raw-svi"
@@ -68,7 +67,10 @@ def raw_svi_smile(
         from volsurface.market_data.cleaning import clean_chain
         from volsurface.models import RawSVI
     except ImportError as err:
-        raise OptionsError("INTERNAL", "volsurface is required for Raw SVI") from err
+        # SVI 是增强组件：包缺失时降级为 insufficient 行，不让已算好的
+        # term/skew/HV/smile 随整份 vol_analytics 报告一起失败。
+        empty["reason"] = f"volsurface package not installed; Raw SVI unavailable ({err})"
+        return empty
 
     try:
         slice_ = clean_chain(
@@ -97,9 +99,7 @@ def raw_svi_smile(
     resid = np.abs(fitted - slice_.ivs)
     atm_k = math.log(spot / forward)
     atm = float(np.asarray(model.iv(atm_k)).reshape(-1)[0])
-    params = {
-        name: float(result.params[name]) for name in ("a", "b", "rho", "m", "sigma")
-    }
+    params = {name: float(result.params[name]) for name in ("a", "b", "rho", "m", "sigma")}
     knots = [
         {"strike": float(strike), "iv": float(iv), "fittedIv": float(fit)}
         for strike, iv, fit in zip(slice_.strikes, slice_.ivs, fitted, strict=True)

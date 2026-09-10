@@ -67,9 +67,7 @@ def test_realized_vol_needs_window_plus_one_closes():
     assert short["status"] == "insufficient"
 
 
-def _svi_total_variance(
-    k: float, a: float, b: float, rho: float, m: float, sigma: float
-) -> float:
+def _svi_total_variance(k: float, a: float, b: float, rho: float, m: float, sigma: float) -> float:
     diff = k - m
     return a + b * (rho * diff + math.sqrt(diff * diff + sigma * sigma))
 
@@ -106,6 +104,35 @@ def test_raw_svi_recovers_planted_skew_and_needs_five_strikes():
     )
     assert short["status"] == "insufficient"
     assert short["nKnots"] == 4
+
+
+def test_raw_svi_degrades_when_volsurface_missing(monkeypatch):
+    # 网关环境可能没装 volsurface：SVI 应降级为 insufficient 行，
+    # 不抛 INTERNAL 炸掉整份 vol_analytics 报告。
+    import builtins
+
+    from dsh_options.svi import raw_svi_smile
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("volsurface"):
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    fit = raw_svi_smile(
+        {2.8: 0.20, 2.9: 0.21, 3.0: 0.215, 3.1: 0.22, 3.3: 0.23},
+        spot=3.0,
+        years=0.25,
+        rate=0.02,
+        dividend_yield=0.0,
+    )
+    assert fit["status"] == "insufficient"
+    assert fit["method"] == "raw-svi"
+    assert "volsurface package not installed" in fit["reason"]
+    assert fit["params"] is None
+    assert fit["knots"] == []
 
 
 def test_quadratic_smile_fits_flat_and_needs_three_strikes():

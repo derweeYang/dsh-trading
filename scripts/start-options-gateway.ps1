@@ -40,7 +40,9 @@ if ($null -eq $py) {
 # Python 3.14 tries to satisfy pyproject pins (e.g. older pyarrow) via source/cmake
 # and can fail even when the gateway would run fine.
 function Test-OptionsImports {
-  & python -c "import dsh_options, numpy, pandas, pyarrow" 2>$null
+  # volsurface 必须在列：缺了它 SVI 只能降级（vol_analytics 的 svi 行 insufficient），
+  # 其余命令正常，网关会“看起来健康”——2026-09-09 session 已踩过这个假阳性。
+  & python -c "import dsh_options, numpy, pandas, pyarrow, volsurface" 2>$null
   return ($LASTEXITCODE -eq 0)
 }
 

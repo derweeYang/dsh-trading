@@ -278,7 +278,7 @@ export function createGetOptionVolAnalyticsTool(options: OptionToolOptions = {})
       },
       rate: {
         type: 'number',
-        description: 'Continuous risk-free rate',
+        description: 'Continuous risk-free rate, e.g. 0.02; required when source=iquant',
       },
       dividendYield: {
         type: 'number',
@@ -286,7 +286,7 @@ export function createGetOptionVolAnalyticsTool(options: OptionToolOptions = {})
       },
       source: {
         type: 'string',
-        description: 'akshare (default), iquant, or synth',
+        description: 'akshare (default), iquant, or synth; the REST client may default to iquant via DSH_OPTIONS_SOURCE',
       },
     },
     output: {

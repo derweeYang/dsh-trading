@@ -17,6 +17,9 @@ NAME_RE = re.compile(
 )
 
 # 长别名在前，避免「科创50ETF」抢「易方达科创50ETF」。
+# 国信 SHO 实际简称（2026-09-11 全表抓取）：50ETF/300ETF/500ETF/科创50(588000)/
+# 科创板50(588080，易方达)。带四位年份（如「科创50购2026年4月1100」）的是已摘牌
+# 合约，NAME_RE 有意不解析，作为活跃链的天然过滤器。
 SHO_ALIASES: tuple[tuple[str, str], ...] = (
     ("华夏上证50ETF", "510050"),
     ("华泰柏瑞沪深300ETF", "510300"),
@@ -28,6 +31,7 @@ SHO_ALIASES: tuple[tuple[str, str], ...] = (
     ("中证500ETF", "510500"),
     ("科创50ETF", "588000"),
     ("科创50", "588000"),
+    ("科创板50", "588080"),
     ("50ETF", "510050"),
     ("300ETF", "510300"),
     ("500ETF", "510500"),
@@ -85,7 +89,9 @@ def _alias_underlying(alias: str, market: str) -> str | None:
     return None
 
 
-def parse_option_name(name: str, *, market: str, as_of: date | None = None) -> ParsedOptionName | None:
+def parse_option_name(
+    name: str, *, market: str, as_of: date | None = None
+) -> ParsedOptionName | None:
     text = (name or "").strip()
     match = NAME_RE.match(text)
     if match is None:
