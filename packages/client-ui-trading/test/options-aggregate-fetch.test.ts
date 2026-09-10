@@ -14,7 +14,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  fetchOptionsCycleLoop, fetchOptionsCycles, fetchOptionsIntradayBox, fetchOptionsOverview,
+  fetchOptionsBarPacket, fetchOptionsCycleLoop, fetchOptionsCycles, fetchOptionsIntradayBox, fetchOptionsOverview,
 } from '../src/client/api.ts'
 
 /** 记录每次请求的 URL，返回预置响应体。 */
@@ -103,5 +103,43 @@ describe('options aggregate bridge fetch', () => {
     const res = await fetchOptionsCycleLoop()
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.code).toBe('TRADING_UNKNOWN')
+  })
+})
+
+describe('options bar-packet fetch（WB-12）', () => {
+  beforeEach(() => { vi.unstubAllGlobals() })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('固定无参端点 /options/bar-packet', async () => {
+    const urls = stubFetch(() => ({ ok: true }))
+    const res = await fetchOptionsBarPacket()
+    expect(res.ok).toBe(true)
+    expect(urls()[0]).toBe('/dshtrading/api/options/bar-packet')
+  })
+
+  /** WB-12：无 packet 文件是正常态——桥不写 packet 键，前端收到 null（整条不渲染）。 */
+  it('无 packet 键 → data 为 null，不报错', async () => {
+    stubFetch(() => ({ ok: true }))
+    const res = await fetchOptionsBarPacket()
+    expect(res.ok).toBe(true)
+    if (res.ok) expect(res.data).toBeNull()
+  })
+
+  it('有 packet → data 原样透传，按 underlying 对齐 rows', async () => {
+    stubFetch(() => ({
+      ok: true,
+      packet: {
+        bucketStart: '2026-09-10T01:45:00.000Z',
+        asOf: '2026-09-10T01:45:12.000Z',
+        rows: [{ underlying: '510050', regime: 'range_hold', ivRegime: 'unknown', candidates: [], volumeRatio: 0.8 }],
+      },
+    }))
+    const res = await fetchOptionsBarPacket()
+    expect(res.ok).toBe(true)
+    if (res.ok) {
+      expect(res.data).not.toBeNull()
+      expect(res.data?.rows[0]?.underlying).toBe('510050')
+      expect(res.data?.rows[0]?.ivRegime).toBe('unknown')
+    }
   })
 })

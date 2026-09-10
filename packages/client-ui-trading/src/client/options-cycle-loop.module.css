@@ -196,6 +196,18 @@
   min-width: 0;
 }
 
+/* WB-12：定时桶 ContextPacket 顶条——把「智能体所见」从闭环卡片里拎出来，独立成一条 */
+.packet {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  border: 1px dashed var(--dsw-futu-border-default, #e3e6ea);
+  border-radius: var(--dsw-futu-radius-s, 4px);
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+}
+
 .sectionLabel {
   font-size: 11px;
   color: var(--dsw-futu-text-secondary, #5f6672);
@@ -251,6 +263,19 @@
 .badge[data-kind='range_hold'],
 .badge[data-kind='mean_revert'] {
   background: var(--dsw-futu-bg-subtle, #f5f6f8);
+}
+
+/* WB-12：IV 制度徽章——波动率贵贱/偏斜枚举，与价格结构 regime 是两套维度。
+   用虚线边 + 独立底色，刻意和上面实线 regime 灯区分，提醒「不是同一个灯」。 */
+.badge[data-kind='iv'] {
+  border-style: dashed;
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+/* 制度不明是活牌正确态（无历史分位/HV20），信息级，绝不可染成错误红条 */
+.badge[data-iv-regime='unknown'] {
+  color: var(--dsw-futu-text-muted, #8e95a3);
 }
 
 .history {

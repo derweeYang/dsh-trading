@@ -124,6 +124,15 @@ export type MarketLocaleKey =
   | 'options.overview.col.optionQty'
   | 'options.overview.col.t5'
   | 'options.overview.col.trend'
+  /* ── WB-10 IV 制度徽章（宿主打标闭集；页面只翻译，不重算）── */
+  | 'options.overview.col.ivRegime'
+  | 'options.overview.ivRegime.rich'
+  | 'options.overview.ivRegime.cheap'
+  | 'options.overview.ivRegime.event_front'
+  | 'options.overview.ivRegime.skew_put'
+  | 'options.overview.ivRegime.skew_call'
+  | 'options.overview.ivRegime.unknown'
+  | 'options.overview.ivRegime.hint'
   | 'options.overview.divergence.weak_rally'
   | 'options.overview.divergence.accelerating_sell'
   | 'options.overview.surge'
@@ -181,6 +190,14 @@ export type MarketLocaleKey =
   | 'options.insight.reading.ivMid'
   | 'options.insight.reading.ivMissing'
   | 'options.insight.reading.atmIv'
+  /* ── WB-10：有宿主 ivRegime 就照词典陈述，不拿 atmIv 推断高低 ── */
+  | 'options.insight.reading.ivRegime.rich'
+  | 'options.insight.reading.ivRegime.cheap'
+  | 'options.insight.reading.ivRegime.event_front'
+  | 'options.insight.reading.ivRegime.skew_put'
+  | 'options.insight.reading.ivRegime.skew_call'
+  /* ── WB-11：制度不明时补一句「为何观望」，信息级，不是错误 ── */
+  | 'options.insight.reading.ivUnknownBlocksTheta'
   | 'options.insight.reading.position'
   | 'options.insight.reading.skipped'
   | 'options.insight.reading.noEdge'
@@ -251,6 +268,13 @@ export type MarketLocaleKey =
   | 'options.cycle.tier.weak'
   | 'options.cycle.tier.median'
   | 'options.cycle.tier.hint'
+  /* ── WB-12 闭环卡片对定时桶 ContextPacket（箱体 regime 与 IV 制度是两个枚举）── */
+  | 'options.loop.packetTitle'
+  | 'options.loop.packetIv'
+  /** 5d/20d 量能（ContextPacket 口径）──禁止与箱体 1m 量比混标「量比」。 */
+  | 'options.loop.volumeRatioDaily'
+  /** 箱体 1 分钟量比（近 5 根 / 近 30 根）。 */
+  | 'options.loop.volumeRatioBox'
   | 'options.box.title'
   | 'options.box.loading'
   | 'options.box.unavailable'

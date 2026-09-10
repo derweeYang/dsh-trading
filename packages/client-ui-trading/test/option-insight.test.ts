@@ -164,6 +164,83 @@ describe('composeReading', () => {
     const r = composeReading(row({ days: D5, return5d: 1.2, volumeRatio: 0.8, divergence: 'weak_rally' }), t)
     expect(r.lines.join(' ')).toContain('options.insight.reading.weakRally')
   })
+
+  /** WB-10：有宿主 ivRegime 就照词典陈述，绝不用 atmIv 反推高低。 */
+  it('ivRegime=rich → 出制度词典，不掺 atmIv 高低推断', () => {
+    const r = composeReading(row({ days: D5, atmIv: 0.22, ivRegime: 'rich' }), t)
+    expect(r.lines.join(' ')).toContain('options.insight.reading.ivRegime.rich')
+    expect(r.lines.join(' ')).not.toContain('options.insight.reading.atmIv')
+  })
+
+  it('ivRegime=cheap → 出制度词典', () => {
+    const r = composeReading(row({ days: D5, ivRegime: 'cheap' }), t)
+    expect(r.lines.join(' ')).toContain('options.insight.reading.ivRegime.cheap')
+  })
+
+  it('ivRegime=skew_put → 出制度词典（不开前端算法）', () => {
+    const r = composeReading(row({ days: D5, atmIv: 0.3, ivRegime: 'skew_put' }), t)
+    expect(r.lines.join(' ')).toContain('options.insight.reading.ivRegime.skew_put')
+  })
+
+  /** 验收红线：只有 atmIv 的行 → 显示「制度不明」+ 年化 IV，不显示假分位 / 「偏低」。 */
+  it('ivRegime=unknown + atmIv=0.22 → 显示「制度不明」+ 年化 IV，不出现「分位/偏低」', () => {
+    const r = composeReading(row({ days: D5, atmIv: 0.22, ivRegime: 'unknown' }), t)
+    const text = r.lines.join(' ')
+    expect(text).toContain('options.insight.reading.atmIv')
+    expect(text).not.toContain('分位')
+    expect(text).not.toContain('偏低')
+    expect(text).not.toContain('options.insight.reading.ivRegime.rich')
+    expect(text).not.toContain('options.insight.reading.ivRegime.cheap')
+  })
+
+  it('ivRegime=unknown + 无 atmIv → 落 iv_missing（盲区），不猜值', () => {
+    const r = composeReading(row({ days: D5, ivRegime: 'unknown' }), t)
+    expect(r.lines.join(' ')).toContain('options.insight.reading.ivMissing')
+    expect(r.lines.join(' ')).not.toContain('分位')
+  })
+
+  it('strategy.ivRegime 优先于行上 ivRegime（契约回落方向）', () => {
+    const r = composeReading(row({
+      days: D5,
+      ivRegime: 'unknown',
+      strategy: { opportunity: 'theta_rent', edge: 'e', noTrade: false, bucketStart: 'b', ivRegime: 'rich' },
+    }), t)
+    expect(r.lines.join(' ')).toContain('options.insight.reading.ivRegime.rich')
+  })
+})
+
+describe('composeReading — WB-11 观望解释', () => {
+  it('no_edge + 制度 unknown → 多一句「为何观望」，信息级不是错误', () => {
+    const r = composeReading(row({
+      days: D5,
+      atmIv: 0.22,
+      ivRegime: 'unknown',
+      strategy: { opportunity: 'no_edge', edge: 'e', noTrade: false, bucketStart: 'b' },
+    }), t)
+    const text = r.lines.join(' ')
+    expect(text).toContain('options.insight.reading.noEdge')
+    expect(text).toContain('options.insight.reading.ivUnknownBlocksTheta')
+  })
+
+  it('no_edge + 制度明确（cheap）→ 不补 unknown 句', () => {
+    const r = composeReading(row({
+      days: D5,
+      ivRegime: 'cheap',
+      strategy: { opportunity: 'no_edge', edge: 'e', noTrade: false, bucketStart: 'b' },
+    }), t)
+    expect(r.lines.join(' ')).not.toContain('options.insight.reading.ivUnknownBlocksTheta')
+  })
+
+  it('skipReason 优先：不补 IV 句，skip 才是真原因', () => {
+    const r = composeReading(row({
+      days: D5,
+      ivRegime: 'unknown',
+      strategy: { opportunity: 'no_edge', edge: 'e', noTrade: false, bucketStart: 'b', skipReason: 'overlap' },
+    }), t)
+    const text = r.lines.join(' ')
+    expect(text).toContain('options.insight.reading.skipped')
+    expect(text).not.toContain('options.insight.reading.ivUnknownBlocksTheta')
+  })
 })
 
 describe('composePlan', () => {

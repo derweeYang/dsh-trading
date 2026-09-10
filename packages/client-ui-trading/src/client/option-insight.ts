@@ -11,7 +11,7 @@
  *
  * 本文件是技术与行情分析面，不构成投资建议。
  */
-import type { OptionOverviewRow } from '@dshtrading/api'
+import type { OptionIvRegime, OptionOverviewRow } from '@dshtrading/api'
 
 /**
  * 取账本原文（`OptionOverviewStrategy.logic` / `.playbook`，后端 2026-09-09 已投影）。
@@ -62,6 +62,23 @@ const HOLDING_BACKED_TEMPLATES: readonly string[] = ['covered_call', 'collar', '
 function normIv(value: number | undefined): number | undefined {
   if (value === undefined || !Number.isFinite(value)) return undefined
   return value > 1 ? value / 100 : value
+}
+
+/**
+ * 2026-09-10 WB-10：IV 制度（**宿主打标闭集**）。
+ *
+ * 本文件与页面都**不算制度**：`row.ivRegime` 与定时桶 `ContextPacket` 同一
+ * `tagIvRegime` 产出（分位 ≥0.8 rich / ≤0.2 cheap，否则 atmIv 对 hv20，只有
+ * atmIv → unknown）。这里只负责「取哪个标签」，翻译交给词典。
+ *
+ * 优先级按契约：`strategy.ivRegime` 是当天最新 ContextPacket 的投影，无 packet
+ * 时缺席 → 回落到总览行上的 `row.ivRegime`（见 docs/options-bridge.md）。
+ *
+ * `atmIv` 是年化波动率（0.22 = 22%），**不是** 22 分位——任何一处都不许把它
+ * 当分位渲染，也不许拿 0.8/0.2 阈值在前端反推贵贱。
+ */
+export function effectiveIvRegime(row: OptionOverviewRow): OptionIvRegime | undefined {
+  return row.strategy?.ivRegime ?? row.ivRegime
 }
 
 /**
@@ -180,8 +197,21 @@ export function composeRuleReading(row: OptionOverviewRow, t: InsightTranslate):
   if (row.divergence === 'weak_rally') lines.push(t('options.insight.reading.weakRally'))
   if (row.divergence === 'accelerating_sell') lines.push(t('options.insight.reading.accelSell'))
 
+  /*
+   * IV 段落（WB-10）：**制度优先，且制度只翻译不重算**。
+   *
+   * 三分支顺序刻意固定：
+   *  1. 宿主给了非 unknown 的制度 → 照词典陈述，绝不掺入 atmIv 的高低推断
+   *     （否则同一个 0.22 会同时被读成「22 分位」和「22% 年化」两种东西）；
+   *  2. 制度 unknown 或缺失，但有真实分位 → 沿用 ivHigh/ivLow/ivMid；
+   *  3. 只有 atmIv → 沿用 `reading.atmIv`（文案自带「不是历史分位」的免责）；
+   *  4. 全缺 → iv_missing，不猜值。
+   */
+  const regime = effectiveIvRegime(row)
   const iv = normIv(row.ivPercentile)
-  if (iv !== undefined) {
+  if (regime !== undefined && regime !== 'unknown') {
+    lines.push(t(`options.insight.reading.ivRegime.${regime}`))
+  } else if (iv !== undefined) {
     if (iv >= IV_HIGH) lines.push(t('options.insight.reading.ivHigh', { iv: `${(iv * 100).toFixed(0)}%` }))
     else if (iv <= IV_LOW) lines.push(t('options.insight.reading.ivLow', { iv: `${(iv * 100).toFixed(0)}%` }))
     else lines.push(t('options.insight.reading.ivMid', { iv: `${(iv * 100).toFixed(0)}%` }))
@@ -200,10 +230,18 @@ export function composeRuleReading(row: OptionOverviewRow, t: InsightTranslate):
 
   const s = row.strategy
   if (s !== undefined) {
+    /**
+     * WB-11：skip 词典优先（`overlap` / `session` 等是**真原因**，不许被 IV 句盖住），
+     * 只在「无 skip + 观望」时补一句制度不明为何挡住 theta。信息级，不是错误。
+     */
     if (s.skipReason !== undefined) {
       lines.push(t('options.insight.reading.skipped', { reason: s.skipReason }))
     } else if (s.noTrade || s.opportunity === 'no_edge') {
       lines.push(t('options.insight.reading.noEdge'))
+      // 制度 unknown → 定时桶不会落 theta_rent；把「为什么」说出来，别让用户以为坏了。
+      if (row.ivRegime === 'unknown' || s.ivRegime === 'unknown') {
+        lines.push(t('options.insight.reading.ivUnknownBlocksTheta'))
+      }
     } else {
       lines.push(t('options.insight.reading.hasEdge', { opportunity: s.opportunity }))
     }

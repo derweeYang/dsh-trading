@@ -482,3 +482,63 @@ describe('OptionsCycleLoop', () => {
     expect(container.textContent).not.toContain('options.cycle.tier.strong')
   })
 })
+
+describe('OptionsCycleLoop — WB-12 定时桶 packet 对齐', () => {
+  const baseLoop: OptionCycleLoop = {
+    running: true,
+    horizonMin: 5,
+    lastBucket: '2026-09-10T01:45:00.000Z',
+    rows: [{
+      underlying: '510050',
+      stats: { n: 4, hits: 2, misses: 1, partials: 0, skipped: 1, hitRate: 0.67 },
+      latest: {
+        id: '510050:1',
+        underlying: '510050',
+        bucketStart: '2026-09-10T01:45:00.000Z',
+        asOf: '2026-09-10T01:45:12.000Z',
+        forecast: {
+          underlying: '510050', name: '华夏上证50ETF', exchange: 'SSE', horizonMin: 5,
+          boxLow: 2.99, boxHigh: 3.01, regime: 'range_hold', session: 'regular',
+          candidates: [], volumeRatio: 1.5,
+        },
+        calibration: 'none',
+      },
+    }],
+  }
+
+  const packet = {
+    bucketStart: '2026-09-10T01:45:00.000Z',
+    asOf: '2026-09-10T01:45:12.000Z',
+    rows: [{
+      underlying: '510050', regime: 'range_hold', ivRegime: 'unknown' as const,
+      candidates: [], volumeRatio: 0.8, atmIv: 0.21,
+    }],
+  }
+
+  it('无 packet（默认 null）→ 整条「智能体所见」不渲染，页面不炸', () => {
+    const { container } = renderLoop(baseLoop)
+    expect(container.querySelector('[data-dshtrading-cycle-packet]')).toBeNull()
+    // 闭环卡片本身照常渲染
+    expect(container.querySelector('[data-dshtrading-cycle-card="510050"]')).not.toBeNull()
+  })
+
+  it('有 packet → 顶条渲染 + 卡片制度徽章按 underlying 对齐', () => {
+    const { container } = renderLoop(baseLoop, { packet })
+    expect(container.querySelector('[data-dshtrading-cycle-packet]')).not.toBeNull()
+    // 卡片制度徽章：闭集翻译 + data-iv-regime，未知即「制度不明」
+    const badge = container.querySelector('[data-iv-regime="unknown"]')
+    expect(badge).not.toBeNull()
+    expect(badge?.textContent).toContain('options.overview.ivRegime.unknown')
+    // packet 量能标 5/20 日，不与箱体量比混
+    expect(container.textContent).toContain('options.loop.volumeRatioDaily')
+    expect(container.textContent).toContain('0.80')
+  })
+
+  it('forecast 量比与 packet 量能分两枚词典键（同一维度不混标）', () => {
+    const { container } = renderLoop(baseLoop, { packet })
+    expect(container.textContent).toContain('options.loop.volumeRatioBox')
+    expect(container.textContent).toContain('options.loop.volumeRatioDaily')
+    expect(container.textContent).toContain('1.50')
+    expect(container.textContent).toContain('0.80')
+  })
+})

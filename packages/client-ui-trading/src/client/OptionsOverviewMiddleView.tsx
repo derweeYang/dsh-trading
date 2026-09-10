@@ -11,8 +11,8 @@
  * 本页技术与行情分析面，不构成投资建议。
  */
 import { useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import type { OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionCycleLoop } from '@dshtrading/api'
-import { fetchOptionsOverview, fetchOptionsCycleLoop, fetchOptionsResolve } from './api.ts'
+import type { OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionCycleLoop, OptionBarContextPacket } from '@dshtrading/api'
+import { fetchOptionsOverview, fetchOptionsCycleLoop, fetchOptionsBarPacket, fetchOptionsResolve } from './api.ts'
 import { colorModeStore } from './color-mode.ts'
 import { OptionsOverview } from './OptionsOverview.tsx'
 import { OptionsCycleLoop } from './OptionsCycleLoop.tsx'
@@ -34,6 +34,8 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
   const [cycleLoop, setCycleLoop] = useState<OptionCycleLoop | null>(null)
   const [cycleFailure, setCycleFailure] = useState<{ code: string; message: string } | null>(null)
   const [cycleLoaded, setCycleLoaded] = useState(false)
+  /** WB-12：当天最新定时桶 ContextPacket；无文件时桥返回无 `packet` 键 → 这里为 null（不渲染整条）。 */
+  const [barPacket, setBarPacket] = useState<OptionBarContextPacket | null>(null)
 
   /** 排序切换期间丢弃旧应答（避免乱序覆盖）。 */
   const sortRef = useRef(sort)
@@ -90,6 +92,17 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
     setCycleLoaded(true)
   }, OPTIONS_CYCLE_LOOP_POLL_MS, [])
 
+  /**
+   * WB-12：定时桶 ContextPacket 30s 轮询，与闭环 loop 同频；`usePoll` 已在 tab
+   * 不可见时自动停（不 5s 刷桥）。无 packet 文件 → bridge 不写 `packet` 键
+   * → 这里存 null，闭环卡片据此决定「不渲染智能体所见」。
+   */
+  usePoll(async () => {
+    const res = await fetchOptionsBarPacket()
+    if (res.ok) setBarPacket(res.data)
+    else setBarPacket(null)
+  }, OPTIONS_CYCLE_LOOP_POLL_MS, [])
+
   const actions = stageActions.current
   const fill = actions.fillComposer
 
@@ -144,6 +157,7 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
         loop={cycleLoop}
         failure={cycleFailure}
         loaded={cycleLoaded}
+        packet={barPacket}
         names={overview?.rows.reduce<Record<string, string>>((map, row) => {
           map[row.underlying] = row.name
           return map

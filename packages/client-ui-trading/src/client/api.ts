@@ -5,7 +5,7 @@
  */
 import type { AccountBalance, Kline, MarketId, MarketInfo, Order, Orderbook, Position, TickerOutcome, TradeFill, TradeTick } from './types.ts'
 import type {
-  FundamentalsPackage, KernelReport, OptionChain, OptionCycle, OptionCycleLoop,
+  FundamentalsPackage, KernelReport, OptionBarContextPacket, OptionChain, OptionCycle, OptionCycleLoop,
   OptionExpiryCalendar, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewSort,
   OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying,
 } from '@dshtrading/api'
@@ -240,6 +240,26 @@ export async function fetchOptionsCycleLoop(): Promise<OptionsOutcome<OptionCycl
     )
     if (wire.loop === undefined) return optionsFailure(new Error('loop missing in wire'))
     return { ok: true, data: wire.loop }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/**
+ * 当天最新 5 分钟桶 ContextPacket（2026-09-10 WB-12）。
+ *
+ * **没有 packet 文件是正常态**，不是错误：桥返回 `{ ok: true }` 且**不写** `packet`
+ * 键（见 docs/options-bridge.md）。这里如实映射成 `data: null`，让调用方
+ * 「无键 → 不渲染整条智能体所见」，而不是弹一个空白报错条。
+ *
+ * 与 `cycles/loop` 同频 30s 即可——packet 一天只在定时桶落地时推进，5s 轮询纯属打桥。
+ */
+export async function fetchOptionsBarPacket(): Promise<OptionsOutcome<OptionBarContextPacket | null>> {
+  try {
+    const wire = await getJson<{ ok: boolean; packet?: OptionBarContextPacket }>(
+      '/dshtrading/api/options/bar-packet',
+    )
+    return { ok: true, data: wire.packet ?? null }
   } catch (err) {
     return optionsFailure(err)
   }

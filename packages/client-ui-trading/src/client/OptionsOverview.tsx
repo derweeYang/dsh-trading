@@ -30,7 +30,8 @@ import { directionColor, fmtCompact, fmtPercent, fmtPrice } from './format.ts'
 import { Sparkline } from './Sparkline.tsx'
 import { OverlayTrendChart } from './OverlayTrendChart.tsx'
 import { OptionsOpportunityBoard } from './OptionsOpportunityBoard.tsx'
-import { rankByCumulative } from './option-insight.ts'
+import { rankByCumulative, effectiveIvRegime } from './option-insight.ts'
+import { IV_REGIME_KEY } from './option-vocabulary.ts'
 import css from './options-overview.module.css'
 
 export type OptionsOverviewTranslate = (key: MarketLocaleKey, params?: Record<string, unknown>) => string
@@ -89,6 +90,18 @@ function fmtIvPercentile(value: number | undefined): string {
 }
 
 /**
+ * 年化 IV（0–1）→ 百分比，保留一位。
+ *
+ * 为什么与分位分开格式化：`atmIv` 是**年化波动率**（0.22 = 22%），不是 22 分位。
+ * 两值在旧代码里共用 `fmtIvPercentile` 挤在「IV 分位」列下，0.22 会被读成
+ * 「22 分位」——这正是交接单要消灭的假分位（2026-09-10 WB-10）。
+ */
+function fmtIvAnnual(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return '—'
+  return `${(value * 100).toFixed(1)}%`
+}
+
+/**
  * 总览「推荐策略」列（WB-7）：只读展示后端 `row.strategy` 投影，前端绝不现场
  * 算箱体或调 `cn_get_option_strategy`。渲染优先级：
  *  1. skipReason 有值 → 跳过标签（盘中常见 overlap / launch_failed）；
@@ -97,6 +110,7 @@ function fmtIvPercentile(value: number | undefined): string {
  * 无 strategy 键 → 返回 null（调用方出「—」），不整列空白。
  */
 function renderStrategy(
+  row: OptionOverviewRow,
   s: OptionOverviewStrategy,
   t: OptionsOverviewTranslate,
 ): { label: string; title?: string; tone: 'edge' | 'none' | 'skip' } {
@@ -104,7 +118,15 @@ function renderStrategy(
     return { label: t(`options.overview.strategy.skip.${s.skipReason}`), tone: 'skip' }
   }
   if (s.noTrade || s.opportunity === 'no_edge') {
-    return { label: t('options.overview.strategy.no_edge'), tone: 'none' }
+    /*
+     * WB-11：观望时补一句「为何观望」。制度不明 → 定时桶不会落「收时间价值」。
+     * 挂在 tooltip（信息级），不染成错误红条——unknown 是活牌的正确状态，不是故障。
+     * 有 skipReason 时上面已返回，跳过词典不会被这句盖住。
+     */
+    const why = row.ivRegime === 'unknown' || s.ivRegime === 'unknown'
+      ? t('options.insight.reading.ivUnknownBlocksTheta')
+      : undefined
+    return { label: t('options.overview.strategy.no_edge'), tone: 'none', ...(why === undefined ? {} : { title: why }) }
   }
   const opp = t(`options.overview.strategy.${s.opportunity}`)
   const template = s.template !== undefined ? t(`options.template.${s.template}`) : ''
@@ -229,6 +251,8 @@ export function OptionsOverview({
                         <th>{t('options.overview.col.strength')}</th>
                         <th className={css.colTrend}>{t('options.overview.col.trend')}</th>
                         <th>{t('options.overview.col.iv')}</th>
+                        {/* WB-10：宿主打标的 IV 制度，紧挨 IV 列；不替换 atmIv 数字 */}
+                        <th title={t('options.overview.ivRegime.hint')}>{t('options.overview.col.ivRegime')}</th>
                         <th>{t('options.overview.col.heldQty')}</th>
                         <th>{t('options.overview.col.optionQty')}</th>
                         <th className={css.colStrategy}>{t('options.overview.col.strategy')}</th>
@@ -239,6 +263,8 @@ export function OptionsOverview({
                     <tbody>
                       {rows.map(row => {
                         const key = row.underlying
+                        /** 宿主制度标签（strategy 投影优先，无 packet 回落行上）。 */
+                        const regime = effectiveIvRegime(row)
                         return (
                           <tr
                             key={key}
@@ -269,7 +295,33 @@ export function OptionsOverview({
                             <td className={css.colTrend}>
                               <Sparkline values={trendValues(row.days)} width={84} height={22} up={(row.return5d ?? 0) >= 0} colorMode={colorMode} />
                             </td>
-                            <td className={css.num}>{fmtIvPercentile(row.ivPercentile ?? row.atmIv)}</td>
+                            {/* IV 列：有真分位才出分位；只有 atmIv 时按年化格式化 + tooltip 声明不是分位 */}
+                            {row.ivPercentile !== undefined
+                              ? <td className={css.num}>{fmtIvPercentile(row.ivPercentile)}</td>
+                              : (
+                                <td
+                                  className={css.num}
+                                  data-iv-kind="annual"
+                                  title={t('options.insight.reading.atmIv', { iv: fmtIvAnnual(row.atmIv) })}
+                                >
+                                  {fmtIvAnnual(row.atmIv)}
+                                </td>
+                              )}
+                            {/* IV 制度徽章：闭集翻译，未知即「制度不明」，不猜贵贱 */}
+                            <td className={css.num}>
+                              {regime === undefined
+                                ? '—'
+                                : (
+                                  <span
+                                    className={css.strategyTag}
+                                    data-tone="none"
+                                    data-iv-regime={regime}
+                                    title={t('options.overview.ivRegime.hint')}
+                                  >
+                                    {t(IV_REGIME_KEY[regime])}
+                                  </span>
+                                )}
+                            </td>
                             <td className={css.num}>{row.heldQty === undefined ? '—' : fmtCompact(row.heldQty)}</td>
                             <td className={css.num}>{row.optionQty === undefined ? '—' : String(row.optionQty)}</td>
                             {/* 推荐策略：只读后端投影，前端不重算（WB-7） */}
@@ -277,7 +329,7 @@ export function OptionsOverview({
                               {row.strategy === undefined
                                 ? <span className={css.strategyTag} data-tone="none">—</span>
                                 : (() => {
-                                  const s = renderStrategy(row.strategy, t)
+                                  const s = renderStrategy(row, row.strategy, t)
                                   return (
                                     <span
                                       className={css.strategyTag}

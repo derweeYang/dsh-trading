@@ -11,6 +11,7 @@ import type { MarketLocaleKey } from './contract.ts'
 import type { CycleTier } from './cycle-rank.ts'
 import type {
   OptionCycleVerdict, OptionIntradayCandidate, OptionIntradayRegime, OptionIntradaySession,
+  OptionIvRegime,
 } from '@dshtrading/api'
 
 /** 箱体状态机（no_trade 时无箱沿、candidates 为空）。 */
@@ -60,6 +61,25 @@ export const TIER_KEY = {
   weak: 'options.cycle.tier.weak',
   median: 'options.cycle.tier.median',
 } as const satisfies Record<Exclude<CycleTier, 'rest'>, MarketLocaleKey>
+
+/**
+ * IV 制度徽章（2026-09-10 WB-10）。
+ *
+ * **闭集 + 宿主打标**：`row.ivRegime` 与定时桶 `ContextPacket` 同一 `tagIvRegime`
+ * 产出，页面只做枚举 → 词典的翻译。活牌无历史分位与 HV20 时几乎全是 `unknown`
+ * ——那是正确状态，不是前端该兜底修补的 bug（禁止用 atmIv 猜「偏高/偏低」）。
+ *
+ * 与 `REGIME_KEY`（箱体状态机）**不是同一个枚举**：前者是波动率贵贱/偏斜，
+ * 后者是价格结构。两处共屏时必须各画各的灯，不可合并。
+ */
+export const IV_REGIME_KEY = {
+  rich: 'options.overview.ivRegime.rich',
+  cheap: 'options.overview.ivRegime.cheap',
+  event_front: 'options.overview.ivRegime.event_front',
+  skew_put: 'options.overview.ivRegime.skew_put',
+  skew_call: 'options.overview.ivRegime.skew_call',
+  unknown: 'options.overview.ivRegime.unknown',
+} as const satisfies Record<OptionIvRegime, MarketLocaleKey>
 
 /** 候选策略模板（标签，不是下单按钮）。 */
 export const TEMPLATE_KEY = {

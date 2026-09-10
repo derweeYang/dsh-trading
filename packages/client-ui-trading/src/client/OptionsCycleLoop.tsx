@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react'
 import type {
   OptionCycle, OptionCycleLoop, OptionCycleLoopRow, OptionCycleScore, OptionIntradayBoxRow,
+  OptionBarContextPacket, OptionBarContextRow,
 } from '@dshtrading/api'
 import type { MarketLocaleKey } from './contract.ts'
 import { fetchOptionsCycles } from './api.ts'
@@ -24,7 +25,7 @@ import { fmtClock, fmtPrice } from './format.ts'
 import { rankCycleRows } from './cycle-rank.ts'
 import type { CycleTier } from './cycle-rank.ts'
 import {
-  CALIBRATION_KEY, REGIME_KEY, SESSION_REASON_KEY, TEMPLATE_KEY, TIER_KEY, VERDICT_KEY,
+  CALIBRATION_KEY, IV_REGIME_KEY, REGIME_KEY, SESSION_REASON_KEY, TEMPLATE_KEY, TIER_KEY, VERDICT_KEY,
 } from './option-vocabulary.ts'
 import css from './options-cycle-loop.module.css'
 
@@ -37,6 +38,11 @@ export interface OptionsCycleLoopProps {
   failure: { code: string; message: string } | null
   /** 首个应答是否落地（区分「加载中」与「不可用」）。 */
   loaded: boolean
+  /**
+   * WB-12：当天最新定时桶 ContextPacket（宿主打标快照）。`null` = 无 packet 文件
+   * （正常态）；组件据此**整条不渲染「智能体所见」**，不会空白报错或假装没数据。
+   */
+  packet?: OptionBarContextPacket | null
   /** underlying → 标的名（总览行提供；缺失回退代码）。 */
   names?: Readonly<Record<string, string>> | undefined
   /**
@@ -64,7 +70,7 @@ function hitRateWidth(hitRate: number | undefined): string | undefined {
 }
 
 export function OptionsCycleLoop({
-  t, loop, failure, loaded, names, cum5d, historyLimit = DEFAULT_HISTORY_LIMIT,
+  t, loop, failure, loaded, packet, names, cum5d, historyLimit = DEFAULT_HISTORY_LIMIT,
 }: OptionsCycleLoopProps): React.JSX.Element {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [history, setHistory] = useState<readonly OptionCycle[]>([])
@@ -94,6 +100,10 @@ export function OptionsCycleLoop({
 
   // 最强 / 最弱 / 中位三档排前（WB-10）；累计值缺席时原样展示，不伪造强弱。
   const ranked = loop === null ? [] : rankCycleRows(loop.rows, cum5d)
+  /** WB-12：定时桶 packet 行按 underlying 对齐；null 不清空映射，渲染处据此跳过。 */
+  const packetByUnderlying = packet == null
+    ? undefined
+    : new Map(packet.rows.map((r) => [r.underlying, r]))
 
   return (
     <div className={css.root} data-dshtrading-options-cycle-loop="">
@@ -112,6 +122,17 @@ export function OptionsCycleLoop({
       {/* 工作流示意（静态）：L1 选场 → L2 出箱 → 等 5 分钟 → 对照已走完的 1m → 校准 → 下一桶 */}
       <div className={css.workflow}>{t('options.cycle.workflow')}</div>
 
+      {/*
+        WB-12：定时桶 ContextPacket 顶条。关键不变量——**无 packet 键时 packet 为 null，
+        整条不渲染**，页面不会因为缺文件而空白报错或假装没数据。只做展示，不算制度。
+      */}
+      {packet != null && (
+        <div className={css.packet} data-dshtrading-cycle-packet="">
+          <span className={css.sectionLabel}>{t('options.loop.packetTitle')}</span>
+          <span className={css.muted}>{t('options.cycle.bucket')} {bucketClock(packet.bucketStart)}</span>
+        </div>
+      )}
+
       {failure !== null
         ? <div className={css.notice}>{failure.code}: {failure.message}</div>
         : !loaded
@@ -128,6 +149,8 @@ export function OptionsCycleLoop({
                       t={t}
                       row={row}
                       tier={tier}
+                      /** WB-12：按 underlying 对齐的定时桶 packet 行；无 packet 则 undefined → 不出制度徽章。 */
+                      packetRow={packetByUnderlying?.get(row.underlying)}
                       name={names?.[row.underlying]}
                       expanded={expanded === row.underlying}
                       onToggle={() => { setExpanded(expanded === row.underlying ? null : row.underlying) }}
@@ -148,13 +171,15 @@ function CycleCard(props: {
   row: OptionCycleLoopRow
   /** 机会档位（最强 / 最弱 / 中位 / 其余）；只影响排序与徽章，不改卡片内容。 */
   tier: CycleTier
+  /** WB-12：按 underlying 对齐的定时桶 ContextPacket 行；undefined = 无 packet。 */
+  packetRow?: OptionBarContextRow | undefined
   name: string | undefined
   expanded: boolean
   onToggle: () => void
   history: readonly OptionCycle[]
   historyFailure: { code: string; message: string } | null
 }): React.JSX.Element {
-  const { t, row, tier, name, expanded, onToggle, history, historyFailure } = props
+  const { t, row, tier, packetRow, name, expanded, onToggle, history, historyFailure } = props
   const forecast = row.latest?.forecast
   const score = row.latest?.score
   const calibration = row.latest?.calibration
@@ -208,9 +233,37 @@ function CycleCard(props: {
               {calibration !== undefined && calibration !== 'none' && (
                 <span className={css.badge} data-kind="calibration">{t(CALIBRATION_KEY[calibration])}</span>
               )}
+              {/* 箱体 1 分钟量比（近 5 / 近 30 根）——与 packet 的 5/20 日量能是两种量纲，分开标 */}
+              {forecast.volumeRatio !== undefined && (
+                <span className={css.muted}>{t('options.loop.volumeRatioBox')} {forecast.volumeRatio.toFixed(2)}</span>
+              )}
             </>
           )}
       </div>
+
+      {/*
+        WB-12：定时桶 ContextPacket 事实（**波动率制度** + 5/20 日量能）。
+        与上面的 `forecast.regime`（价格结构）是两套枚举，必须各画各的灯：
+        ivRegime 用 `data-kind="iv"`（虚线边）/ regime 用 `data-kind="range_hold"` 等，
+        绝不可合并成一个徽章误导成同一维度。
+      */}
+      {packetRow !== undefined && (
+        <div className={css.section}>
+          <span className={css.sectionLabel}>{t('options.loop.packetIv')}</span>
+          <span
+            className={css.badge}
+            data-kind="iv"
+            data-iv-regime={packetRow.ivRegime}
+            title={t('options.overview.ivRegime.hint')}
+          >
+            {t(IV_REGIME_KEY[packetRow.ivRegime])}
+          </span>
+          {/* packet 量能是 5d/20d，单独标「5/20 日量能」，禁止混进上面的「箱体量比」 */}
+          {packetRow.volumeRatio !== undefined && (
+            <span className={css.muted}>{t('options.loop.volumeRatioDaily')} {packetRow.volumeRatio.toFixed(2)}</span>
+          )}
+        </div>
+      )}
 
       {/* 候选模板：标签，不是下单按钮 */}
       {forecast !== undefined && forecast.candidates.length > 0 && (

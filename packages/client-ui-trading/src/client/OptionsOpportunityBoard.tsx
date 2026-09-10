@@ -22,10 +22,12 @@ import {
   composePlan,
   composeReading,
   deriveRisks,
+  effectiveIvRegime,
   IV_HIGH,
   sortByOpportunity,
   type InsightTranslate,
 } from './option-insight.ts'
+import { IV_REGIME_KEY } from './option-vocabulary.ts'
 import css from './options-overview.module.css'
 
 export type OpportunityTranslate = (key: MarketLocaleKey, params?: Record<string, unknown>) => string
@@ -48,6 +50,15 @@ function ivText(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value)) return '—'
   const v = value > 1 ? value : value * 100
   return `${v.toFixed(0)}%`
+}
+
+/**
+ * 年化 IV（0.22 → 22.0%）。与 `ivText` 分开：后者服务**分位**，
+ * 这里服务**年化波动率**，两种量纲绝不能共用同一个数字格式与标签。
+ */
+function ivAnnual(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return '—'
+  return `${(value * 100).toFixed(1)}%`
 }
 
 function num(value: number | undefined, digits = 2): string {
@@ -92,6 +103,8 @@ function Card({ row, rank, t, colorMode, onPickRow, onAskAi }: {
   onAskAi: ((row: OptionOverviewRow) => void) | undefined
 }): React.JSX.Element {
   const risks = deriveRisks(row)
+  /** WB-10：宿主制度标签（strategy 投影优先，无 packet 回落行上）；缺席则不出这一项。 */
+  const regime = effectiveIvRegime(row)
   // 契约适配：卡的 t 只认 MarketLocaleKey，解读层按 string key 取词。
   const it: InsightTranslate = (key, params) => t(key as MarketLocaleKey, params)
   const reading = composeReading(row, it)
@@ -145,11 +158,19 @@ function Card({ row, rank, t, colorMode, onPickRow, onAskAi }: {
           <Metric label={t('options.overview.col.return5d')} value={fmtPercent(row.return5d)} color={directionColor(row.return5d ?? 0, colorMode)} />
           <Metric label={t('options.overview.col.volumeRatio')} value={num(row.volumeRatio)} />
           <Metric label={t('options.overview.col.strength')} value={num(row.strengthScore)} />
-          <Metric
-            label={t('options.overview.col.iv')}
-            value={ivText(row.ivPercentile ?? row.atmIv)}
-            warn={row.ivPercentile !== undefined && (row.ivPercentile > 1 ? row.ivPercentile / 100 : row.ivPercentile) >= IV_HIGH}
-          />
+          {/* IV：有真分位才叫「IV 分位」；只有 atmIv 时改标年化「隐含波动率」，不再冒充分位 */}
+          {row.ivPercentile !== undefined
+            ? (
+              <Metric
+                label={t('options.overview.col.iv')}
+                value={ivText(row.ivPercentile)}
+                warn={(row.ivPercentile > 1 ? row.ivPercentile / 100 : row.ivPercentile) >= IV_HIGH}
+              />
+            )
+            : <Metric label={t('options.iv')} value={ivAnnual(row.atmIv)} />}
+          {regime !== undefined && (
+            <Metric label={t('options.overview.col.ivRegime')} value={t(IV_REGIME_KEY[regime])} />
+          )}
           <Metric label={t('options.overview.col.heldQty')} value={row.heldQty === undefined ? '—' : fmtCompact(row.heldQty)} />
           <Metric label={t('options.overview.col.optionQty')} value={row.optionQty === undefined ? '—' : String(row.optionQty)} />
         </div>
