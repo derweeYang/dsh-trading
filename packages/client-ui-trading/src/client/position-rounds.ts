@@ -175,12 +175,12 @@ export function derivePositionRounds(fills: readonly RoundFillLike[]): RoundsOut
 }
 
 /**
- * paper 模拟池按 USD/USDT 计价，回合盈亏先按 USD 记账，展示时折算基准币。
- * fx 缺席或缺 USD 汇率 → undefined（权益条整块隐藏，不编造）。
+ * paper 模拟池按 CNY 计价，回合盈亏先按人民币记账，展示时折算基准币。
+ * fx 缺席或缺 CNY 汇率 → undefined（权益条整块隐藏，不编造）。
  */
-export function convertUsdToBase(value: number, fx: { readonly base: string; readonly rates: Record<string, number> } | undefined): number | undefined {
+export function convertCnyToBase(value: number, fx: { readonly base: string; readonly rates: Record<string, number> } | undefined): number | undefined {
   if (fx === undefined) return undefined
-  if (fx.base === 'USD') return value
-  const rate = fx.rates.USD
+  if (fx.base === 'CNY') return value
+  const rate = fx.rates.CNY
   return typeof rate === 'number' && Number.isFinite(rate) && rate > 0 ? value * rate : undefined
 }

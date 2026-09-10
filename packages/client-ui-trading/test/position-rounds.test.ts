@@ -4,7 +4,7 @@
  * 流水不完整（历史窗口外卖出）、按标的分组与排序、USD→基准币折算。
  */
 import { describe, expect, it } from 'vitest'
-import { convertUsdToBase, derivePositionRounds } from '../src/client/position-rounds.ts'
+import { convertCnyToBase, derivePositionRounds } from '../src/client/position-rounds.ts'
 import type { RoundFillLike } from '../src/client/position-rounds.ts'
 
 function fill(overrides: Partial<RoundFillLike> & Pick<RoundFillLike, 'symbol' | 'side' | 'price' | 'amount' | 'timestamp'>): RoundFillLike {
@@ -115,11 +115,11 @@ describe('derivePositionRounds 输入序与分组', () => {
   })
 })
 
-describe('convertUsdToBase', () => {
-  it('USD 基准恒等；其他基准按 rates.USD；缺席/缺汇率 → undefined', () => {
-    expect(convertUsdToBase(100, { base: 'USD', rates: {} })).toBe(100)
-    expect(convertUsdToBase(100, { base: 'CNY', rates: { USD: 7.2 } })).toBeCloseTo(720, 6)
-    expect(convertUsdToBase(100, { base: 'CNY', rates: {} })).toBeUndefined()
-    expect(convertUsdToBase(100, undefined)).toBeUndefined()
+describe('convertCnyToBase', () => {
+  it('CNY 基准恒等；其他基准按 rates.CNY；缺席/缺汇率 → undefined', () => {
+    expect(convertCnyToBase(100, { base: 'CNY', rates: {} })).toBe(100)
+    expect(convertCnyToBase(100, { base: 'USD', rates: { CNY: 0.14 } })).toBeCloseTo(14, 6)
+    expect(convertCnyToBase(100, { base: 'USD', rates: {} })).toBeUndefined()
+    expect(convertCnyToBase(100, undefined)).toBeUndefined()
   })
 })

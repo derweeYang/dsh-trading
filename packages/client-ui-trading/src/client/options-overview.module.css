@@ -2,8 +2,9 @@
    token 与 options-stage / quote-stage 同族（--dsw-futu-*）。 */
 
 .root {
-  flex: 1;
-  min-height: 0;
+  /* WB-11：总览随内容取自然高度，滚动交给中视图容器（整页一条滑动条），
+     不再自己 flex:1 抢高度把闭环挤成小窗。 */
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -53,6 +54,12 @@
   background: var(--dsw-futu-accent-subtle, rgba(59, 130, 246, 0.12));
   border-color: var(--dsw-futu-accent, #3b82f6);
   color: var(--dsw-futu-accent-text, #2563eb);
+}
+
+/* 排序应答在途（WB-11）：顶栏内联提示，与根节点降透明度配合 */
+.sortingHint {
+  font-size: 12px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
 }
 
 .asOf {
@@ -242,6 +249,12 @@
   padding: 8px 10px;
   background: var(--dsw-futu-bg-surface, #fff);
   min-width: 0;
+  /* WB-11：整卡可点进 T 板 */
+  cursor: pointer;
+}
+
+.card:hover {
+  border-color: var(--dsw-futu-accent, #3b82f6);
 }
 
 .cardHead {
@@ -443,10 +456,11 @@
 
 /* ── 以下为 WB-1 明细表样式 ─────────────────────────────────────────── */
 
+/* WB-11：纵向随内容撑开交给页面滚动；只保留横向滚动（12+ 列窄面板放不下）。
+   高度不再被钉死，sticky 表头在页面滚动下不生效——九行表可接受。 */
 .tableWrap {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
+  flex: 0 0 auto;
+  overflow-x: auto;
   border: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
   border-radius: var(--dsw-futu-radius-md, 6px);
 }

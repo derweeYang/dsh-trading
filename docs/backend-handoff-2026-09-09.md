@@ -83,9 +83,10 @@
 
 ---
 
-## 2. 任务 #8 — trading-web 宿主 dataplane 重复注册（阻塞 WB-5 真机冒烟）
+## 2. 任务 #8 — trading-web 宿主 dataplane 重复注册（曾阻塞 WB-5；已清偿）
 
 > 权威出处：`docs/windows-local-dev.md`（「启动 / 重挂」段落，issue #81 同族）
+> **状态（2026-09-09）**：已清。宿主可 boot；WB-5 真机冒烟见 §5。
 
 ### 症状
 `start-trading-web.bat` 起宿主报：
@@ -112,17 +113,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\refresh-trading-web-
 - 勿跑无 `--dsh` 的 `sync-profile-overrides.mjs`（缺本地宿主会回落 macOS `/opt/homebrew`）。
 - 实例运行中**禁止** `dsh plugin install`（见 shadow-copy note）。
 
-### 为什么阻塞 WB-5
+### 当时为什么阻塞 WB-5
 WB-5 是**真机冒烟**：总览 9 行 / T-5 色深 / 排序 / 扫描预填 / T 板箱体条 / `no_trade` 空态 /
 点进 T 板再返回。这些都必须宿主真正 boot 才能验。宿主卡在 dataplane 撞键 → 整页起不来 → WB-5 无法收尾。
-后端清掉 #8 后，前端即可在本机 trading-web profile 跑 WB-5 验收清单。
+#8 清掉后前端已跑完验收清单（§5）。
 
 ---
 
 ## 3. 后端收尾验收清单（门禁红 → 全绿）
 
 > 状态（2026-09-09 后端收尾）：下列项已完成。门禁 `--update` 后总错误 239；
-> 宿主本机已 boot（HTTP 200，无撞键）。前端可跑 **WB-5**。
+> 宿主本机已 boot（无撞键，token URL 可用）。**WB-5 真机冒烟已由前端完成（§5）**。
 > 决策记录：[typecheck handoff](../.agents/notes/implemented/bug-fix/2026-09-09-typecheck-ratchet-backend-handoff.md)、
 > [trader preset 撞键](../.agents/notes/implemented/bug-fix/2026-09-09-trader-preset-connector-service-collision.md)。
 
@@ -134,7 +135,7 @@ WB-5 是**真机冒烟**：总览 9 行 / T-5 色深 / 排序 / 扫描预填 / T
 - [x] 跑 `node scripts/typecheck-gate.mjs` → **全绿**（无 `↑` 行）；`--update` 下调基线至 239。
 - [x] **#8** trading-web 宿主可 boot（无 `tradingCnMarketData has been registered`）；已出 token URL。
 - [x] reconcile 当前未提交的后端改动（connector-iquant / connector-tencent / cn preset 及新 test），确认门禁与宿主互不拖累。
-- [ ] 后端收尾后通知前端 → 前端跑 **WB-5 真机冒烟**（总览 9 行 / T-5 / 排序 / 扫描预填 / T 板箱体条 / no_trade / 进出 T 板）。
+- [x] 前端跑 **WB-5 真机冒烟**（总览 9 行 / T-5 / 排序 / 扫描预填 / T 板箱体条 / no_trade / 进出 T 板）→ §5 全绿。
 
 ---
 
@@ -155,3 +156,79 @@ WB-5 是**真机冒烟**：总览 9 行 / T-5 色深 / 排序 / 扫描预填 / T
 即：总览页是**量化信号 + 触发入口**的落地页，不是策略推荐表。若领航员想要总览页直接列「推荐策略」列，
 属**新需求**（需在 `OptionOverviewRow` 增加策略字段并由桥侧聚合，或总览页内联调 `cn_get_option_strategy`），
 请拍板后由后端扩 `@dshtrading/api` 契约 + 桥，前端再加列。
+
+---
+
+## 5. WB-5 真机冒烟结果（2026-09-09 14:30，前端执行）
+
+> 后端清偿 #7+#8 后，前端用系统 Chrome (153) + playwright-core 1.63.0 驱动宿主
+> `http://127.0.0.1:3081/?token=...` 完成 WB-5 全链路冒烟。
+> **结论：WB-5 ✅ 全部通过**（期权网关未启动属独立进程依赖，不阻塞 UI 冒烟）。
+
+### 冒烟清单逐项
+
+| # | 检查项 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | 宿主启动 + 进入期权透镜 | ✅ | token URL → 303 → DeepSeek Harness → 点「期权」tab → `[data-dshtrading-options-overview]` 存在 |
+| 2 | 总览 9 行 / T-5 色深 / 排序 | ✅ | 9 只 ETF（159915/159901/159919/510300/510500/159922/510050/588080/588000）；每行 T-5 五格 %（color-mix 涨跌 token）；排序 tab「5 日强弱 / IV 分位 / 持仓优先」；divergence 标签「价升量缩」多行可见 |
+| 3 | 扫描预填（onScanAll） | ✅ | 点「扫描标的」→ composer（contenteditable DIV）被 `scanAllPrompt` 全文预填（9 标的 5d 涨跌 + agent 工作流指令），不下单 |
+| 4 | 进 T 板：箱体条 + 状态 | ✅ | 点首行（159915）→ OptionsStage 渲染；box bar 显示「5 分钟箱体 / 当前不出箱 / K 线不足」（降级态）；期权链行权价 2609/2610/2612/2703 可见；「策略预览」按钮（WB-4）存在 |
+| 5 | 返回总览 | ✅ | 「返回总览」按钮点击后 overview 重新 visible=true |
+
+### 环境备注
+
+- **浏览器**：系统 Chrome 153（headless），playwright-core 1.63.0（本地 npm install，agent-browser 自带 Chromium 因 Google CDN 被墙下载失败，改用系统 Chrome 绕过）
+- **期权网关**：未启动（`start-options-gateway.bat` 未跑），IV 列全「—」，箱体降级为「K 线不足」。启动网关后 IV 分位和精确箱体数据应填充
+- **截图存档**：`C:/Users/ydw/AppData/Local/Temp/wb5/{01~05}.png`
+
+### WB-0~6 全部状态
+
+| 工单 | 状态 | 验证方式 |
+|---|---|---|
+| WB-0 api.ts fetch 函数 | ✅ committed | 单测 8 例 |
+| WB-1 OptionsOverview 总览 | ✅ + **WB-5 真机通过** | 9 行/T-5/排序/divergence |
+| WB-2 扫描预填 fillComposer | ✅ + **WB-5 真机通过** | composer 全文预填 |
+| WB-3 T 板箱体条 | ✅ + **WB-5 真机通过** | box bar 渲染、降级态正确 |
+| WB-4 策略预览 StrategyPreview | ✅ committed | T 板内「策略预览」按钮可见 |
+| WB-5 真机冒烟 | ✅ **本轮完成** | 5/5 项全绿 |
+| WB-6 OptionsCycleLoop 闭环 | ✅ committed | 单测 10 例 |
+| WB-9 总览重构（叠图 + 机会卡） | ✅ 前端完成 | 374 单测 / 棘轮 234 |
+
+---
+
+## 6. 任务 #9 — 把账本已有的 `logic` / `playbook` 投影进总览行（后端范围）
+
+> 状态（2026-09-09）：**已清偿**。`OptionOverviewStrategy` 已加可选 `logic?` / `playbook?`，
+> `overviewStrategyOf` 两分支条件插入（空串不写键）。桥路由无需改。
+> 前端可删 `StrategyExtras`，改为直读 `row.strategy.logic` / `.playbook`。
+
+### 背景
+
+领航员要求「每个机会要有 AI 解读 + 操作计划」。核查发现**这两个字段后端早就写了**：
+
+- `OptionBarRecommendation.logic` / `.playbook`（`packages/api/src/index.ts:621-634`），
+  由 `option-bar-agent` 每桶生成后落 `data/options/recommendations/*.jsonl`。
+
+但 `overviewStrategyOf()`（`packages/kit-cn/src/option-bar-ledger.ts:358`）投影成
+`OptionOverviewStrategy`（`packages/api/src/index.ts:471`）时**只留了 `edge`，
+把 `logic` 和 `playbook` 丢掉了**。所以这不是「新建 LLM 能力」，而是补投影。
+
+### 改动建议（纯增量、无破坏性）
+
+1. `packages/api/src/index.ts:471` 的 `OptionOverviewStrategy` 加两个可选字段：
+   ```ts
+   /** 账本解读原文（AI 生成）；缺席时前端回落规则解读。 */
+   readonly logic?: string
+   /** 账本操作计划原文（AI 生成）；缺席时前端给流程骨架。 */
+   readonly playbook?: string
+   ```
+2. `packages/kit-cn/src/option-bar-ledger.ts:overviewStrategyOf`（358）两个 return 分支
+   都带上这两个键（沿用现有 `invalidIf` 的条件插入写法，空串不写键）。
+3. 无需改桥路由：`/options/overview` 直接透传整个 row。
+
+### 前端现状（供对照）
+
+- `src/client/option-insight.ts` 的 `strategyExtras()` 已按宽容类型预读这两个键，
+  字段到位即原文展示并把来源徽章标成 `ai`；
+- 后端补完后可删除 `StrategyExtras`，改为直接读 `row.strategy.logic` / `.playbook`；
+- 前端**不**生成价位 / 目标价，操作计划的价位口径一律留给 `cn_get_option_intraday_box`。

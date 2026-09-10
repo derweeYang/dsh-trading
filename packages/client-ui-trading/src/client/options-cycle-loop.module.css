@@ -7,12 +7,10 @@
   gap: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
-  /* 中视图是 flex column + overflow hidden：这里必须能收缩（min-height:0），
-     否则九张卡会把父容器撑爆、底部被裁掉（WB-10 修「遮挡」）；
-     高度不够时让 .cards 自己滚，而不是把卡片切掉一半。 */
-  flex: 0 1 auto;
-  min-height: 0;
-  overflow: hidden;
+  /* WB-11：闭环随内容取自然高度，滚动交给中视图容器（整页一条滑动条）。
+     旧方案（flex 收缩 + 卡片区 300px 小窗内滚）只在屏幕上露一小条，
+     不直观；九张卡在页面里完整铺开，随页滚动。 */
+  flex: 0 0 auto;
 }
 
 .bar {
@@ -84,11 +82,7 @@
   align-content: start;
   align-items: start;
   gap: 6px;
-  /* 吃掉父容器剩下的高度并自行滚动（父容器不给高度时退回 300px 上限） */
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: 300px;
-  overflow: auto;
+  /* WB-11：随内容自然铺开（页面级滚动），不再钉 300px 小窗内滚 */
 }
 
 .card {

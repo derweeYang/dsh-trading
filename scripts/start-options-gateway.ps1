@@ -5,6 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $dir = Join-Path $root 'python\options'
+$src = Join-Path $dir 'src'
 
 if (-not (Test-Path (Join-Path $dir 'pyproject.toml'))) {
   Write-Host "[error] python/options is missing: $dir"
@@ -18,6 +19,7 @@ foreach ($row in $listeners) {
 }
 
 $env:DSH_OPTIONS_GATEWAY_PORT = [string]$Port
+$env:PYTHONPATH = $src
 Set-Location $dir
 Write-Host "Starting dsh-options gateway on 127.0.0.1:$Port. Keep this window open."
 
@@ -34,7 +36,24 @@ if ($null -eq $py) {
   exit 1
 }
 
-Write-Host 'uv not found; using python -m pip (akshare/numpy/pandas/pyarrow).'
-& python -m pip install -e . -q
-$env:PYTHONPATH = (Join-Path $dir 'src')
+# Prefer PYTHONPATH + already-installed runtime deps. Blind `pip install -e .` on
+# Python 3.14 tries to satisfy pyproject pins (e.g. older pyarrow) via source/cmake
+# and can fail even when the gateway would run fine.
+function Test-OptionsImports {
+  & python -c "import dsh_options, numpy, pandas, pyarrow" 2>$null
+  return ($LASTEXITCODE -eq 0)
+}
+
+if (-not (Test-OptionsImports)) {
+  Write-Host 'uv not found; installing missing runtime deps (no forced pyarrow downgrade).'
+  & python -m pip install -e . --no-deps -q
+  & python -m pip install "numpy>=2,<3" "pandas>=2.2,<3" "pyarrow>=18" "akshare>=1.16" "volsurface>=0.2.0" "matplotlib>=3.10.9" -q
+  if (-not (Test-OptionsImports)) {
+    Write-Host '[error] dsh_options imports still fail after pip. Install uv, or fix Python deps, then retry.'
+    exit 1
+  }
+} else {
+  Write-Host 'Runtime imports OK; skipping pip (avoids pyarrow/cmake rebuild on Python 3.14).'
+}
+
 & python -m dsh_options.gateway

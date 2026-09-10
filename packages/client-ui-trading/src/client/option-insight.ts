@@ -92,9 +92,9 @@ export function deriveRisks(row: OptionOverviewRow): RiskFlag[] {
   if (row.divergence === 'accelerating_sell') push('accelerating_sell', 'warn')
 
   const iv = normIv(row.ivPercentile)
-  if (iv === undefined) push('iv_missing', 'info')
-  else if (iv >= IV_HIGH) push('iv_high', 'warn')
-  else if (iv <= IV_LOW) push('iv_low', 'info')
+  if (iv === undefined && row.atmIv === undefined) push('iv_missing', 'info')
+  else if (iv !== undefined && iv >= IV_HIGH) push('iv_high', 'warn')
+  else if (iv !== undefined && iv <= IV_LOW) push('iv_low', 'info')
 
   if ((row.optionQty ?? 0) > 0) push('exposure', 'info')
 
@@ -197,10 +197,15 @@ export function composeRuleReading(row: OptionOverviewRow, t: InsightTranslate):
   if (row.divergence === 'accelerating_sell') lines.push(t('options.insight.reading.accelSell'))
 
   const iv = normIv(row.ivPercentile)
-  if (iv === undefined) lines.push(t('options.insight.reading.ivMissing'))
-  else if (iv >= IV_HIGH) lines.push(t('options.insight.reading.ivHigh', { iv: `${(iv * 100).toFixed(0)}%` }))
-  else if (iv <= IV_LOW) lines.push(t('options.insight.reading.ivLow', { iv: `${(iv * 100).toFixed(0)}%` }))
-  else lines.push(t('options.insight.reading.ivMid', { iv: `${(iv * 100).toFixed(0)}%` }))
+  if (iv !== undefined) {
+    if (iv >= IV_HIGH) lines.push(t('options.insight.reading.ivHigh', { iv: `${(iv * 100).toFixed(0)}%` }))
+    else if (iv <= IV_LOW) lines.push(t('options.insight.reading.ivLow', { iv: `${(iv * 100).toFixed(0)}%` }))
+    else lines.push(t('options.insight.reading.ivMid', { iv: `${(iv * 100).toFixed(0)}%` }))
+  } else if (row.atmIv !== undefined && Number.isFinite(row.atmIv)) {
+    lines.push(t('options.insight.reading.atmIv', { iv: `${(row.atmIv * 100).toFixed(1)}%` }))
+  } else {
+    lines.push(t('options.insight.reading.ivMissing'))
+  }
 
   if ((row.heldQty ?? 0) > 0 || (row.optionQty ?? 0) > 0) {
     lines.push(t('options.insight.reading.position', {

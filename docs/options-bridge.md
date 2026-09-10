@@ -141,6 +141,14 @@ GET /options/overview?sort=strength&includeIv=0
       "divergence": "weak_rally",
       "heldQty": 20000,
       "optionQty": 2,
+      "strategy": {
+        "opportunity": "theta_rent",
+        "template": "butterfly",
+        "edge": "range_hold 收时间价值",
+        "noTrade": false,
+        "bucketStart": "2026-09-09T05:50:00.000Z",
+        "invalidIf": "1-minute close outside box"
+      },
       "scanPrompt": "Scan China ETF option underlying 510050…"
     }]
   }
@@ -149,14 +157,20 @@ GET /options/overview?sort=strength&includeIv=0
 
 - 名册来自 `listUnderlyings`；**SYNTH 行不进表**。现货 / 日 K 走 `tradingCnMarketData`，
   单行失败键缺席，不整页失败。未挂 `connector-options` → `TRADING_NOT_IMPLEMENTED`。
-- `sort`：`strength`（默认，5 日动量 × 量能比）、`iv`（需 `includeIv=1`）、`holdings`
+- `sort`：`strength`（默认，5 日动量 × 量能比）、`iv`（`ivPercentile`，缺席回落 `atmIv`）、`holdings`
   （`heldQty` 再 `optionQty`）。
-- `includeIv=1` 才打 `vol_analytics`；IV 失败该行无 `ivPercentile`。默认不打网关。
+- 默认回填近月 `atmIv`（`implied_vol`，进程内 5 分钟缓存）；`includeIv=1` 才打 `vol_analytics` 分位。
+  iQuant 无历史 IV 路径，`ivPercentile` 常缺席。任一路失败该行键缺席，不整页失败。
+  盘后标的现货走日 K 收盘（与 iquant `ticker` 同一回落），合约价走 T 板已有的日 K 回落。
 - `days` 最多 5 格：`changePct` 做色深，`volumeSurge`（当日量 / 5 日均量 > 1.5）做边框。
 - `scanPrompt` / `scanAllPrompt` 给 C2：`fillComposer` 原样预填。文案含
   「technical analysis / not investment advice / do not place live orders」。
   点行进 T 板仍用 `GET /options/resolve`。
 - `scanPrompt` / `scanAllPrompt` 要求先调 `cn_get_option_intraday_box`，禁止自编箱体。
+- `strategy`（可选）：当天 `data/options/recommendations/YYYY-MM-DD.jsonl` 最新
+  一行投影到该标的。有 pick → `opportunity` + `template` + `edge`；无 pick /
+  全市场 stub → `opportunity=no_edge` + 可选 `skipReason`。无账本文件则**不写**
+  该键。不是现场算箱体，也不改排序。
 
 ### intraday-box（1 分钟 → 5 分钟箱体，L2）
 

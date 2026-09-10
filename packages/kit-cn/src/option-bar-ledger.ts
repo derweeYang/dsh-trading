@@ -14,6 +14,7 @@ import type {
   OptionIntradayCandidate,
   OptionIntradayRegime,
   OptionIntradaySession,
+  OptionOverviewStrategy,
 } from '@dshtrading/api'
 import { OptionCycleBook } from './option-cycles.js'
 import { sessionFlag } from './intraday-box.js'
@@ -304,4 +305,84 @@ export function foldDailyReview(input: {
 
 export function sessionAt(nowMs: number): OptionIntradaySession {
   return sessionFlag(nowMs)
+}
+
+export function latestRecommendation(
+  rows: readonly OptionBarRecommendation[],
+): OptionBarRecommendation | undefined {
+  const latest = latestByKey(rows, (row) => row.bucketStart)
+  if (latest.length === 0) return undefined
+  return latest.reduce((best, row) =>
+    Date.parse(row.bucketStart) >= Date.parse(best.bucketStart) ? row : best)
+}
+
+/** 读当天 recommendations jsonl 的最新一行。缺文件 / 坏行 → undefined，不抛。 */
+export async function loadLatestRecommendation(
+  root: string,
+  nowMs: number,
+): Promise<OptionBarRecommendation | undefined> {
+  const filePath = recommendationsPath(root, shanghaiCalendarDate(nowMs))
+  let text: string
+  try {
+    text = await readFile(filePath, 'utf8')
+  } catch {
+    return undefined
+  }
+  const parsed: OptionBarRecommendation[] = []
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed === '') continue
+    try {
+      const row = JSON.parse(trimmed) as unknown
+      if (typeof row !== 'object' || row === null) continue
+      const rec = row as OptionBarRecommendation
+      if (typeof rec.bucketStart !== 'string' || rec.bucketStart === '') continue
+      parsed.push(rec)
+    } catch {
+      continue
+    }
+  }
+  return latestRecommendation(parsed)
+}
+
+/** 把当天最新推荐投影到总览行。无账本 → 不写 strategy 键。 */
+export function overviewStrategyOf(
+  underlying: string,
+  rec: OptionBarRecommendation | undefined,
+): OptionOverviewStrategy | undefined {
+  if (rec === undefined) return undefined
+  const pick = rec.picks.find((item) => item.underlying === underlying)
+  if (pick !== undefined) {
+    return {
+      opportunity: rec.opportunity,
+      template: pick.template,
+      edge: rec.edge,
+      noTrade: rec.noTrade,
+      bucketStart: rec.bucketStart,
+      ...(rec.logic === '' ? {} : { logic: rec.logic }),
+      ...(rec.playbook === '' ? {} : { playbook: rec.playbook }),
+      ...(rec.invalidIf === '' ? {} : { invalidIf: rec.invalidIf }),
+      ...(rec.skipReason === undefined ? {} : { skipReason: rec.skipReason }),
+    }
+  }
+  return {
+    opportunity: 'no_edge',
+    edge: rec.edge,
+    noTrade: true,
+    bucketStart: rec.bucketStart,
+    ...(rec.logic === '' ? {} : { logic: rec.logic }),
+    ...(rec.playbook === '' ? {} : { playbook: rec.playbook }),
+    ...(rec.skipReason === undefined ? {} : { skipReason: rec.skipReason }),
+  }
+}
+
+export function attachOverviewStrategies<T extends { readonly underlying: string }>(
+  rows: readonly T[],
+  rec: OptionBarRecommendation | undefined,
+): Array<T & { strategy?: OptionOverviewStrategy }> {
+  if (rec === undefined) return [...rows]
+  return rows.map((row) => {
+    const strategy = overviewStrategyOf(row.underlying, rec)
+    return strategy === undefined ? row : { ...row, strategy }
+  })
 }

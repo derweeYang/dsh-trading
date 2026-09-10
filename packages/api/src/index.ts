@@ -459,10 +459,29 @@ export interface OptionOverviewRow {
   readonly heldQty?: number
   /** 该标的期权持仓张数合计（权利+义务取绝对值后相加）。 */
   readonly optionQty?: number
-  /** ATM IV 分位 0–1（includeIv=1 且报告有 iv_percentile 时）。 */
+  /** ATM IV 分位 0–1（includeIv=1 且 vol_analytics 有可回放分位时）。iQuant 活牌无历史路径，此键常缺席。 */
   readonly ivPercentile?: number
+  /** 近月 ATM 隐含波动率（0–1 年化）。总览默认从 implied_vol 回填，不打 vol_analytics。 */
+  readonly atmIv?: number
+  /** 当天最新 5 分钟 K 推荐落在该标的上的摘要；无账本则缺席。 */
+  readonly strategy?: OptionOverviewStrategy
   /** C2：填进 composer 的扫描 prompt（技术分析，非投资建议）。 */
   readonly scanPrompt: string
+}
+
+/** 总览「推荐策略」列：来自 data/options/recommendations 最新一行，不是现场算箱体。 */
+export interface OptionOverviewStrategy {
+  readonly opportunity: OptionBarOpportunity
+  readonly template?: OptionIntradayCandidate['template']
+  readonly edge: string
+  /** 账本解读原文（AI 生成）；缺席时前端回落规则解读。 */
+  readonly logic?: string
+  /** 账本操作计划原文（AI 生成）；缺席时前端给流程骨架。 */
+  readonly playbook?: string
+  readonly noTrade: boolean
+  readonly skipReason?: OptionBarSkipReason
+  readonly bucketStart: string
+  readonly invalidIf?: string
 }
 
 export interface OptionOverview {

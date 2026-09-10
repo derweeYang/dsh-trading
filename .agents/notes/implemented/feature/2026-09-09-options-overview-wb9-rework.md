@@ -4,9 +4,8 @@
 
 领航员诉求两点：① 九个标的 5 日走势画在一张图上看强弱；② 每个机会要有
 「分析数据 / AI 解读 / 操作计划」。落地为**三段式总览**：叠加走势图 → 机会卡 →
-明细表（原 WB-1 表格保留可折叠）。全部在前端 `src/client/**` 内完成，
-**未改任何后端契约**；唯一需要后端补的是把账本已有的 `logic` / `playbook`
-投影到总览行（见文末待办，低成本增量）。
+明细表（原 WB-1 表格保留可折叠）。前端在 `src/client/**` 内完成；后端随后把账本
+已有的 `logic` / `playbook` 投影进总览行（任务 #9，见文末）。
 
 ## 关键决策与推导
 
@@ -22,9 +21,8 @@
 
 **② 解读与计划：不新建 LLM 调用，先把已有字段捞回来。**
 后端 `OptionBarRecommendation` 已写 `logic`（解读）与 `playbook`（操作计划）
-（`packages/api/src/index.ts:621`），但 `overviewStrategyOf()` 投影成
-`OptionOverviewStrategy` 时只留了 `edge`（`kit-cn/src/option-bar-ledger.ts:358`）。
-所以「AI 解读」不是要新造能力，而是**补投影**。前端按宽容类型 `StrategyExtras`
+（`packages/api/src/index.ts`）。任务 #9 后 `overviewStrategyOf()` 把二者投影进
+`OptionOverviewStrategy`（空串不写键）。前端按宽容类型 `StrategyExtras`
 预读：字段到位即原文展示并标来源 `ai`；缺席时回落到**规则解读**并标 `rule`，
 卡上来源徽章必显式——不把规则生成的文字伪装成 AI 结论。
 
@@ -56,10 +54,11 @@
 - `node scripts/typecheck-gate.mjs`：234 < 基线 239，棘轮通过；已 `--update` 下调基线至 234
   （`dayCell` 死参数修掉 5 处 TS2554）。client 半零新增错误。
 
-## 后端待办（已在 docs/backend-handoff-2026-09-09.md §6 登记）
+## 后端投影（任务 #9，2026-09-09 已清偿）
 
-**任务 #9**：`OptionOverviewStrategy` 补两个可选字段 `logic?: string` / `playbook?: string`
-（`packages/api/src/index.ts:471`），并在 `kit-cn/src/option-bar-ledger.ts:overviewStrategyOf`
-（358）随行投影。补完后前端卡片来源徽章自动从「规则」切「AI」，
-`option-insight.ts` 里的 `StrategyExtras` 宽容类型即可删除改成强类型直读。
-纯增量、无破坏性。
+`OptionOverviewStrategy` 已补可选 `logic?: string` / `playbook?: string`
+（`packages/api/src/index.ts`），`overviewStrategyOf` 两分支条件插入（空串不写键）。
+账本有原文时总览行带上，前端机会卡来源徽章自动从「规则」切「AI」。
+前端后续可删 `option-insight.ts` 的 `StrategyExtras`，改为直读强类型字段
+（属 workbuddy 范围，本变更未动 `src/client/**`）。
+见 [backend-handoff §6](../../../../docs/backend-handoff-2026-09-09.md)。

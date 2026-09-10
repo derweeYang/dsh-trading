@@ -21,8 +21,11 @@ workbuddy 交接 C1 要求 9 标的一屏强弱榜（现货、T-5 量价、底�
 - `heldQty` 复用台账聚合；`optionQty` 为该标的期权张数绝对值之和。
 - `includeIv=1` 才打 `vol_analytics`，读 `iv_percentile.w252`；默认不打网关。
 - `scanPrompt` / `scanAllPrompt` 预填 C2，含「非投资建议 / 不得实盘下单」。
+- `row.strategy`（可选）：读当天 recommendations jsonl 最新一行，投影到各标的
+  （有 pick 带 template；其余 / stub 为 `no_edge` + `skipReason`）。无账本不写键。
+  总览不现场算箱体。
 
-类型在 `@dshtrading/api`（`OptionOverview`）。契约见
+类型在 `@dshtrading/api`（`OptionOverview` / `OptionOverviewStrategy`）。契约见
 [docs/options-bridge.md](../../../../docs/options-bridge.md)。
 
 ## Alternatives considered
@@ -30,9 +33,12 @@ workbuddy 交接 C1 要求 9 标的一屏强弱榜（现货、T-5 量价、底�
 - **UI 多接口拼总览**：排序与背离会双写，默认 IV 轮询打爆网关。败。
 - **放进 python/options**：总览依赖 CN 现货与 holdings，不是期权内核职责。败。
 - **默认带 IV**：9 次 vol_analytics 依赖网关，首屏会 TRADING_NETWORK。败。
+- **总览现场重算箱体当推荐**：与 5 分钟账本双写，且会在 regular 外冒出假信号。败。
+  推荐只投影当天 jsonl 最新一行。
 
 ## Consequences
 
 - workbuddy 总览只 fetch 这一条；点行仍走 `GET /options/resolve`。
+- 「推荐策略」列读 `row.strategy`，缺席出「—」；词典与表头归 workbuddy（WB-7）。
 - C1/C2 页面与词典仍归 workbuddy，本变更不改 `src/client/**`。
 - `feat/etf-options` 交付，不合 `main`。

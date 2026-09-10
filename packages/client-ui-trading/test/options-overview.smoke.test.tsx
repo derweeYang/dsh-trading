@@ -110,6 +110,54 @@ describe('OptionsOverview', () => {
     expect(onPickRow).toHaveBeenCalledTimes(1)
   })
 
+  it('WB-11 机会卡整卡可点进 T 板；底部按钮不冒泡双触发', () => {
+    const onScanRow = vi.fn()
+    const { container, onPickRow } = renderOverview({
+      overview: {
+        source: 'iquant', sort: 'strength', asOf: '2026-09-09T01:00:00.000Z', scanAllPrompt: 'scan all',
+        rows: [{
+          underlying: '510050', name: '上证50ETF', exchange: 'SSE' as const, spotSymbol: '510050.SH',
+          days: [{ date: '2026-09-09', changePct: 0.4, volumeSurge: false }], scanPrompt: 's',
+        }],
+      },
+      onScanRow,
+    })
+    const card = container.querySelector('[data-dshtrading-opportunity-card="510050"]') as HTMLElement
+    fireEvent.click(card)
+    expect(onPickRow).toHaveBeenCalledTimes(1)
+    // 「问 AI」不冒泡成进 T 板
+    const askBtn = Array.from(card.querySelectorAll('button'))
+      .find(btn => btn.textContent === 'options.overview.card.askAi') as HTMLElement
+    expect(askBtn).toBeTruthy()
+    fireEvent.click(askBtn)
+    expect(onScanRow).toHaveBeenCalledTimes(1)
+    expect(onPickRow).toHaveBeenCalledTimes(1)
+  })
+
+  it('WB-11 排序在途：根节点 data-sorting 标记（降透明度反馈）', () => {
+    const { container } = renderOverview({ sorting: true })
+    expect(container.querySelector('[data-dshtrading-options-overview]')?.getAttribute('data-sorting')).toBe('true')
+    const { container: idle } = renderOverview()
+    expect(idle.querySelector('[data-dshtrading-options-overview]')?.getAttribute('data-sorting')).toBeNull()
+  })
+
+  it('WB-11 排序切 iv 且 IV 全缺席 → 出 ivMissing 提示，不伪装无响应', () => {
+    const { container } = renderOverview({ sort: 'iv' })
+    expect(container.textContent).toContain('options.overview.ivMissing')
+    // 有 IV 值时不提示
+    const { container: withIv } = renderOverview({
+      sort: 'iv',
+      overview: {
+        source: 'iquant', sort: 'iv', asOf: '2026-09-09T01:00:00.000Z', scanAllPrompt: 'scan all',
+        rows: [{
+          underlying: '510050', name: '上证50ETF', exchange: 'SSE' as const, spotSymbol: '510050.SH',
+          ivPercentile: 0.72, days: [], scanPrompt: 's',
+        }],
+      },
+    })
+    expect(withIv.textContent).not.toContain('options.overview.ivMissing')
+  })
+
   it('未注入 fillComposer（无扫描回调）→ 不渲染扫描按钮', () => {
     const { container } = renderOverview()
     expect(container.querySelector('tbody tr td:last-child button')).toBeNull()

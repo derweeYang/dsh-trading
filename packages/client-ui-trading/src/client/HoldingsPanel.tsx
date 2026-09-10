@@ -9,7 +9,7 @@
  * 由本组件驱动：挂载即拉、卸载即停（visibility 暂停由 usePoll 承担）。
  *
  * 2026-09-06 总盈亏升级：权益条在总资产旁追加「已实现」（paper 撮合流水
- * FIFO 回合合计，convertUsdToBase 折算基准币）与「浮动」（盯市 uPnL 合计，
+ * FIFO 回合合计，convertCnyToBase 折算基准币）与「浮动」（盯市 uPnL 合计，
  * 覆盖一致才给比例）两块；汇总页签新增「已平仓历史」分区——按标的聚合
  * 平仓回合（回合内多段平仓累加），展开可见每轮开平均价与盈亏（可回看
  * 「平仓后再开仓」的历史）。导入/实盘无成交流水，暂不参与已实现口径。
@@ -41,7 +41,7 @@ import type { MarketLocaleKey } from './contract.ts'
 import { directionColor, fmtPercent, fmtPrice } from './format.ts'
 import { aggregateHoldings } from './holdings-aggregate.ts'
 import type { HoldingDetailRow, HoldingSummaryRow } from './holdings-aggregate.ts'
-import { convertUsdToBase, derivePositionRounds } from './position-rounds.ts'
+import { convertCnyToBase, derivePositionRounds } from './position-rounds.ts'
 import type { SymbolRoundHistory } from './position-rounds.ts'
 import { paperTradingStore } from './paper-trading-store.ts'
 import {
@@ -534,7 +534,7 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
   )
 
   // 已实现盈亏（2026-09-06）：paper 撮合流水 FIFO 回合（paperTick 驱动重读）。
-  // 模拟池按 USD/USDT 记账，展示前折算基准币；fx 缺席时权益条已实现块隐藏。
+  // 模拟池按 CNY 记账，展示前折算基准币；fx 缺席时权益条已实现块隐藏。
   const roundsOutcome = useMemo(
     () => {
       void paperTick
@@ -543,7 +543,7 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
     [paperTick],
   )
   const realizedBase = useMemo(
-    () => convertUsdToBase(roundsOutcome.totalRealizedPnl, data.fx ?? undefined),
+    () => convertCnyToBase(roundsOutcome.totalRealizedPnl, data.fx ?? undefined),
     [roundsOutcome, data.fx],
   )
   const realizedRatio = roundsOutcome.totalRealizedCost > 0

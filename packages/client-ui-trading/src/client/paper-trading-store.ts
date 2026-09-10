@@ -7,7 +7,7 @@
  *    与真实券商/交易所账户 100% 物理隔离，永不发生真金外溢；
  * 2. 真实行情秒级撮合：根据当前标的最新 Ticker 价格执行撮合计算，支持市价单即刻成交、
  *    可用资金与持仓校验、持仓加权成本价与浮动盈亏（uPnL）动态跟踪；
- * 3. 一键出厂重置：支持随时重置模拟资产为初始 100,000 USDT/USD。
+ * 3. 一键出厂重置：支持随时重置模拟资产为初始 ￥1,000,000（人民币）。
  */
 
 import type { AccountBalance, MarketId, Order, Position, TradeFill } from './types.js'
@@ -34,8 +34,9 @@ export interface PaperAccount {
   fills: PaperFill[]
 }
 
-const STORAGE_KEY = 'dshtrading:paper:account:v1'
-const DEFAULT_INITIAL_CASH = 100_000
+/** v2：默认资金升至 100 万人民币，币种由 USDT (Demo) 改为 CNY。 */
+const STORAGE_KEY = 'dshtrading:paper:account:v2'
+const DEFAULT_INITIAL_CASH = 1_000_000
 
 function loadStoredAccount(): PaperAccount {
   if (typeof window === 'undefined' || typeof window.localStorage?.getItem !== 'function') {
@@ -108,7 +109,7 @@ class PaperTradingStore {
   getBalances(): AccountBalance[] {
     return [
       {
-        asset: 'USDT (Demo)',
+        asset: 'CNY',
         free: this.account.cash,
         locked: 0,
       },

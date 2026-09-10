@@ -209,6 +209,74 @@ def test_run_quote_forwards_live_host_facts(monkeypatch):
     assert seen["body"]["maxWaitMs"] == 3000
 
 
+def test_fetch_spot_uses_snapshot_last_when_live(monkeypatch):
+    calls: list = []
+
+    def run(subcommand, body, _request=None):
+        calls.append(subcommand)
+        if subcommand == "snapshot":
+            return {"snapshots": [{"last": 3.037}]}
+        raise AssertionError(f"unexpected {subcommand}")
+
+    monkeypatch.setattr(iquant, "run_quote", run)
+    assert iquant.fetch_spot("510050", {}) == pytest.approx(3.037)
+    assert calls == ["snapshot"]
+
+
+def test_fetch_spot_falls_back_to_daily_close_when_snapshot_empty(monkeypatch):
+    calls: list = []
+
+    def run(subcommand, body, _request=None):
+        calls.append((subcommand, body["market"] if "market" in body else None, body.get("symbol")))
+        if subcommand == "snapshot":
+            raise OptionsError("NO_DATA", "no snapshot for ['510050'] on SH")
+        if subcommand == "history_bars":
+            assert body["market"] == "SH"
+            assert body["symbol"] == "510050"
+            assert body["limit"] == 8
+            return {"bars": [{"close": 3.01}, {"close": 3.037}]}
+        raise AssertionError(f"unexpected {subcommand}")
+
+    monkeypatch.setattr(iquant, "run_quote", run)
+    assert iquant.fetch_spot("510050", {}) == pytest.approx(3.037)
+    assert [item[0] for item in calls] == ["snapshot", "history_bars"]
+
+
+def test_fetch_spot_treats_zero_snapshot_as_missing(monkeypatch):
+    def run(subcommand, body, _request=None):
+        if subcommand == "snapshot":
+            return {"snapshots": [{"last": 0}]}
+        if subcommand == "history_bars":
+            return {"bars": [{"close": 4.616}]}
+        raise AssertionError(f"unexpected {subcommand}")
+
+    monkeypatch.setattr(iquant, "run_quote", run)
+    assert iquant.fetch_spot("510300", {}) == pytest.approx(4.616)
+
+
+def test_fetch_spot_propagates_snapshot_network(monkeypatch):
+    def run(subcommand, _body, _request=None):
+        if subcommand == "snapshot":
+            raise OptionsError("NETWORK", "iquant-quote gateway unreachable")
+        raise AssertionError("must not fall back after NETWORK")
+
+    monkeypatch.setattr(iquant, "run_quote", run)
+    with pytest.raises(OptionsError) as err:
+        iquant.fetch_spot("510050", {})
+    assert err.value.code == "NETWORK"
+
+
+def test_fetch_spot_no_data_when_both_paths_empty(monkeypatch):
+    def run(subcommand, _body, _request=None):
+        raise OptionsError("NO_DATA", f"empty {subcommand}")
+
+    monkeypatch.setattr(iquant, "run_quote", run)
+    with pytest.raises(OptionsError) as err:
+        iquant.fetch_spot("510050", {})
+    assert err.value.code == "NO_DATA"
+    assert "510050" in err.value.message
+
+
 def test_run_quote_stays_synth_without_live_flag(monkeypatch):
     seen = {}
 

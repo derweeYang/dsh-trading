@@ -3,14 +3,14 @@
  * 期权透镜下「升格」为 MiddleStage 与行情/策略/知识库平级的第 4 个 tab。
  *
  * 本组件是**自取数薄壳**：持有 overview / cycleLoop 快照与排序态，每 60s / 30s
- * 各轮询一次（includeIv 仅排序切 iv 时打开——九路 vol_analytics 会打爆网关）；
+ * 各轮询一次（includeIv 仅排序切 iv 时打开 vol_analytics 分位；近月 ATM IV 由桥默认回填）；
  * 并把 overview / cycleLoop 发布到共享 store，供 QuoteStage T 板的「AI 扫描」读
  * 快照，避免重复打 /options/overview。
  *
  * 跨导航：点行进 T 板 / 扫描预填走 stageActions（MiddleStage 挂载时写入）。
  * 本页技术与行情分析面，不构成投资建议。
  */
-import { useRef, useState, useSyncExternalStore } from 'react'
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionCycleLoop } from '@dshtrading/api'
 import { fetchOptionsOverview, fetchOptionsCycleLoop, fetchOptionsResolve } from './api.ts'
 import { colorModeStore } from './color-mode.ts'
@@ -37,10 +37,13 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
 
   /** 排序切换期间丢弃旧应答（避免乱序覆盖）。 */
   const sortRef = useRef(sort)
+  /** WB-11：排序应答在途（IV 要打九路 vol_analytics，可能很慢）→ UI 即刻给反馈。 */
+  const [sortPending, setSortPending] = useState(false)
 
   usePoll(async () => {
     const res = await fetchOptionsOverview({ sort, includeIv: sort === 'iv' })
     if (sortRef.current !== sort) return
+    setSortPending(false)
     if (res.ok) {
       setOverview(res.data)
       setOverviewFailure(null)
@@ -51,6 +54,27 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
     }
     setOverviewLoaded(true)
   }, OPTIONS_OVERVIEW_POLL_MS, [sort])
+
+  /**
+   * WB-11：换排序先用已取到的行在客户端重排（纯展示序，不重算任何指标），
+   * 点击「IV 分位」立即看到顺序变化；桥应答落地后再用服务端口径覆盖。
+   * 缺键行沉底（undefined 视为最小）；IV 全缺席时顺序不变，由 OptionsOverview 出提示。
+   */
+  const displayOverview = useMemo(() => {
+    if (overview === null) return null
+    const last = (value: number | undefined): number =>
+      value === undefined ? Number.NEGATIVE_INFINITY : value
+    const rows = [...overview.rows].sort((a, b) => {
+      if (sort === 'iv') return last(b.ivPercentile ?? b.atmIv) - last(a.ivPercentile ?? a.atmIv)
+      if (sort === 'holdings') {
+        const held = (b.heldQty ?? 0) - (a.heldQty ?? 0)
+        if (held !== 0) return held
+        return (b.optionQty ?? 0) - (a.optionQty ?? 0)
+      }
+      return last(b.strengthScore) - last(a.strengthScore)
+    })
+    return { ...overview, rows }
+  }, [overview, sort])
 
   usePoll(async () => {
     const res = await fetchOptionsCycleLoop()
@@ -88,16 +112,29 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
     ? undefined
     : (row: OptionOverviewRow): void => { void fill(row.scanPrompt) }
 
+  /**
+   * WB-11 修复「点 IV 分位没反应」的真根因：sortRef 只在初始化读过 sort，之后
+   * 从未同步——切排序后所有应答都被 `sortRef.current !== sort` 丢弃，表格永不
+   * 更新。这里在切换时同步 sortRef + 打开在途态；旧排序的在途应答仍会被丢弃。
+   */
+  const changeSort = (next: OptionOverviewSort): void => {
+    if (next === sort) return
+    sortRef.current = next
+    setSort(next)
+    setSortPending(true)
+  }
+
   return (
     <div className={css.root}>
       <OptionsOverview
         t={t}
         colorMode={colorMode}
-        overview={overview}
+        overview={displayOverview}
         failure={overviewFailure}
         loaded={overviewLoaded}
         sort={sort}
-        onSortChange={setSort}
+        onSortChange={changeSort}
+        sorting={sortPending}
         onPickRow={onPickRow}
         {...(onScanAll !== undefined ? { onScanAll } : {})}
         {...(onScanRow !== undefined ? { onScanRow } : {})}

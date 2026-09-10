@@ -65,11 +65,11 @@ WB-6 全未动。核心矛盾不是「缺页面」，而是三处**静默失真*
 
 - `npx vitest run`（client-ui-trading）：**38 文件 / 327 用例全绿**（+10 新）。
 - `node scripts/i18n-audit.mjs --check`：OK，998 zh keys（+63）。
-- `npx tsc --noEmit -p packages/client-ui-trading/tsconfig.json`：仅剩 3 处
-  **node 半**既有错误（`src/option-bar-agent.ts`、`src/option-overview.ts`，
-  2026-09-08 后端提交引入），前端 client 半 0 新增。
-- 未做真机宿主冒烟：本机 trading-web 宿主起不来（各市场 dataplane 重复注册，
-  与 issue #81 同族），需另开后端 session 清偿后再验。
+- `npx tsc --noEmit -p packages/client-ui-trading/tsconfig.json`：交付当时仅剩 3 处
+  **node 半**既有错误（`src/option-bar-agent.ts`、`src/option-overview.ts`）；
+  前端 client 半 0 新增。该批 node 半回归后由后端 task #7 清零。
+- 真机宿主冒烟（WB-5）：后端清 #8 后，2026-09-09 14:30 前端 5/5 通过
+  （见 [backend-handoff §5](../../../../docs/backend-handoff-2026-09-09.md)）。
 
 ## Risks
 

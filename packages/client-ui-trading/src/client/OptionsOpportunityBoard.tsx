@@ -100,7 +100,13 @@ function Card({ row, rank, t, colorMode, onPickRow, onAskAi }: {
   const warnCount = risks.filter(r => r.severity === 'warn').length
 
   return (
-    <div className={css.card} data-dshtrading-opportunity-card={row.underlying}>
+    <div
+      className={css.card}
+      data-dshtrading-opportunity-card={row.underlying}
+      /* WB-11：整卡可点进 T 板（围绕该标的的期权分析 + 交易策略），不再只能戳底部按钮 */
+      onClick={() => { onPickRow(row) }}
+      title={t('options.overview.pickHint')}
+    >
       {/* 卡头：标的 / 名次 / 机会 / 风险 */}
       <div className={css.cardHead}>
         <span className={css.cardName}>{row.name}</span>
@@ -141,7 +147,7 @@ function Card({ row, rank, t, colorMode, onPickRow, onAskAi }: {
           <Metric label={t('options.overview.col.strength')} value={num(row.strengthScore)} />
           <Metric
             label={t('options.overview.col.iv')}
-            value={ivText(row.ivPercentile)}
+            value={ivText(row.ivPercentile ?? row.atmIv)}
             warn={row.ivPercentile !== undefined && (row.ivPercentile > 1 ? row.ivPercentile / 100 : row.ivPercentile) >= IV_HIGH}
           />
           <Metric label={t('options.overview.col.heldQty')} value={row.heldQty === undefined ? '—' : fmtCompact(row.heldQty)} />
@@ -203,11 +209,20 @@ function Card({ row, rank, t, colorMode, onPickRow, onAskAi }: {
       </div>
 
       <div className={css.cardFoot}>
-        <button type="button" className={css.scanRowBtn} onClick={() => { onPickRow(row) }}>
+        {/* 两个按钮都 stopPropagation：动作与整卡点击同效，冒泡会双触发 */}
+        <button
+          type="button"
+          className={css.scanRowBtn}
+          onClick={(event) => { event.stopPropagation(); onPickRow(row) }}
+        >
           {t('options.overview.card.openBoard')}
         </button>
         {onAskAi !== undefined && (
-          <button type="button" className={css.ghostBtn} onClick={() => { onAskAi(row) }}>
+          <button
+            type="button"
+            className={css.ghostBtn}
+            onClick={(event) => { event.stopPropagation(); onAskAi(row) }}
+          >
             {t('options.overview.card.askAi')}
           </button>
         )}

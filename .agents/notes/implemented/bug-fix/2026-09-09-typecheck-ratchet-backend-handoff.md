@@ -28,5 +28,6 @@ Status: implemented
 ## Consequences
 
 - 棘轮全绿；`kit-cn` fundamentals 的 `exactOptionalPropertyTypes` 存量仍在，后续单独还债。
-- trading-web 本机已重挂全部 `@dshtrading/*` junction；宿主可出 token URL，前端可跑 WB-5。
+- trading-web 本机已重挂全部 `@dshtrading/*` junction；宿主可出 token URL。
+  前端已于同日完成 **WB-5 真机冒烟**（见 [backend-handoff §5](../../../../docs/backend-handoff-2026-09-09.md)）。
 - 用户改 `dshtrading.markets.cn.provider` 后须新建会话才切换 agent 面连接器（既有 restart 语义，见撞键 note）。

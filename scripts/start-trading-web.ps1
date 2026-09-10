@@ -1,13 +1,15 @@
 ﻿param(
   [int]$Port = 3081,
   [switch]$SkipIquant,
-  [int]$IquantPort = 5810
+  [int]$IquantPort = 5810,
+  [switch]$SkipOptions,
+  [int]$OptionsPort = 8090
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $dsh = Join-Path $root '.local\node_modules\.bin\dsh.cmd'
-$optionsPort = 8090
+$optionsPort = $OptionsPort
 
 function Test-Listening([int]$ListenPort) {
   [bool](Get-NetTCPConnection -LocalPort $ListenPort -State Listen -ErrorAction SilentlyContinue)
@@ -58,8 +60,12 @@ function Write-Preflight {
   } elseif ($quoteListen) {
     $quoteLine = 'iQuant   :{0}  already-up  /health={1}' -f $IquantPort, $quoteHealth
   }
-  $optMark = 'no'
-  if ($optionsListen) { $optMark = 'yes' }
+  $optLine = 'options  :{0}  will-open-window  (T-board/IV)' -f $optionsPort
+  if ($SkipOptions) {
+    $optLine = 'options  :{0}  skip  listen={1}' -f $optionsPort, $optionsListen
+  } elseif ($optionsListen) {
+    $optLine = 'options  :{0}  already-up' -f $optionsPort
+  }
 
   Write-Host '======== trading-web check ========'
   Write-Host ('repo     {0}' -f $root)
@@ -72,8 +78,8 @@ function Write-Preflight {
   Write-PathCheck 'API.dll' $iquant.ApiDll
   Write-PathCheck 'qmtquote' $iquant.Qmtquote
   Write-PathCheck 'config' $iquant.Config
-  Write-Host ('options  :{0}  listen={1}  (T-board/IV only, not started here)' -f $optionsPort, $optMark)
-  Write-Host 'Keep both windows open. Quotes in the extra window, host in this one.'
+  Write-Host $optLine
+  Write-Host 'Keep dependency windows open (iQuant + options) plus this host window.'
   Write-Host '==================================='
   Write-Host ''
 }
@@ -177,6 +183,15 @@ if (-not $SkipIquant -and -not (Test-Listening $IquantPort)) {
     Start-Process -FilePath $quoteBat -ArgumentList ([string]$IquantPort) -WorkingDirectory $root
   } else {
     Write-Host ('[warn] {0} is missing. CN quotes will return TRADING_NETWORK.' -f $quoteBat)
+  }
+}
+
+if (-not $SkipOptions -and -not (Test-Listening $optionsPort)) {
+  $optionsBat = Join-Path $root 'start-options-gateway.bat'
+  if (Test-Path $optionsBat) {
+    Start-Process -FilePath $optionsBat -ArgumentList ([string]$optionsPort) -WorkingDirectory $root
+  } else {
+    Write-Host ('[warn] {0} is missing. T-board/IV will return TRADING_NETWORK.' -f $optionsBat)
   }
 }
 

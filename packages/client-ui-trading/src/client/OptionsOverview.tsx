@@ -46,6 +46,8 @@ export interface OptionsOverviewProps {
   loaded: boolean
   sort: OptionOverviewSort
   onSortChange: (sort: OptionOverviewSort) => void
+  /** 排序应答在途（WB-11）：根节点降透明度，点击 IV 分位即刻有反馈。 */
+  sorting?: boolean | undefined
   /** 点行进 T 板（外层解析 resolve → 切标的 → 切 pane）。 */
   onPickRow: (row: OptionOverviewRow) => void
   /** 总览「扫描标的」→ 预填 composer（未注入 fillComposer 时不传）。 */
@@ -128,15 +130,18 @@ function trendValues(days: readonly OptionOverviewDay[]): number[] {
 }
 
 export function OptionsOverview({
-  t, colorMode, overview, failure, loaded, sort, onSortChange, onPickRow, onScanAll, onScanRow,
+  t, colorMode, overview, failure, loaded, sort, onSortChange, onPickRow, onScanAll, onScanRow, sorting,
 }: OptionsOverviewProps): React.JSX.Element {
   const rows = overview?.rows ?? []
   /** 明细表默认展开（WB-1 验收基线：9 行 / T-5 / 排序），可折叠让位给机会卡。 */
   const [showTable, setShowTable] = useState(true)
   const ranks = new Map(rankByCumulative(rows).map(item => [item.row.underlying, item.rank]))
+  /** 排序切 iv 后九路 vol_analytics 仍可能全缺席 → 如实提示，不让「没反应」背锅。 */
+  const ivMissing = sort === 'iv' && rows.length > 0
+    && rows.every(row => row.ivPercentile === undefined && row.atmIv === undefined)
 
   return (
-    <div className={css.root} data-dshtrading-options-overview="">
+    <div className={css.root} data-dshtrading-options-overview="" data-sorting={sorting === true ? 'true' : undefined}>
       {/* 顶栏：排序 + 全表扫描 + 快照口径 */}
       <div className={css.bar}>
         <span className={css.title}>{t('options.overview.title')}</span>
@@ -155,6 +160,7 @@ export function OptionsOverview({
             </button>
           ))}
         </div>
+        {sorting === true && <span className={css.sortingHint}>{t('options.overview.loading')}</span>}
         <span className={css.spacer} />
         {overview !== null && (
           <span className={css.asOf}>
@@ -183,6 +189,8 @@ export function OptionsOverview({
                 ? <div className={css.notice}>{t('options.overview.empty')}</div>
                 : (
                   <>
+                    {/* IV 分位整体缺席（WB-11）：如实提示，不伪装成「点了没反应」 */}
+                    {ivMissing && <div className={css.notice}>{t('options.overview.ivMissing')}</div>}
                     {/* ① 九标的 5 日叠加走势：共用 Y 轴，线的相对位置即强弱序 */}
                     <OverlayTrendChart
                       t={t}
@@ -261,7 +269,7 @@ export function OptionsOverview({
                             <td className={css.colTrend}>
                               <Sparkline values={trendValues(row.days)} width={84} height={22} up={(row.return5d ?? 0) >= 0} colorMode={colorMode} />
                             </td>
-                            <td className={css.num}>{fmtIvPercentile(row.ivPercentile)}</td>
+                            <td className={css.num}>{fmtIvPercentile(row.ivPercentile ?? row.atmIv)}</td>
                             <td className={css.num}>{row.heldQty === undefined ? '—' : fmtCompact(row.heldQty)}</td>
                             <td className={css.num}>{row.optionQty === undefined ? '—' : String(row.optionQty)}</td>
                             {/* 推荐策略：只读后端投影，前端不重算（WB-7） */}

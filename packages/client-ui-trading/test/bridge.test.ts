@@ -2,8 +2,12 @@
  * 行情桥单测：市场清单、批量报价（逐 symbol 独立成败 + 封顶）、K线透传与
  * 参数校验、请求分发路由与协议错误。宿主面全部用假件（不触网）。
  */
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { MarketDataService, NewsAggregator } from '@dshtrading/api'
+import { OPTIONS_DATA_ENV, shanghaiCalendarDate } from '@dshtrading/kit-cn'
 import { createMemoryHoldingsStore } from '@dshtrading/holdings'
 import { createMemoryCustomStrategyStore } from '@dshtrading/strategies'
 import {
@@ -865,17 +869,27 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
     const chain = opts.chain ?? { underlying: '510050' }
     const cnOptions: import('@dshtrading/api').CnOptionsService = {
       listUnderlyings: async () => ROSTER,
-      getOptionExpiries: async () => {
-        throw new Error('unused')
-      },
+      getOptionExpiries: async () => ({
+        underlying: chain.underlying,
+        source: 'iquant',
+        months: [{ expiryMonth: '2609', expiryDate: '2026-09-23' }],
+      }),
       getOptionChain: async () => ({
         underlying: chain.underlying, expiryMonth: '2609', source: 'synth',
         ...(chain.spot !== undefined ? { spot: chain.spot } : {}),
         calls: [{ code: '510050C2609M02850', strike: 2.85 }], puts: [],
       }),
-      getImpliedVol: async () => {
-        throw new Error('unused')
-      },
+      getImpliedVol: async () => ({
+        underlying: chain.underlying,
+        expiryMonth: '2609',
+        source: 'iquant',
+        rate: 0.02,
+        priceField: 'last',
+        rows: [
+          { code: '510050C2609M02900', strike: 2.9, impliedVol: 0.21, converged: true },
+          { code: '510050P2609M02900', strike: 2.9, impliedVol: 0.19, converged: true },
+        ],
+      }),
       getStrategy: async () => {
         throw new Error('unused')
       },
@@ -1122,6 +1136,7 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
     })
     expect(overview.rows[0]?.days).toHaveLength(5)
     expect(overview.rows[0]?.scanPrompt).toContain('not investment advice')
+    expect(overview.rows[0]?.atmIv).toBeCloseTo(0.2, 5)
     expect(overview.scanAllPrompt).toContain('510050')
     expect(getVolAnalytics).not.toHaveBeenCalled()
 
@@ -1132,6 +1147,53 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
     expect(ivOverview.sort).toBe('iv')
     expect(ivOverview.rows[0]?.ivPercentile).toBe(0.8)
     expect(getVolAnalytics).toHaveBeenCalled()
+  })
+
+  it('GET /options/overview：挂当天最新推荐到 strategy；无账本不写该键', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-ov-bridge-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const date = shanghaiCalendarDate(Date.now())
+    await mkdir(path.join(dir, 'recommendations'), { recursive: true })
+    await writeFile(path.join(dir, 'recommendations', `${date}.jsonl`), `${JSON.stringify({
+      bucketStart: '2026-09-09T05:50:00.000Z',
+      asOf: 't',
+      session: 'regular',
+      opportunity: 'theta_rent',
+      edge: 'range_hold 收时间价值',
+      logic: 'x',
+      playbook: 'x',
+      invalidIf: '1-minute close outside box',
+      picks: [{ underlying: '510050', regime: 'range_hold', template: 'butterfly', cycleId: '510050:1' }],
+      noTrade: false,
+    })}\n`, 'utf8')
+    const base = linkedHost({})
+    const bridge = new TradingBridge({
+      ...base,
+      getCnOptions: () => ({
+        ...base.getCnOptions!(),
+        listUnderlyings: async () => [
+          { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
+          { underlying: '159915', exchange: 'SZSE', name: '创业板ETF易方达', multiplier: 10000, tickSize: 0.0001, quotesSource: 'szse_static_only' },
+        ],
+      }),
+    })
+    try {
+      const { payload } = await dispatchBridgeRequest(bridge, 'GET', '/options/overview', new URLSearchParams())
+      const rows = (payload as { overview: { rows: Array<{ underlying: string; strategy?: Record<string, unknown> }> } }).overview.rows
+      expect(rows.find((row) => row.underlying === '510050')?.strategy).toMatchObject({
+        opportunity: 'theta_rent',
+        template: 'butterfly',
+        noTrade: false,
+      })
+      expect(rows.find((row) => row.underlying === '159915')?.strategy).toMatchObject({
+        opportunity: 'no_edge',
+        noTrade: true,
+      })
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
   })
 
   it('GET /options/overview：未挂期权服务 → NOT_IMPLEMENTED；行情失败不整页失败', async () => {

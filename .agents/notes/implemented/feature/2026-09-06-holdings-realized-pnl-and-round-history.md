@@ -13,7 +13,7 @@ Status: implemented
 1. **FIFO 持仓回合撮合引擎（新模块 `position-rounds.ts`，纯函数 + 8 项单测）**：
    - 从成交流水按 FIFO 撮合出「净持仓 0 → 开 → 清零」的回合：openTs/closeTs、closedSize、avgEntry/avgExit、realizedPnl（Σ(卖价−买价)×量，费用不计——paper fee 恒 0）；回合内多段平仓累加进同一回合（对齐交易所「回合盈亏」口径）。
    - 输入顺序不敏感（内部按 timestamp 稳定排序，兼容 paper store 最新在前存储）；流水不完整时匹配不到成本批次的卖出不计盈亏与平仓量（宁缺勿编）。
-   - `convertUsdToBase`：模拟池按 USD/USDT 记账，展示时折算基准币，fx 缺席/缺 USD 汇率 → undefined（权益条整块隐藏）。
+   - `convertCnyToBase`：模拟池按 CNY 记账，展示时折算基准币，fx 缺席/缺 CNY 汇率 → undefined（权益条整块隐藏）。（2026-09-09 由 `convertUsdToBase` 切换，见 [paper-account-cny-1m](./2026-09-09-paper-account-cny-1m.md)。）
 2. **数据源边界（v1 明示）**：唯一完整自洽的成交流水是 paper 本地账本（localStorage fills 持久化），已实现口径 v1 仅覆盖模拟盘；导入持仓（截图快照、无流水）与实盘（连接器 fills 历史窗口不完整）暂不参与，UI 文案（realizedHint/history.hint）如实披露。`TradeFill` 是 `@dshtrading/api` 公共契约，不动它——按 #65 `PaperPosition` 先例在 paper store 做客户端扩展 `PaperFill = TradeFill & { market? }`，新流水补记 market 供回合打市场标签（旧流水无 market → 按 symbol 分组）。
 3. **浮动总盈亏（`holdings-aggregate.ts` 扩展，契约内纯增量）**：`HoldingDetailRow.costBase`（entryPrice×size 折算）；聚合输出 `totalPnlBase`/`totalCostBase`/`pnlRatio`——**比例只在「盈亏行集合 === 成本行集合」时给出**（缺成本价或缺现价的行会让分子分母口径错位，不一致时 undefined 宁缺勿错）。
 4. **UI（权益条 + 已平仓历史分区）**：

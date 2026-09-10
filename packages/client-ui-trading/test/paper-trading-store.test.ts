@@ -3,21 +3,23 @@ import { paperTradingStore } from '../src/client/paper-trading-store.js'
 
 describe('PaperTradingStore 模拟交易引擎与本地账本', () => {
   beforeEach(() => {
-    // 每次测试前重置为默认 100,000 资金
+    // 每次测试前重置为固定 100,000 资金，隔离撮合算术用例
     paperTradingStore.resetAccount(100_000)
   })
 
-  it('初始状态：默认 100,000 虚拟资金，持仓与流水为空', () => {
+  it('初始状态：默认 ￥1,000,000 CNY，持仓与流水为空', () => {
+    paperTradingStore.resetAccount()
     const acc = paperTradingStore.getAccount()
-    expect(acc.cash).toBe(100_000)
-    expect(acc.initialCash).toBe(100_000)
+    expect(acc.cash).toBe(1_000_000)
+    expect(acc.initialCash).toBe(1_000_000)
     expect(acc.positions).toEqual([])
     expect(acc.orders).toEqual([])
     expect(acc.fills).toEqual([])
 
     const balances = paperTradingStore.getBalances()
     expect(balances).toHaveLength(1)
-    expect(balances[0]?.free).toBe(100_000)
+    expect(balances[0]?.asset).toBe('CNY')
+    expect(balances[0]?.free).toBe(1_000_000)
     expect(balances[0]?.locked).toBe(0)
   })
 
@@ -192,8 +194,10 @@ describe('PaperTradingStore 模拟交易引擎与本地账本', () => {
     })
     expect(paperTradingStore.getPositions()).toHaveLength(1)
 
-    paperTradingStore.resetAccount(100_000)
-    expect(paperTradingStore.getAccount().cash).toBe(100_000)
+    paperTradingStore.resetAccount()
+    expect(paperTradingStore.getAccount().cash).toBe(1_000_000)
+    expect(paperTradingStore.getAccount().initialCash).toBe(1_000_000)
+    expect(paperTradingStore.getBalances()[0]?.asset).toBe('CNY')
     expect(paperTradingStore.getPositions()).toHaveLength(0)
     expect(paperTradingStore.getOrders()).toHaveLength(0)
     expect(paperTradingStore.getFills()).toHaveLength(0)

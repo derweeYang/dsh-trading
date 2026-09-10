@@ -83,7 +83,8 @@
 `docs/options-bridge.md`「overview」。
 
 - 行：`last` / `changePct` / `return5d` / `volumeRatio` / `strengthScore` /
-  `heldQty` / `optionQty` / `divergence`（`weak_rally` 虚涨、`accelerating_sell` 加速）。
+  `heldQty` / `optionQty` / `strategy`（当天最新推荐；缺席「—」） /
+  `divergence`（`weak_rally` 虚涨、`accelerating_sell` 加速）。
 - **T-5**：`days[]`（`changePct` 色深，`volumeSurge` 边框）。缺键按行容错。
 - 排序：`sort=strength|iv|holdings`。IV 排序必须带 `includeIv=1`（才打网关）。
 - 点击行 → `GET /options/resolve?symbol=` 拿 `link` 进 T 板。
@@ -114,7 +115,8 @@ heldQty 徽章 + 「按底仓备兑」快捷键（holdingQty=heldQty 调 strateg
 **只改** `packages/client-ui-trading/src/client/**`（+ 本包 client 半测试）。
 不要改 `bridge.ts`、`option-overview.ts`、`kit-cn`、`@dshtrading/api`。
 类型从 `@dshtrading/api` 取：`OptionOverview` / `OptionOverviewRow` /
-`OptionIntradayBox` / `OptionIntradayBoxRow` / `OptionCycleLoop` / `OptionCycle`。
+`OptionOverviewStrategy` / `OptionIntradayBox` / `OptionIntradayBoxRow` /
+`OptionCycleLoop` / `OptionCycle`。
 形状见 `docs/options-bridge.md`。
 文案进 `locales.ts` + `contract.ts`，zh/en 同步，跑 `pnpm i18n:check`。
 本页不构成投资建议；扫描按钮只 `fillComposer`，不下单。
@@ -157,6 +159,35 @@ WB-1 可先交付（总览能用）；WB-6 是闭环可视化，优先于再造�
 9. 总览失败：`NOT_IMPLEMENTED` 隐藏期权透镜（已有）；其它 code 行内/页顶原文。
 
 返回 T 板：总览行上给「返回总览」，不要丢排序状态。
+
+### WB-7  总览「推荐策略」列（后端已挂，2026-09-09）
+
+`GET /options/overview` 每行现有可选 `strategy`（`OptionOverviewStrategy`）。
+**不要**现场算箱体或调 `cn_get_option_strategy`。无键 →「—」。
+
+1. `OptionsOverview.tsx` 表头在 `optionQty` 与 T-5 之间加一列。
+2. 渲染（建议）：
+   - `skipReason` 有值 → 词典 skip 标签（今天盘中常见 `overlap` / `launch_failed`）
+   - 否则 `noTrade` 或 `opportunity === 'no_edge'` → `no_edge` 标签
+   - 否则 `${template} · ${opportunity}`；`title`/`tooltip` 用 `edge`
+3. 建议键（zh/en 同步，自拟短文案）：
+
+| 键 | zh 例 |
+|---|---|
+| `options.overview.col.strategy` | 推荐策略 |
+| `options.overview.strategy.theta_rent` | 收时间价值 |
+| `options.overview.strategy.rv_vs_iv` | 波动差 |
+| `options.overview.strategy.direction_delta` | 方向 Delta |
+| `options.overview.strategy.mean_reversion` | 回归 |
+| `options.overview.strategy.covered_yield` | 底仓增强 |
+| `options.overview.strategy.no_edge` | 观望 |
+| `options.overview.strategy.skip.session` | 非连续竞价 |
+| `options.overview.strategy.skip.calibrated` | 已校准跳过 |
+| `options.overview.strategy.skip.overlap` | 上一桶未写完 |
+| `options.overview.strategy.skip.launch_failed` | 会话未拉起 |
+| `options.overview.strategy.template.*` | 蝶 / 跨式 / 垂直 / 备兑 / 领口 |
+
+4. 本列只读展示。不要点单元格下单，也不要当成扫描按钮。
 
 ### WB-2  扫描入口（C2，只预填聊天框）
 
@@ -240,8 +271,11 @@ agent 回复经现有 toolview。在策略结果上加「加载到 T 板」：
 - [x] **WB-3** 箱体条（优先用 loop.latest.forecast）
 - [x] **WB-4** 策略预览 → T 板下单面板回填（preview 态；后端 `OptionStrategyResult` 已定型、端点已 live，2026-09-09）
 - [x] **WB-5** `pnpm i18n:check` 通过；typecheck 前端 0 新增
-- [ ] **WB-5 余项** trading-web 真机冒烟：本机宿主起不来（各市场 dataplane 重复
-      注册，与 issue #81 同族），待后端清偿后补
+- [x] **WB-5 余项** trading-web 真机冒烟（2026-09-09）：后端清 #7/#8 后宿主可 boot；
+      前端 5/5 通过（总览 9 行 / T-5 / 排序 / 扫描预填 / T 板箱体条 / 进出 T 板）。
+      证据见 [backend-handoff §5](./backend-handoff-2026-09-09.md#5-wb-5-真机冒烟结果2026-09-09-1430前端执行)。
+      与 **WB-7** 无依赖（策略列只读 `row.strategy`，不挡本列）。
+- [x] **WB-7** 总览「推荐策略」列（`row.strategy`；后端已挂账本，见下）
 
 WB-1/6/3 的决策记录见
 [2026-09-09-options-overview-cycle-loop-ui](../../.agents/notes/implemented/feature/2026-09-09-options-overview-cycle-loop-ui.md)。

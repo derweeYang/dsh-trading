@@ -21,18 +21,22 @@ import {
   buildOverviewMetrics,
   composeScanAllPrompt,
   composeScanPrompt,
+  extractAtmIv,
   extractIvPercentile,
   sortOverviewRows,
   spotSymbolOf,
 } from './option-overview.ts'
 import {
   aggregateNews as aggregateCnNews,
+  attachOverviewStrategies,
   calibrateNextForecast,
   collectIntradayBox,
   CYCLE_HORIZON_MS,
   cycleId,
   fetchCnFundamentalsPackage,
+  loadLatestRecommendation,
   OptionCycleBook,
+  optionsDataRoot,
   realizedInWindow,
   replayCyclesIntoBook,
   scorePreviousCycle,
@@ -640,10 +644,17 @@ export function errorPayload(error: unknown): { code: string; message: string } 
   return { code: 'TRADING_UNKNOWN', message: String(error) }
 }
 
+/** 总览近月 ATM IV 用的无风险利率（与 python pricing 测例同档）。 */
+const OVERVIEW_IV_RATE = 0.02
+/** ATM IV 进程内缓存，避免 60s 总览轮询九路 implied_vol。命中 5 分钟；缺席 30 秒（网关刚恢复时不要钉死空值）。 */
+const OVERVIEW_ATM_IV_TTL_MS = 5 * 60 * 1000
+const OVERVIEW_ATM_IV_MISS_TTL_MS = 30 * 1000
+
 export class TradingBridge {
   private readonly symbolsCache = new Map<string, { list: SymbolInfoWire[]; fetchedAt: number }>()
   private readonly fundamentalsCache = new Map<string, { pkg: StockFundamentals; fetchedAt: number }>()
   private readonly fundamentalsInflight = new Map<string, Promise<StockFundamentals>>()
+  readonly #atmIvCache = new Map<string, { value: number | undefined; fetchedAt: number }>()
   /** FX 兜底 fetcher（issue #65；host.fetchFxRates 注入正式实现时不走这里）。 */
   readonly #fallbackFxFetcher: FxRatesFetcher = createFallbackFxFetcher()
   readonly #cycles = new OptionCycleBook()
@@ -1049,7 +1060,8 @@ export class TradingBridge {
 
   /**
    * C1 九标的总览：名册 + 现货 ticker/日 K + 底仓 + 期权持仓聚合。
-   * includeIv=1 才打 vol_analytics（网关）；失败按行缺席，不整页失败。
+   * 默认回填近月 ATM IV（implied_vol，5 分钟缓存）；includeIv=1 才打 vol_analytics 分位。
+   * 任一路失败按行缺席，不整页失败。
    */
   async optionOverview(
     source?: string,
@@ -1073,14 +1085,16 @@ export class TradingBridge {
     }
     const built = await Promise.all(rows.map((row) => this.#overviewRow(row, qtyByUnderlying.get(row.underlying), includeIv, typed)))
     const sorted = sortOverviewRows(built, sort)
+    const rec = await loadLatestRecommendation(optionsDataRoot(), Date.now())
+    const withStrategy = attachOverviewStrategies(sorted, rec)
     return {
       ok: true,
       overview: {
         source: typed ?? 'iquant',
         sort,
         asOf: new Date().toISOString(),
-        rows: sorted,
-        scanAllPrompt: composeScanAllPrompt(sorted),
+        rows: withStrategy,
+        scanAllPrompt: composeScanAllPrompt(withStrategy),
       },
     }
   }
@@ -1128,6 +1142,7 @@ export class TradingBridge {
         ivPercentile = undefined
       }
     }
+    const atmIv = await this.#overviewAtmIv(row.underlying, source)
     const scanPrompt = composeScanPrompt({
       underlying: row.underlying,
       name: row.name,
@@ -1137,6 +1152,7 @@ export class TradingBridge {
       ...(row.heldQty === undefined ? {} : { heldQty: row.heldQty }),
       ...(optionQty === undefined ? {} : { optionQty }),
       ...(ivPercentile === undefined ? {} : { ivPercentile }),
+      ...(atmIv === undefined ? {} : { atmIv }),
       ...(metrics.divergence === undefined ? {} : { divergence: metrics.divergence }),
     })
     return {
@@ -1155,6 +1171,48 @@ export class TradingBridge {
       ...(row.heldQty === undefined ? {} : { heldQty: row.heldQty }),
       ...(optionQty === undefined ? {} : { optionQty }),
       ...(ivPercentile === undefined ? {} : { ivPercentile }),
+      ...(atmIv === undefined ? {} : { atmIv }),
+    }
+  }
+
+  async #overviewAtmIv(
+    underlying: string,
+    source: 'akshare' | 'iquant' | 'synth' | undefined,
+  ): Promise<number | undefined> {
+    const cached = this.#atmIvCache.get(underlying)
+    const ttl = cached?.value === undefined ? OVERVIEW_ATM_IV_MISS_TTL_MS : OVERVIEW_ATM_IV_TTL_MS
+    if (cached !== undefined && Date.now() - cached.fetchedAt < ttl) {
+      return cached.value
+    }
+    const value = await this.#fetchOverviewAtmIv(underlying, source)
+    this.#atmIvCache.set(underlying, { value, fetchedAt: Date.now() })
+    return value
+  }
+
+  async #fetchOverviewAtmIv(
+    underlying: string,
+    source: 'akshare' | 'iquant' | 'synth' | undefined,
+  ): Promise<number | undefined> {
+    try {
+      const calendar = await this.requireCnOptions().getOptionExpiries({
+        underlying,
+        ...(source === undefined ? {} : { source }),
+      })
+      const expiryMonth = calendar.months[0]?.expiryMonth
+      if (expiryMonth === undefined || expiryMonth.trim() === '') return undefined
+      const query = {
+        underlying,
+        expiryMonth,
+        rate: OVERVIEW_IV_RATE,
+        ...(source === undefined ? {} : { source }),
+      }
+      const live = await this.requireCnOptions().getImpliedVol({ ...query, priceField: 'last' })
+      const fromLast = extractAtmIv(live)
+      if (fromLast !== undefined) return fromLast
+      const settle = await this.requireCnOptions().getImpliedVol({ ...query, priceField: 'prevSettle' })
+      return extractAtmIv(settle)
+    } catch {
+      return undefined
     }
   }
 

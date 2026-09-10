@@ -72,6 +72,13 @@ describe('deriveRisks', () => {
     expect(kinds).not.toContain('iv_high')
   })
 
+  it('仅有 atmIv 不打 iv_missing，也不把年化 IV 当成分位高低', () => {
+    const kinds = deriveRisks(row({ days: D5, atmIv: 0.21 })).map(r => r.kind)
+    expect(kinds).not.toContain('iv_missing')
+    expect(kinds).not.toContain('iv_high')
+    expect(kinds).not.toContain('iv_low')
+  })
+
   it('IV 0.9 → iv_high；0.1 → iv_low；0.5 → 都不打', () => {
     expect(deriveRisks(row({ days: D5, ivPercentile: 0.9 })).map(r => r.kind)).toContain('iv_high')
     expect(deriveRisks(row({ days: D5, ivPercentile: 0.1 })).map(r => r.kind)).toContain('iv_low')

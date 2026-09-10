@@ -222,7 +222,7 @@ export function OrderPanel({
 
   const actionText = side === 'buy' ? t('trade.buy') : t('trade.sell')
 
-  const effectiveCash = availableCash ?? (tradeMode === 'paper' ? (paperCash ?? 100000) : 0)
+  const effectiveCash = availableCash ?? (tradeMode === 'paper' ? (paperCash ?? 1_000_000) : 0)
 
   return (
     <div className={css.root} data-dshtrading-order-panel="">

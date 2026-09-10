@@ -6,7 +6,10 @@ import type { OptionCycle, OptionIntradayBoxRow } from '@dshtrading/api'
 import { OptionCycleBook } from '../src/option-cycles.ts'
 import {
   appendJsonlLine,
+  attachOverviewStrategies,
   decideBarAgent,
+  latestRecommendation,
+  loadLatestRecommendation,
   foldDailyReview,
   latestByKey,
   makeSkipRecommendation,
@@ -197,6 +200,84 @@ describe('shouldWriteDailyReview / foldDailyReview', () => {
     expect(md).toContain('overlap: 1')
     expect(md).toContain('样本不足')
     expect(md).toContain('不构成投资建议')
+  })
+})
+
+describe('attachOverviewStrategies', () => {
+  it('无账本不写 strategy；有 pick 的行带 template；其余行 no_edge；logic/playbook 两分支都投影', () => {
+    const rec = {
+      bucketStart: '2026-09-09T05:45:00.000Z',
+      asOf: 't',
+      session: 'regular' as const,
+      opportunity: 'theta_rent' as const,
+      edge: 'range_hold 收时间价值',
+      logic: '箱体收窄，卖方占优',
+      playbook: '取箱体 → butterfly → 记失效条件',
+      invalidIf: '1-minute close outside box',
+      picks: [{ underlying: '510050', regime: 'range_hold' as const, template: 'butterfly' as const, cycleId: '510050:1' }],
+      noTrade: false,
+    }
+    expect(attachOverviewStrategies([{ underlying: '510050' }], undefined)[0]).not.toHaveProperty('strategy')
+    const [picked, other] = attachOverviewStrategies(
+      [{ underlying: '510050' }, { underlying: '159915' }],
+      rec,
+    )
+    expect(picked?.strategy).toMatchObject({
+      opportunity: 'theta_rent',
+      template: 'butterfly',
+      noTrade: false,
+      logic: '箱体收窄，卖方占优',
+      playbook: '取箱体 → butterfly → 记失效条件',
+    })
+    expect(other?.strategy).toMatchObject({
+      opportunity: 'no_edge',
+      noTrade: true,
+      logic: '箱体收窄，卖方占优',
+      playbook: '取箱体 → butterfly → 记失效条件',
+    })
+    expect(latestRecommendation([rec, { ...rec, bucketStart: '2026-09-09T05:50:00.000Z' }])?.bucketStart)
+      .toBe('2026-09-09T05:50:00.000Z')
+  })
+
+  it('logic/playbook 空串不写键', () => {
+    const rec = {
+      bucketStart: '2026-09-09T05:45:00.000Z',
+      asOf: 't',
+      session: 'regular' as const,
+      opportunity: 'theta_rent' as const,
+      edge: 'e',
+      logic: '',
+      playbook: '',
+      invalidIf: '',
+      picks: [{ underlying: '510050', regime: 'range_hold' as const, template: 'butterfly' as const, cycleId: '510050:1' }],
+      noTrade: false,
+    }
+    const [picked] = attachOverviewStrategies([{ underlying: '510050' }], rec)
+    expect(picked?.strategy).not.toHaveProperty('logic')
+    expect(picked?.strategy).not.toHaveProperty('playbook')
+    expect(picked?.strategy).not.toHaveProperty('invalidIf')
+  })
+
+  it('loadLatestRecommendation 跳过坏行，取当天最新 bucket', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-ov-'))
+    const file = path.join(dir, 'recommendations', '2026-09-09.jsonl')
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, [
+      '{not json}',
+      JSON.stringify({ bucketStart: '2026-09-09T05:45:00.000Z', opportunity: 'no_edge', picks: [], noTrade: true }),
+      JSON.stringify({
+        bucketStart: '2026-09-09T05:50:00.000Z',
+        opportunity: 'theta_rent',
+        picks: [{ underlying: '510050', template: 'butterfly' }],
+        noTrade: false,
+        edge: 'ok',
+      }),
+      '',
+    ].join('\n'), 'utf8')
+    const latest = await loadLatestRecommendation(dir, Date.parse('2026-09-09T06:00:00.000Z'))
+    expect(latest?.bucketStart).toBe('2026-09-09T05:50:00.000Z')
+    expect(await loadLatestRecommendation(path.join(dir, 'missing'), Date.parse('2026-09-09T06:00:00.000Z')))
+      .toBeUndefined()
   })
 })
 

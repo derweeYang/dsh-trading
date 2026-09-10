@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
@@ -234,21 +235,60 @@ def history_window(request: dict[str, Any]) -> tuple[int, int, int]:
 
 
 def fetch_spot(underlying: str, request: dict[str, Any]) -> float:
-    """标的 ETF 最新价:走 iquant-quote snapshot。"""
+    """标的 ETF 最新价:先 snapshot，盘后空或 last=0 回落日 K 收盘（对齐 iquant-quote ticker）。"""
     row = require_row(underlying)
-    result = run_quote(
-        "snapshot",
-        {
-            "market": market_of(row),
-            "symbols": [underlying],
-            "maxWaitMs": 2_000,
-        },
-        request,
-    )
+    last = _snapshot_last(row, underlying, request)
+    if last is not None and last > 0:
+        return last
+    last = _daily_last(row, underlying, request)
+    if last is not None and last > 0:
+        return last
+    raise OptionsError("NO_DATA", f"iquant-quote returned no snapshot for {underlying}")
+
+
+def _snapshot_last(row: dict[str, Any], underlying: str, request: dict[str, Any]) -> float | None:
+    try:
+        result = run_quote(
+            "snapshot",
+            {
+                "market": market_of(row),
+                "symbols": [underlying],
+                "maxWaitMs": 2_000,
+            },
+            request,
+        )
+    except OptionsError as err:
+        if err.code != "NO_DATA":
+            raise
+        return None
     snaps = result.get("snapshots") or []
     if not snaps:
-        raise OptionsError("NO_DATA", f"iquant-quote returned no snapshot for {underlying}")
+        return None
     return float(snaps[0]["last"])
+
+
+def _daily_last(row: dict[str, Any], underlying: str, request: dict[str, Any]) -> float | None:
+    end_ms = int(time.time() * 1000)
+    try:
+        raw = run_quote(
+            "history_bars",
+            {
+                "market": market_of(row),
+                "symbol": underlying,
+                "period": "1d",
+                "startMs": end_ms - 14 * DAY_MS,
+                "endMs": end_ms,
+                "limit": 8,
+            },
+            request,
+        )
+    except OptionsError:
+        return None
+    bars = raw.get("bars") or []
+    if not bars:
+        return None
+    close = float(bars[-1].get("close") or 0)
+    return close if close > 0 else None
 
 
 def _bar_date(timestamp_ms: int) -> date:

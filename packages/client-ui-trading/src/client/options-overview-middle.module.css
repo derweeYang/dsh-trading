@@ -2,19 +2,16 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-height: 0;
-  overflow: hidden;
   flex: 1;
+  min-height: 0;
+  /* WB-11 UX 定稿：整页一条滑动条。总览（叠图/机会卡/明细表）+ 5 分钟闭环
+     按自然高度纵向铺开，滚动交给本容器——替代旧「上半区内部滚 + 闭环卡压在
+     300px 小窗里」的分段滚动，闭环内容一眼可见，随页滚动。 */
+  overflow-y: auto;
+  transition: opacity 0.2s;
 }
 
-/* 上半区（总览 + 叠图）吃掉剩余高度并内部滚动；下半区（闭环）按内容取高、
-   空间不足时自己滚卡片——上下互不挤压，避免卡片被裁/堆叠（WB-10）。 */
-.root > :first-child {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.root > :last-child {
-  flex: 0 1 auto;
-  min-height: 0;
+/* 排序应答在途（WB-11）：整块降透明度示意「在刷新」，不锁交互。 */
+.root[data-sorting='true'] {
+  opacity: 0.55;
 }

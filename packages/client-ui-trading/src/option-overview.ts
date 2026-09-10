@@ -86,17 +86,82 @@ export function buildOverviewMetrics(klines: readonly Kline[]): {
   }
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/** vol_analytics 分位：0–1；若内核给 0–100 则归一。 */
+function asUnitInterval(value: number): number {
+  return value > 1 ? value / 100 : value
+}
+
+/**
+ * 从 vol_analytics 报告取 ATM IV 分位。
+ * 兼容：旧单测 `iv_percentile` 对象/标量；python 活牌 `ivPercentile` 行数组（status=ok）。
+ */
 export function extractIvPercentile(report: KernelReport): number | undefined {
+  const rows = report.ivPercentile
+  if (Array.isArray(rows)) {
+    const ok = rows.filter((row): row is Record<string, unknown> =>
+      row !== null && typeof row === 'object' && (row as { status?: unknown }).status === 'ok')
+    const preferred = ok.find((row) => row.window === 252)
+      ?? ok.find((row) => row.window === 60)
+      ?? ok[0]
+    const percentile = finiteNumber(preferred?.percentile)
+    return percentile === undefined ? undefined : asUnitInterval(percentile)
+  }
   const block = report.iv_percentile
-  if (typeof block === 'number' && Number.isFinite(block)) return block
+  if (typeof block === 'number' && Number.isFinite(block)) return asUnitInterval(block)
   if (block === null || typeof block !== 'object') return undefined
   const record = block as Record<string, unknown>
   const preferred = record.w252 ?? record.w60 ?? record['252']
-  if (typeof preferred === 'number' && Number.isFinite(preferred)) return preferred
+  if (typeof preferred === 'number' && Number.isFinite(preferred)) return asUnitInterval(preferred)
   for (const value of Object.values(record)) {
-    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'number' && Number.isFinite(value)) return asUnitInterval(value)
   }
   return undefined
+}
+
+function legIv(row: Record<string, unknown>): number | undefined {
+  if (row.converged === false) return undefined
+  return finiteNumber(row.iv) ?? finiteNumber(row.impliedVol)
+}
+
+/**
+ * 近月 ATM IV（年化 0–1）：优先 termStructure.status=ok 的 atmIv；
+ * 否则在 implied_vol 的 results/rows 里取距现货最近一档已收敛 IV 的均值。
+ */
+export function extractAtmIv(report: unknown): number | undefined {
+  if (report === null || typeof report !== 'object') return undefined
+  const rec = report as Record<string, unknown>
+  const term = rec.termStructure
+  if (Array.isArray(term)) {
+    for (const item of term) {
+      if (item === null || typeof item !== 'object') continue
+      const row = item as Record<string, unknown>
+      if (row.status !== 'ok') continue
+      const atm = finiteNumber(row.atmIv)
+      if (atm !== undefined) return atm
+    }
+  }
+  const legs = Array.isArray(rec.results) ? rec.results : Array.isArray(rec.rows) ? rec.rows : []
+  const live: Array<{ strike: number; iv: number }> = []
+  for (const item of legs) {
+    if (item === null || typeof item !== 'object') continue
+    const row = item as Record<string, unknown>
+    const iv = legIv(row)
+    const strike = finiteNumber(row.strike)
+    if (iv === undefined || strike === undefined) continue
+    live.push({ strike, iv })
+  }
+  if (live.length === 0) return undefined
+  const spot = finiteNumber(rec.spot)
+  const target = spot ?? live.reduce((sum, row) => sum + row.strike, 0) / live.length
+  const atmStrike = live.reduce((best, row) =>
+    Math.abs(row.strike - target) < Math.abs(best.strike - target) ? row : best).strike
+  const atAtm = live.filter((row) => Math.abs(row.strike - atmStrike) < 1e-9).map((row) => row.iv)
+  if (atAtm.length === 0) return undefined
+  return atAtm.reduce((sum, iv) => sum + iv, 0) / atAtm.length
 }
 
 export function sortOverviewRows(
@@ -107,7 +172,9 @@ export function sortOverviewRows(
   const missingLast = (value: number | undefined): number =>
     value === undefined ? Number.NEGATIVE_INFINITY : value
   copy.sort((a, b) => {
-    if (sort === 'iv') return missingLast(b.ivPercentile) - missingLast(a.ivPercentile)
+    if (sort === 'iv') {
+      return missingLast(b.ivPercentile ?? b.atmIv) - missingLast(a.ivPercentile ?? a.atmIv)
+    }
     if (sort === 'holdings') {
       const held = (b.heldQty ?? 0) - (a.heldQty ?? 0)
       if (held !== 0) return held
@@ -128,6 +195,7 @@ export function composeScanPrompt(input: {
   heldQty?: number
   optionQty?: number
   ivPercentile?: number
+  atmIv?: number
   divergence?: 'weak_rally' | 'accelerating_sell'
 }): string {
   const lines = [
@@ -138,6 +206,7 @@ export function composeScanPrompt(input: {
     input.heldQty !== undefined ? `ETF holding ${input.heldQty} shares.` : undefined,
     input.optionQty !== undefined ? `Option contracts ${input.optionQty}.` : undefined,
     input.ivPercentile !== undefined ? `IV percentile ${input.ivPercentile.toFixed(2)}.` : undefined,
+    input.atmIv !== undefined ? `Near-month ATM IV ${input.atmIv.toFixed(3)}.` : undefined,
     input.divergence === 'weak_rally' ? 'Volume-price: rally on shrinking volume.' : undefined,
     input.divergence === 'accelerating_sell' ? 'Volume-price: decline on rising volume.' : undefined,
     'Call cn_get_option_intraday_box for the 5-minute box JSON; do not invent box levels.',

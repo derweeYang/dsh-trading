@@ -42,12 +42,13 @@ T 板内自包含预览**：用户点「策略预览」按钮 → 选模板 → 
 - `pnpm --filter @dshtrading/client-ui-trading build` ✅
 - `node scripts/i18n-audit.mjs --check` ✅（1025 zh 键，0 错）
 - `npx vitest run` ✅ 41 文件 / 342 测试（WB-4 贡献 +5）
-- 类型：WB-4 文件零新增错误；`typecheck-gate` 残留 +3（client-ui-trading node 半：
-  option-bar-agent.ts / option-overview.ts）+ kit-cn +4 系**既有后端债（task #7）**，
-  前端 scope 不触碰。
+- 类型：WB-4 文件零新增错误。交付当时 `typecheck-gate` 残留的 client-ui-trading
+  node 半 +3 / kit-cn +4（task #7）已由后端在同日清偿，棘轮全绿。
 
 ## 边界 / 风险
 
 - 真机策略数据依赖网关 `getStrategy` 内核实现；未挂连接器时 UI 优雅降级显示错误文案。
 - 现货腿（kind=underlying）不可经 OptionOrderPanel 下单，预览中已过滤，仅展示期权腿。
-- trading-web 真机冒烟仍被宿主 dataplane 重复注册挡住（task #8，后端待办）。
+- trading-web 真机冒烟：task #8（dataplane 撞键）与 WB-5 清单已于 2026-09-09 清完
+  （见 [backend-handoff §5](../../../../docs/backend-handoff-2026-09-09.md)）；
+  与 WB-7 策略列无依赖。

@@ -4,6 +4,7 @@ import {
   buildOverviewMetrics,
   composeScanAllPrompt,
   composeScanPrompt,
+  extractAtmIv,
   extractIvPercentile,
   sortOverviewRows,
   spotSymbolOf,
@@ -73,6 +74,35 @@ describe('extractIvPercentile', () => {
     expect(extractIvPercentile({ iv_percentile: { w60: 0.3 } })).toBe(0.3)
     expect(extractIvPercentile({})).toBeUndefined()
     expect(extractIvPercentile({ iv_percentile: 'nope' })).toBeUndefined()
+  })
+
+  it('python ivPercentile 行数组：status=ok 的 252 窗，0–100 归一到 0–1', () => {
+    expect(extractIvPercentile({
+      ivPercentile: [
+        { window: 60, status: 'ok', percentile: 40 },
+        { window: 252, status: 'ok', percentile: 62 },
+      ],
+    })).toBe(0.62)
+    expect(extractIvPercentile({
+      ivPercentile: [{ window: 252, status: 'insufficient', percentile: null }],
+    })).toBeUndefined()
+  })
+})
+
+describe('extractAtmIv', () => {
+  it('termStructure 优先；否则 results 距 spot 最近已收敛档', () => {
+    expect(extractAtmIv({
+      termStructure: [{ expiryMonth: '2609', status: 'ok', atmIv: 0.18 }],
+    })).toBe(0.18)
+    expect(extractAtmIv({
+      spot: 3.0,
+      results: [
+        { strike: 2.5, iv: 0.4, converged: true },
+        { strike: 3.0, iv: 0.22, converged: true, optionType: 'C' },
+        { strike: 3.0, iv: 0.2, converged: true, optionType: 'P' },
+      ],
+    })).toBeCloseTo(0.21, 5)
+    expect(extractAtmIv({ results: [{ strike: 3, iv: 0.2, converged: false }] })).toBeUndefined()
   })
 })
 
