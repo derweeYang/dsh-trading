@@ -13,7 +13,6 @@ import {
   deriveRisks,
   rankByCumulative,
   sortByOpportunity,
-  strategyExtras,
 } from '../src/client/option-insight.ts'
 
 /** key 直出（断言用 key 而非文案）。 */
@@ -142,12 +141,23 @@ describe('composeReading', () => {
       days: D5,
       strategy: {
         opportunity: 'theta_rent', edge: 'theta rich', noTrade: false, bucketStart: 'b',
-        ...({ logic: '箱体未破\n收时间价值' } as Record<string, unknown>),
-      } as never,
+        logic: '箱体未破\n收时间价值',
+      },
     }), t)
     expect(r.source).toBe('ai')
     expect(r.lines).toEqual(['箱体未破', '收时间价值'])
     expect(r.edge).toBe('theta rich')
+  })
+
+  it('logic 为空白串 → 视作缺席，回落规则解读', () => {
+    const r = composeReading(row({
+      days: D5,
+      return5d: 2.49,
+      volumeRatio: 0.8,
+      strategy: { opportunity: 'theta_rent', edge: 'e', noTrade: false, bucketStart: 'b', logic: '   ' },
+    }), t)
+    expect(r.source).toBe('rule')
+    expect(r.lines.join(' ')).toContain('options.insight.reading.volWeak')
   })
 
   it('价升量缩 → 规则解读给出背离提示（不是把它藏起来）', () => {
@@ -163,8 +173,8 @@ describe('composePlan', () => {
       strategy: {
         opportunity: 'theta_rent', template: 'vertical', edge: 'e', noTrade: false, bucketStart: 'b',
         invalidIf: 'spot < 2.90',
-        ...({ playbook: '卖 2900 购\n买 2950 购' } as Record<string, unknown>),
-      } as never,
+        playbook: '卖 2900 购\n买 2950 购',
+      },
     }), t)
     expect(p.source).toBe('ai')
     expect(p.steps).toEqual(['卖 2900 购', '买 2950 购'])
@@ -197,18 +207,14 @@ describe('composePlan', () => {
   })
 })
 
-describe('strategyExtras', () => {
-  it('未投影时返回空对象；空串视为缺席', () => {
-    expect(strategyExtras(row())).toEqual({})
-    expect(strategyExtras(row({
-      strategy: { opportunity: 'theta_rent', edge: 'e', noTrade: false, bucketStart: 'b', ...({ logic: '   ' } as Record<string, unknown>) } as never,
-    }))).toEqual({})
-  })
-
-  it('非字符串字段不误读', () => {
-    expect(strategyExtras(row({
-      strategy: { opportunity: 'theta_rent', edge: 'e', noTrade: false, bucketStart: 'b', ...({ logic: 42 } as Record<string, unknown>) } as never,
-    }))).toEqual({})
+describe('composePlan 的 playbook 缺席回落', () => {
+  it('playbook 为空白串 → 视作缺席，走流程骨架且不含价位', () => {
+    const p = composePlan(row({
+      days: D5,
+      strategy: { opportunity: 'theta_rent', template: 'vertical', edge: 'e', noTrade: false, bucketStart: 'b', playbook: '  ' },
+    }), t)
+    expect(p.source).toBe('rule')
+    expect(p.steps.join(' ')).toContain('options.insight.plan.stepBox')
   })
 })
 

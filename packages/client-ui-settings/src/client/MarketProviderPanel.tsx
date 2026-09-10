@@ -21,7 +21,7 @@ export interface MarketProviderPanelInjected {
     /** Shared dshtrading view (all markets); the panel reads its own market only. */
     controller: MarketPanelStateStore
   }
-  /** This panel's market id (crypto/us/cn/hk/...). */
+  /** This panel's market id (市场收敛后唯一合法值 'cn'). */
   market: string
   /** Write path: store this market's provider selection. */
   setProvider: (market: string, provider: string) => Promise<void>
@@ -31,10 +31,6 @@ export interface MarketProviderPanelInjected {
   setCredential: (provider: string, fields: Record<string, string>) => Promise<void>
   /** Write path: delete/clear credentials for a provider. */
   deleteCredential: (provider: string) => Promise<void>
-  /** WS2c: write/clear the CryptoPanic news API key (empty = clear → public sources). */
-  setNewsKey: (value: string) => Promise<void>
-  /** WS2c: clear the CryptoPanic news API key back to base (public sources). */
-  resetNewsKey: () => Promise<void>
 }
 
 export type MarketProviderPanelProps =
@@ -207,7 +203,7 @@ function ProviderCredentialCard(props: {
   )
 }
 
-/** Render one market's provider radio group with save/reset (+ WS2c news key, crypto only). */
+/** Render one market's provider radio group with save/reset. */
 export function MarketProviderPanel({
   t: tProp,
   useController,
@@ -216,8 +212,6 @@ export function MarketProviderPanel({
   resetProvider,
   setCredential,
   deleteCredential,
-  setNewsKey,
-  resetNewsKey,
 }: MarketProviderPanelProps) {
   // PropsLocale 的 t 座位在无宿主 merge 的独立编译下解析为 never（既有债 20 处
   // TS2349 的根因）。本地遮蔽：运行时框架注入 t，签名与 SDK Translate 对齐。
@@ -242,38 +236,6 @@ export function MarketProviderPanel({
   }, [draft, resolved, overridden])
 
   const writable = state.writable
-
-  // WS2c：CryptoPanic key
-  const [newsDraft, setNewsDraft] = useState<string | undefined>(undefined)
-  const [newsSaving, setNewsSaving] = useState(false)
-  const [newsMessage, setNewsMessage] = useState<string | undefined>(undefined)
-  useEffect(() => {
-    if (newsDraft === undefined && state.status === 'ready') {
-      setNewsDraft(state.newsKey)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.status, state.newsKey])
-
-  async function saveNews() {
-    setNewsSaving(true)
-    setNewsMessage(undefined)
-    try {
-      const next = (newsDraft ?? '').trim()
-      const current = state.newsKey ?? ''
-      if (next !== current) {
-        await setNewsKey(next)
-      } else if (state.newsOverridden) {
-        await resetNewsKey()
-      }
-      setNewsMessage(t('newsSaved'))
-    } catch (error) {
-      setNewsMessage(`${t('newsSaveFailed')}: ${String((error as { message?: string })?.message ?? error)}`)
-    } finally {
-      setNewsSaving(false)
-    }
-  }
-
-  const newsDirty = (newsDraft === undefined ? state.newsKey ?? '' : newsDraft.trim()) !== (state.newsKey ?? '')
 
   const options = useMemo(() => {
     const matched = PROVIDER_LABELS.filter((p) => p.markets.includes(market))
@@ -398,39 +360,6 @@ export function MarketProviderPanel({
         </button>
         {message !== undefined ? <span className={css.message}>{message}</span> : null}
       </div>
-
-      {market === 'crypto' && (
-        <div className={css.newsSection}>
-          <label className={css.newsLabel}>{t('newsKeyLabel')}</label>
-          <input
-            type="password"
-            className={css.newsInput}
-            value={newsDraft ?? ''}
-            disabled={!writable || newsSaving}
-            onChange={(event) => setNewsDraft(event.target.value)}
-            placeholder={t('newsKeyPlaceholder')}
-          />
-          <div className={css.actions}>
-            <button
-              type="button"
-              className={css.saveBtn}
-              disabled={!newsDirty || newsSaving || !writable}
-              onClick={() => void saveNews()}
-            >
-              {t('save')}
-            </button>
-            <button
-              type="button"
-              className={css.discardBtn}
-              disabled={newsSaving || !newsDirty}
-              onClick={() => { setNewsDraft(undefined); setNewsMessage(undefined) }}
-            >
-              {t('discard')}
-            </button>
-            {newsMessage !== undefined ? <span className={css.message}>{newsMessage}</span> : null}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

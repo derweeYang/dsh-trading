@@ -32,12 +32,12 @@ const NS = 'dshtrading.settings'
 /** Required services (cordis fiber inject). */
 export const inject = ['slots', 'locale', 'settingsScope']
 
-/** 市场 tab 注册清单（id = market slug；新市场 = 加一行 + 加 slot 注册，section 零改）。 */
+/**
+ * 市场 tab 注册清单（id = market slug；新市场 = 加一行 + 加 slot 注册，section 零改）。
+ * 市场收敛（crypto/us/hk 市场片已删）后只剩 cn：行情与 ETF 期权统一走 A 股面。
+ */
 const MARKET_TABS: readonly { id: string; order: number; key: string }[] = [
-  { id: 'crypto', order: 0, key: 'crypto' },
-  { id: 'us', order: 1, key: 'us' },
-  { id: 'cn', order: 2, key: 'cn' },
-  { id: 'hk', order: 3, key: 'hk' },
+  { id: 'cn', order: 0, key: 'cn' },
 ]
 
 /** 注册『交易』设置一级菜单（tab 容器）+ 每市场面板。 */
@@ -63,18 +63,6 @@ export function apply(ctx: ClientContext): void {
     async deleteCredential(provider) {
       const rev = scope.getSnapshot().revision
       await scope.mutate([{ op: 'unset', path: ['credentials', provider] }], rev)
-    },
-    async setNewsKey(value) {
-      const rev = scope.getSnapshot().revision
-      // 空串 = 清除（unset 回 base 默认）：无 key = 新闻走公共源。
-      const op = value.trim()
-        ? { op: 'set' as const, path: ['news', 'cryptoPanicKey'], value: value.trim() }
-        : { op: 'unset' as const, path: ['news', 'cryptoPanicKey'] }
-      await scope.mutate([op], rev)
-    },
-    async resetNewsKey() {
-      const rev = scope.getSnapshot().revision
-      await scope.mutate([{ op: 'unset', path: ['news', 'cryptoPanicKey'] }], rev)
     },
     async setColorMode(mode) {
       const rev = scope.getSnapshot().revision

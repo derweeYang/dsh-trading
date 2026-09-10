@@ -611,7 +611,6 @@ export type MarketLocaleKey =
   | 'trade.marketExecuteHint'
   | 'trade.estimatedAmount'
   | 'trade.unit.shares'
-  | 'trade.unit.coin'
   | 'trade.drawer.available'
   | 'trade.drawer.locked'
   | 'trade.drawer.total'

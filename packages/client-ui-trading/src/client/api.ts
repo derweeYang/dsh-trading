@@ -1105,7 +1105,7 @@ export async function fetchFx(base: HoldingsBaseCurrency): Promise<FxSnapshot | 
       `/dshtrading/api/fx?${query.toString()}`,
     )
     return {
-      base: (wire.base === 'CNY' || wire.base === 'HKD' ? wire.base : 'USD') as HoldingsBaseCurrency,
+      base: (wire.base === 'USD' || wire.base === 'HKD' ? wire.base : 'CNY') as HoldingsBaseCurrency,
       rates: wire.rates ?? {},
       asOf: typeof wire.asOf === 'number' ? wire.asOf : 0,
       stale: wire.stale === true,

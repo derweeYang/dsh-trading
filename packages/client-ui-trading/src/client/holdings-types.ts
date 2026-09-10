@@ -41,12 +41,13 @@ export interface TaggedPosition extends Omit<Position, 'entryPrice'> {
 /** 汇总基准币（§4 FX 服务只支持 USD/CNY/HKD；USDT 恒定锚定 USD 不作基准）。 */
 export type HoldingsBaseCurrency = 'USD' | 'CNY' | 'HKD'
 
-export const HOLDINGS_BASE_CURRENCIES: readonly HoldingsBaseCurrency[] = ['USD', 'CNY', 'HKD']
+// 市场收敛（cn-only）后 CNY 列第一；USD/HKD 保留用于历史台账的多币种显示。
+export const HOLDINGS_BASE_CURRENCIES: readonly HoldingsBaseCurrency[] = ['CNY', 'USD', 'HKD']
 
-/** 基准币选择持久化键（§6.3，缺省 USD）。 */
+/** 基准币选择持久化键（§6.3，缺省 CNY）。 */
 export const HOLDINGS_BASE_CURRENCY_KEY = 'dshtrading:holdings:baseCurrency'
 
-export const DEFAULT_HOLDINGS_BASE_CURRENCY: HoldingsBaseCurrency = 'USD'
+export const DEFAULT_HOLDINGS_BASE_CURRENCY: HoldingsBaseCurrency = 'CNY'
 
 /**
  * FX 快照（§3 /fx 应答形状）：rates[c] = 1 单位 c 折合多少 base

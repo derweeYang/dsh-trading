@@ -14,27 +14,11 @@
 import type { OptionOverviewRow } from '@dshtrading/api'
 
 /**
- * 后端 `OptionBarRecommendation` 已有 `logic`（解读）与 `playbook`（操作计划），
- * 但 `overviewStrategyOf()` 投影成 `OptionOverviewStrategy` 时只留了 `edge`（见
- * kit-cn/src/option-bar-ledger.ts:358）。后端补齐投影前，前端用宽容类型**预读**：
- * 字段到位即显示，缺席即回落。后端补完契约后可删掉本类型改为直接读强类型字段。
+ * 取账本原文（`OptionOverviewStrategy.logic` / `.playbook`，后端 2026-09-09 已投影）。
+ * 空串或纯空白视作缺席——后端按条件插入写键，空值不该抢走规则解读的位置。
  */
-export interface StrategyExtras {
-  readonly logic?: string
-  readonly playbook?: string
-}
-
-/** 取策略的 logic / playbook（兼容后端尚未投影的情况）。 */
-export function strategyExtras(row: OptionOverviewRow): StrategyExtras {
-  const s = row.strategy
-  if (s === undefined) return {}
-  const raw = s as unknown as StrategyExtras
-  const logic = typeof raw.logic === 'string' && raw.logic.trim() !== '' ? raw.logic : undefined
-  const playbook = typeof raw.playbook === 'string' && raw.playbook.trim() !== '' ? raw.playbook : undefined
-  if (logic !== undefined && playbook !== undefined) return { logic, playbook }
-  if (logic !== undefined) return { logic }
-  if (playbook !== undefined) return { playbook }
-  return {}
+function strategyText(value: string | undefined): string | undefined {
+  return value !== undefined && value.trim() !== '' ? value : undefined
 }
 
 /* ── 风险标签 ───────────────────────────────────────────────────────── */
@@ -231,10 +215,10 @@ export function composeRuleReading(row: OptionOverviewRow, t: InsightTranslate):
 
 /** 组装解读：优先后端 logic（标 ai），否则规则解读（标 rule）。 */
 export function composeReading(row: OptionOverviewRow, t: InsightTranslate): Reading {
-  const extras = strategyExtras(row)
+  const logic = strategyText(row.strategy?.logic)
   const edge = row.strategy?.edge
-  if (extras.logic !== undefined) {
-    const lines = extras.logic.split('\n').map(s => s.trim()).filter(s => s !== '')
+  if (logic !== undefined) {
+    const lines = logic.split('\n').map(s => s.trim()).filter(s => s !== '')
     return edge === undefined ? { source: 'ai', lines } : { source: 'ai', lines, edge }
   }
   const lines = composeRuleReading(row, t)
@@ -259,13 +243,13 @@ export interface Plan {
  * 骨架态只给「下一步该干什么」的流程步骤，价位一律留给 T 板与箱体工具。
  */
 export function composePlan(row: OptionOverviewRow, t: InsightTranslate): Plan {
-  const extras = strategyExtras(row)
+  const playbook = strategyText(row.strategy?.playbook)
   const s = row.strategy
-  const invalidIf = s?.invalidIf !== undefined && s.invalidIf.trim() !== '' ? s.invalidIf : undefined
+  const invalidIf = strategyText(s?.invalidIf)
   const base: Plan = { source: 'rule', steps: [], ...(invalidIf === undefined ? {} : { invalidIf }) }
 
-  if (extras.playbook !== undefined) {
-    const steps = extras.playbook.split('\n').map(s => s.trim()).filter(s => s !== '')
+  if (playbook !== undefined) {
+    const steps = playbook.split('\n').map(s => s.trim()).filter(s => s !== '')
     return { source: 'ai', steps, ...(invalidIf === undefined ? {} : { invalidIf }) }
   }
 

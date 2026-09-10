@@ -205,7 +205,8 @@ describe('aggregateHoldings 顶部小计与 FX 降级', () => {
   it('fx 快照缺席 → 一切不折算，总资产 0 且标近似（有市值时）', () => {
     const rows = [pos({ symbol: '601318', size: 10, origin: 'live', account: 'ibkr', market: 'cn', entryPrice: 100, currency: 'USD' })]
     const agg = aggregateHoldings(rows, { 'cn:601318': 150 })
-    expect(agg.base).toBe('USD')
+    // 市场收敛（cn-only）后缺省基准币为 CNY，fx 缺席时 USD 台账行仍不折算。
+    expect(agg.base).toBe('CNY')
     expect(agg.totalBase).toBe(0)
     expect(agg.unconverted).toEqual([{ currency: 'USD', amount: 1500 }])
     expect(agg.approximate).toBe(true)

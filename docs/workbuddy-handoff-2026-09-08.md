@@ -276,9 +276,38 @@ agent 回复经现有 toolview。在策略结果上加「加载到 T 板」：
       证据见 [backend-handoff §5](./backend-handoff-2026-09-09.md#5-wb-5-真机冒烟结果2026-09-09-1430前端执行)。
       与 **WB-7** 无依赖（策略列只读 `row.strategy`，不挡本列）。
 - [x] **WB-7** 总览「推荐策略」列（`row.strategy`；后端已挂账本，见下）
+- [x] **WB-9** 总览重构：叠加走势 + 机会卡 + 明细表三段式（`2ea24fd`）
+- [x] **WB-10** 闭环卡片按最强/最弱/中位机会排序 + 中视图遮挡修复（`a369e9e`）
+- [x] **WB-11** 总览三处 UX 修复：主区一条滚动条 / 机会卡整卡可点 / IV 排序死键（`sortRef` 未同步）
+- [x] **市场收敛涟漪**（A2 / B.5 / spec §1f §2c，2026-09-10）：见 §E
 
 WB-1/6/3 的决策记录见
 [2026-09-09-options-overview-cycle-loop-ui](../../.agents/notes/implemented/feature/2026-09-09-options-overview-cycle-loop-ui.md)。
 行为变更：期权透镜显隐判据从「当前标的在名册内」放宽为「名册非空」——总览是
 落地页，停在九只以外的标的时也要能进；进不进得去 T 板才看当前标的。
+
+---
+
+## E. 市场收敛涟漪清偿（workbuddy，2026-09-10）
+
+后端市场片收敛（crypto/us/hk 已删、provider 词汇表只剩 cn 六源）之后，client 半的
+残留一次清完。只动 `packages/client-ui-*/src/client/**` 与其 client 半测试。
+
+| 包 | 改动 |
+|---|---|
+| `client-ui-settings` | 市场 tab 收敛为 cn 单 tab；`PROVIDER_LABELS` 重写为六条 cn 源（iquant 置首，对齐 `router/src/index.ts:57-64`）；凭证规格只留 iquant/tushare/akshare/hithink；**整删 CryptoPanic key 链路**（schema / state / actions / 面板 / CSS） |
+| `client-ui-settings` 词典 | 删 `market.crypto`/`us`/`hk`、14 条非 cn provider 键与凭证字段键、4 条 news 键；加 `provider.iquant` / `field.label.iquantUrl` / `field.placeholder.iquantUrl`（zh/en 同步） |
+| `client-ui-strategies` | `StrategyView` 兜底 `crypto`/`BTCUSDT` → `cn`/`600519` |
+| `client-ui-trading` | toolview 只注册 `cn_place_order`、`ORDER_TOOL_RE` 收敛；`resolveAssetUnit` 恒「股」并删孤儿键 `trade.unit.coin`；`DEFAULT_HOLDINGS_BASE_CURRENCY` USD → CNY（列表 CNY 置首），`fetchFx` 未知 base 回落改 CNY |
+| `client-ui-trading` 派生层 | 删 `StrategyExtras` / `strategyExtras()` 宽容层，改直读强类型 `row.strategy.logic` / `.playbook`（后端已补投影） |
+
+**行为变更**：持仓汇总缺省基准币 USD → CNY（`holdings-aggregate.test.ts` 断言同步）。
+USD/HKD 仍保留在可选列表里，供历史多币种台账显示。
+
+**门禁**：`client-ui-trading` 396 测试 / settings 6 / strategies 17 全绿；
+`typecheck-gate` 232 < 基线 234；`i18n-audit` 通过。
+**未做**：trading-web 真机冒烟（本轮改动集中在设置面板，沿用
+「停宿主 → `refresh-trading-web-profile.ps1` → `start-trading-web.bat`」流程）。
+
+决策记录：[2026-09-10-market-convergence-client-ripple](../../.agents/notes/implemented/feature/2026-09-10-market-convergence-client-ripple.md)。
 

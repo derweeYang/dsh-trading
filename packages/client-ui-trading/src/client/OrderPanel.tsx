@@ -30,16 +30,8 @@ export interface OrderPanelProps {
 
 /** 智能推断标的资产单位 */
 function resolveAssetUnit(symbol: string, t: (k: MarketLocaleKey) => string, market?: MarketId): string {
-  void market // 签名保留；市场收敛后单位推断只看 symbol 形态
-  if (/USDT|USDC|BUSD|BTC|ETH/i.test(symbol)) {
-    const clean = symbol.toUpperCase().replace(/[-_].*$/, '')
-    for (const quote of ['USDT', 'USDC', 'BUSD', 'USD']) {
-      if (clean.endsWith(quote) && clean.length > quote.length) {
-        return clean.slice(0, -quote.length)
-      }
-    }
-    return t('trade.unit.coin')
-  }
+  void market // 签名保留；市场收敛（cn-only）后没有了稳定币/币本位标的
+  void symbol // 同上：A 股 / ETF 一律按份额计价，不再按 symbol 后缀猜单位
   return t('trade.unit.shares')
 }
 

@@ -95,8 +95,9 @@ export interface StrategyViewProps {
 
 export function StrategyView({ t, bridge, useSelection }: StrategyViewProps) {
   const instrument = useSelection ? useSelection((s) => s.instrument) : null
-  const market = instrument?.market ?? 'crypto'
-  const symbol = instrument?.symbol ?? 'BTCUSDT'
+  // 市场收敛（crypto/us/hk 已删）：兜底为 A 股面，与 watchlist cn 种子同词汇。
+  const market = instrument?.market ?? 'cn'
+  const symbol = instrument?.symbol ?? '600519'
 
   // 1. 本地存储持久化状态
   const [stored] = useState<StrategyStateStored>(() => {

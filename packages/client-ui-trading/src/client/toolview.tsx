@@ -29,8 +29,8 @@ function readCall(block: ToolCallOwnerProps['block']): { argsRaw: string; result
   return { argsRaw: block.argsRaw ?? '', resultText: null, isError: false }
 }
 
-/** 下单工具名 → 市场（us/cn/hk/crypto_place_order）。 */
-const ORDER_TOOL_RE = /^(crypto|us|cn|hk)_place_order$/
+/** 下单工具名 —— 市场收敛后只剩 cn（曾为 crypto/us/cn/hk 四市场）。 */
+const ORDER_TOOL_RE = /^cn_place_order$/
 
 export function isOrderTool(name: string): boolean {
   return ORDER_TOOL_RE.test(name)

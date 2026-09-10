@@ -130,10 +130,10 @@ export function apply(ctx: ClientContext): void {
   // quote 视图是 registry 的内建种子条目（stage-views.ts 工厂内写入）——tab 条
   // 从名册统一渲染，MiddleStage 对 quote 走 QuoteStage 直引面。
 
-  // 对话内富卡片（issue #34 / P5 §5.5）：下单三态卡（4 市场 keyed 各一把 +
-  // 生成器注册）与自选 chip 卡。策略/知识卡的注册在各自视图包（归属随视图）。
+  // 对话内富卡片（issue #34 / P5 §5.5）：下单三态卡（市场收敛后只注册 cn 一把）
+  // 与自选 chip 卡。策略/知识卡的注册在各自视图包（归属随视图）。
   ctx.slots.inject('tool.call.toolview', function* () {
-    for (const market of ['crypto', 'us', 'cn', 'hk'] as const) {
+    for (const market of ['cn'] as const) {
       yield ctx.slots.register({
         name: 'tool.call.toolview',
         key: `${market}_place_order`,
