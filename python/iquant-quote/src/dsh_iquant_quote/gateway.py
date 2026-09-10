@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -154,9 +155,40 @@ class GatewayServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def preheat_symbols() -> list[str]:
+    """预热标的清单：默认页面轮询的 ETF 自选，可用环境变量覆盖。"""
+    raw = os.environ.get(
+        "IQUANT_QUOTE_PREHEAT_SYMBOLS",
+        "510050.SH,510300.SH,588000.SH,588080.SH,159901.SZ,159915.SZ,159919.SZ",
+    )
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def preheat() -> None:
+    """后台预热：login + SHO/SZO 合约表 + 常用标的 ticker/1m K 缓存。
+
+    尽力而为：任一步失败只记一行；跑在 daemon 线程，health 不等它。
+    """
+    started = time.monotonic()
+    for market in ("SHO", "SZO"):
+        try:
+            SERVICE.instruments(market)
+        except Exception as err:  # noqa: BLE001
+            print(f"[preheat] instruments {market} failed: {err}", flush=True)
+    for symbol in preheat_symbols():
+        try:
+            SERVICE.ticker(symbol)
+            SERVICE.klines(symbol, "1m", 60)
+            print(f"[preheat] {symbol} ok", flush=True)
+        except Exception as err:  # noqa: BLE001
+            print(f"[preheat] {symbol} failed: {err}", flush=True)
+    print(f"[preheat] done in {time.monotonic() - started:.1f}s", flush=True)
+
+
 def main() -> None:
     server = GatewayServer((HOST, PORT), Handler)
     print(f"dsh-iquant-quote-gateway http://{HOST}:{PORT}", flush=True)
+    threading.Thread(target=preheat, daemon=True).start()
     server.serve_forever()
 
 

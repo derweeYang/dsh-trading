@@ -110,3 +110,53 @@ def test_fast_request_stays_silent(serve, capsys):
     time.sleep(0.1)
     captured = capsys.readouterr()
     assert captured.out == ""
+
+
+class _PreheatStub:
+    def __init__(self, fail_symbols=()):
+        self.fail_symbols = set(fail_symbols)
+        self.calls = []
+
+    def instruments(self, market):
+        self.calls.append(f"instruments:{market}")
+        return {}
+
+    def ticker(self, symbol):
+        self.calls.append(f"ticker:{symbol}")
+        if symbol in self.fail_symbols:
+            raise RuntimeError("boom")
+        return {"symbol": symbol}
+
+    def klines(self, symbol, interval="1d", limit=100):
+        self.calls.append(f"klines:{symbol}:{interval}")
+        return []
+
+
+def test_preheat_symbols_env_override(monkeypatch):
+    monkeypatch.setenv("IQUANT_QUOTE_PREHEAT_SYMBOLS", "510050.SH, ,600519.SH")
+    assert gateway.preheat_symbols() == ["510050.SH", "600519.SH"]
+
+
+def test_preheat_warms_instruments_and_watchlist(monkeypatch, capsys):
+    stub = _PreheatStub()
+    monkeypatch.setattr(gateway, "SERVICE", stub)
+    gateway.preheat()
+    assert "instruments:SHO" in stub.calls
+    assert "instruments:SZO" in stub.calls
+    assert "ticker:510050.SH" in stub.calls
+    assert "klines:510050.SH:1m" in stub.calls
+    out = capsys.readouterr().out
+    assert "[preheat] 510050.SH ok" in out
+    assert "failed" not in out
+    assert "[preheat] done in" in out
+
+
+def test_preheat_failure_per_symbol_is_one_line(monkeypatch, capsys):
+    stub = _PreheatStub(fail_symbols={"510300.SH"})
+    monkeypatch.setattr(gateway, "SERVICE", stub)
+    monkeypatch.setenv("IQUANT_QUOTE_PREHEAT_SYMBOLS", "510050.SH,510300.SH")
+    gateway.preheat()  # 单标的失败不抛、不中断
+    out = capsys.readouterr().out
+    assert "[preheat] 510300.SH failed" in out
+    assert "[preheat] 510050.SH ok" in out
+    assert "[preheat] done in" in out

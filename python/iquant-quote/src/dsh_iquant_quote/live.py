@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from dsh_iquant_quote.errors import QuoteGatewayError
 from dsh_iquant_quote.option_names import parse_option_name
@@ -68,31 +69,40 @@ class LiveBackend:
         ] = {}
         # 时钟可注入：测试钉在盘内/盘后，避免真实时段决定 drain 行为。
         self._now: Callable[[], datetime] = lambda: datetime.now(tz=CST)
+        self._login_lock = threading.Lock()
 
     def _ensure(self):
         if self._client is not None:
             return self._client
-        paths = resolve_paths()
-        for key in ("api_dll", "qmtquote", "config"):
-            if not os.path.isfile(paths[key]):
-                raise QuoteGatewayError("NETWORK", f"iquant path missing: {paths[key]}")
-        sdk_python = os.path.join(paths["sdk"], "python")
-        if sdk_python not in sys.path:
-            sys.path.insert(0, sdk_python)
-        os.chdir(paths["bin_dir"])
-        try:
-            from iquant.quote import QuoteClient
-        except Exception as err:  # noqa: BLE001
-            raise QuoteGatewayError(
-                "NETWORK", f"cannot import iquant.quote: {err}"
-            ) from err
-        client = QuoteClient(paths["api_dll"], paths["qmtquote"], paths["config"])
-        try:
-            client.login(allow_network_login=True)
-        except Exception as err:  # noqa: BLE001
-            raise QuoteGatewayError("NETWORK", f"iquant login failed: {err}") from err
-        self._client = client
-        return client
+        # 预热线程与请求线程可能同时冷启动，双重 login 会泄漏客户端实例。
+        with self._login_lock:
+            if self._client is not None:
+                return self._client
+            paths = resolve_paths()
+            for key in ("api_dll", "qmtquote", "config"):
+                if not os.path.isfile(paths[key]):
+                    raise QuoteGatewayError(
+                        "NETWORK", f"iquant path missing: {paths[key]}"
+                    )
+            sdk_python = os.path.join(paths["sdk"], "python")
+            if sdk_python not in sys.path:
+                sys.path.insert(0, sdk_python)
+            os.chdir(paths["bin_dir"])
+            try:
+                from iquant.quote import QuoteClient
+            except Exception as err:  # noqa: BLE001
+                raise QuoteGatewayError(
+                    "NETWORK", f"cannot import iquant.quote: {err}"
+                ) from err
+            client = QuoteClient(paths["api_dll"], paths["qmtquote"], paths["config"])
+            try:
+                client.login(allow_network_login=True)
+            except Exception as err:  # noqa: BLE001
+                raise QuoteGatewayError(
+                    "NETWORK", f"iquant login failed: {err}"
+                ) from err
+            self._client = client
+            return client
 
     def ticker(self, market: str, code: str) -> dict[str, Any]:
         try:
