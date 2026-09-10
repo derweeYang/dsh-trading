@@ -47,7 +47,8 @@ import {
   sessionFlag,
   tagIvRegime,
   optionsDataRoot,
-  quoteFillPrice,
+  quoteFillPriceWithSource,
+  type PaperMarkQuote,
   realizedInWindow,
   replayCyclesIntoBook,
   scorePreviousCycle,
@@ -1373,7 +1374,7 @@ export class TradingBridge {
     const marketValueRows = await Promise.all(state.positions.flatMap((position) => (
       position.legs.map(async (leg) => {
         const mark = await getMark(leg.code, leg.side)
-        const price = mark ?? leg.fillPrice
+        const price = mark?.price ?? leg.fillPrice
         return (leg.side === 'buy' ? 1 : -1)
           * price
           * leg.qty
@@ -1412,7 +1413,7 @@ export class TradingBridge {
     return await this.optionPaperAccount()
   }
 
-  #paperMarkLookup(): (code: string, side: 'buy' | 'sell') => Promise<number | undefined> {
+  #paperMarkLookup(): (code: string, side: 'buy' | 'sell') => Promise<PaperMarkQuote | undefined> {
     const service = this.host.getCnOptions?.()
     const chains = new Map<string, Promise<OptionChain | undefined>>()
     return async (code) => {
@@ -1430,7 +1431,7 @@ export class TradingBridge {
       const chain = await pending
       const row = [...(chain?.calls ?? []), ...(chain?.puts ?? [])]
         .find((candidate) => candidate.code.toUpperCase() === code.toUpperCase())
-      return row === undefined ? undefined : quoteFillPrice(row, 'buy')
+      return row === undefined ? undefined : quoteFillPriceWithSource(row)
     }
   }
 

@@ -12,6 +12,7 @@ import {
   latestRecommendation,
   loadLatestRecommendation,
   foldDailyReview,
+  foldOptionBarSessions,
   latestByKey,
   latestPacketForBucket,
   atmIvPercentile,
@@ -21,6 +22,7 @@ import {
   makeSkipRecommendation,
   normalizeRecommendation,
   opportunityAllowed,
+  optionSessionsPath,
   optionsDataRoot,
   packetsPath,
   readJsonl,
@@ -496,5 +498,45 @@ describe('appendJsonlLine 建目录', () => {
     expect(await readFile(file, 'utf8')).toBe('{"ok":true}\n')
     await mkdir(path.join(dir, 'reviews'), { recursive: true })
     await writeFile(path.join(dir, 'reviews', 'x.md'), 'kept', 'utf8')
+  })
+})
+
+describe('optionSessionsPath / foldOptionBarSessions', () => {
+  it('optionSessionsPath 拼接 sessions/{date}.jsonl', () => {
+    expect(optionSessionsPath(path.join('r'), '2026-09-10'))
+      .toBe(path.join('r', 'sessions', '2026-09-10.jsonl'))
+  })
+
+  it('launch + settle 合并为一条终局记录', () => {
+    const out = foldOptionBarSessions([
+      { kind: 'launch', bucketStart: 'b1', sessionId: 's1', launchedAt: 't1' },
+      { kind: 'settle', bucketStart: 'b1', sessionId: 's1', settledAt: 't2', outcome: 'succeeded' },
+    ])
+    expect(out).toEqual([
+      { bucketStart: 'b1', sessionId: 's1', launchedAt: 't1', settledAt: 't2', outcome: 'succeeded' },
+    ])
+  })
+
+  it('settle-only 与 launch-only 各自容忍', () => {
+    const out = foldOptionBarSessions([
+      { kind: 'settle', bucketStart: 'b1', settledAt: 't2', outcome: 'failed', error: 'boom' },
+      { kind: 'launch', bucketStart: 'b2', sessionId: 's2', launchedAt: 't1' },
+    ])
+    expect(out).toContainEqual({ bucketStart: 'b1', settledAt: 't2', outcome: 'failed', error: 'boom' })
+    expect(out).toContainEqual({ bucketStart: 'b2', sessionId: 's2', launchedAt: 't1' })
+  })
+
+  it('同桶双会话按 sessionId 区分；字段级 last-wins', () => {
+    const out = foldOptionBarSessions([
+      { kind: 'launch', bucketStart: 'b1', sessionId: 's1', launchedAt: 't1' },
+      { kind: 'settle', bucketStart: 'b1', sessionId: 's1', settledAt: 't2', outcome: 'no_rec' },
+      { kind: 'launch', bucketStart: 'b1', sessionId: 's3', launchedAt: 't3' },
+      { kind: 'settle', bucketStart: 'b1', sessionId: 's3', settledAt: 't4', outcome: 'succeeded' },
+      { kind: 'settle', bucketStart: 'b1', sessionId: 's1', settledAt: 't5', outcome: 'failed', error: 'late' },
+    ])
+    expect(out).toHaveLength(2)
+    const first = out.find((row) => row.sessionId === 's1')
+    expect(first).toMatchObject({ settledAt: 't5', outcome: 'failed', error: 'late', launchedAt: 't1' })
+    expect(out.find((row) => row.sessionId === 's3')).toMatchObject({ outcome: 'succeeded' })
   })
 })

@@ -2,11 +2,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   OPTION_MULTIPLIER,
+  OPTION_PAPER_FEE_PER_CONTRACT,
   OPTION_PAPER_INITIAL_CASH,
   type OptionBarRecommendation,
   type OptionChain,
   type OptionIntradayBoxRow,
   type OptionIntradaySession,
+  type OptionPaperPriceSource,
   type OptionQuoteRow,
   type PaperAccount,
   type PaperFill,
@@ -20,7 +22,7 @@ import {
   shanghaiCalendarDate,
 } from './option-bar-ledger.js'
 
-export { OPTION_MULTIPLIER, OPTION_PAPER_INITIAL_CASH }
+export { OPTION_MULTIPLIER, OPTION_PAPER_FEE_PER_CONTRACT, OPTION_PAPER_INITIAL_CASH }
 
 export interface PaperState {
   account: PaperAccount
@@ -59,13 +61,34 @@ export function emptyPaperAccount(nowIso: string): PaperAccount {
   }
 }
 
+/** 带来源标记的成交价（last 回退 prevSettle）。 */
+export interface PaperMarkQuote {
+  readonly price: number
+  readonly source: OptionPaperPriceSource
+}
+
+export function quoteFillPriceWithSource(
+  row: OptionQuoteRow & { bid?: number; ask?: number },
+): PaperMarkQuote | undefined {
+  if (typeof row.last === 'number' && Number.isFinite(row.last) && row.last >= 0) {
+    return { price: row.last, source: 'last' }
+  }
+  if (typeof row.prevSettle === 'number' && Number.isFinite(row.prevSettle) && row.prevSettle >= 0) {
+    return { price: row.prevSettle, source: 'prev_settle' }
+  }
+  return undefined
+}
+
 export function quoteFillPrice(
   row: OptionQuoteRow & { bid?: number; ask?: number },
   _side: 'buy' | 'sell',
 ): number | undefined {
-  const price = row.last ?? row.prevSettle
-  if (typeof price !== 'number' || !Number.isFinite(price) || price < 0) return undefined
-  return price
+  return quoteFillPriceWithSource(row)?.price
+}
+
+/** 手续费：每张 × 每腿张数合计（skip 桩 legs=[] 自然为 0）。 */
+export function fillFeeCny(legs: PaperLegs, feePerContract: number): number {
+  return feePerContract * legs.reduce((total, leg) => total + leg.qty, 0)
 }
 
 function nearestIndex(rows: readonly OptionQuoteRow[], spot: number | undefined): number {
@@ -103,16 +126,16 @@ export function completeVerticalLegs(
   const long = rows[longIndex]
   if (!short?.code || !long?.code) return { legs: [], skip: 'no_quote' }
 
-  const shortPrice = quoteFillPrice(short, 'sell')
-  const longPrice = quoteFillPrice(long, 'buy')
-  if (shortPrice === undefined || longPrice === undefined) {
+  const shortQuote = quoteFillPriceWithSource(short)
+  const longQuote = quoteFillPriceWithSource(long)
+  if (shortQuote === undefined || longQuote === undefined) {
     return { legs: [], skip: 'no_quote' }
   }
 
   return {
     legs: [
-      { code: short.code, side: 'sell', qty, fillPrice: shortPrice },
-      { code: long.code, side: 'buy', qty, fillPrice: longPrice },
+      { code: short.code, side: 'sell', qty, fillPrice: shortQuote.price, priceSource: shortQuote.source },
+      { code: long.code, side: 'buy', qty, fillPrice: longQuote.price, priceSource: longQuote.source },
     ],
   }
 }
@@ -157,7 +180,8 @@ export function applyOpen(
     boxHigh?: number
   },
 ): PaperState {
-  const cash = state.account.cash + fill.premiumCny - fill.marginCny
+  const fee = fill.feeCny ?? 0
+  const cash = state.account.cash + fill.premiumCny - fill.marginCny - fee
   const id = fill.id ?? `${fill.underlying ?? 'unknown'}:${fill.bucketStart}`
   const { invalidIf = '', boxLow, boxHigh, ...fillRow } = fill
   const recorded: PaperFill = { ...fillRow, id, cashAfter: cash }
@@ -177,6 +201,7 @@ export function applyOpen(
       ...(boxLow === undefined ? {} : { boxLow }),
       ...(boxHigh === undefined ? {} : { boxHigh }),
       legs: fill.legs,
+      ...(fee === 0 ? {} : { openFeeCny: fee }),
     } : undefined
 
   return {
@@ -192,13 +217,16 @@ export function applyClose(
   legs: PaperLegs,
   reason: 'invalidIf' | 'close5' | 'session',
   asOf: string,
+  feePerContract = OPTION_PAPER_FEE_PER_CONTRACT,
 ): PaperState {
   const position = state.positions.find((item) => item.id === positionId)
   if (position === undefined) return state
 
   const closePremium = premiumCny(legs)
   const openPremium = premiumCny(position.legs)
-  const cash = state.account.cash + closePremium + position.marginCny
+  const closeFee = fillFeeCny(legs, feePerContract)
+  const openFee = position.openFeeCny ?? 0
+  const cash = state.account.cash + closePremium + position.marginCny - closeFee
   const fill: PaperFill = {
     id: `${positionId}:close:${asOf}`,
     bucketStart: position.openedBucketStart,
@@ -212,13 +240,14 @@ export function applyClose(
     marginCny: 0,
     cashAfter: cash,
     reason,
+    ...(closeFee === 0 ? {} : { feeCny: closeFee }),
   }
 
   return {
     account: {
       ...state.account,
       cash,
-      realizedPnl: state.account.realizedPnl + openPremium + closePremium,
+      realizedPnl: state.account.realizedPnl + openPremium + closePremium - openFee - closeFee,
       updatedAt: asOf,
     },
     positions: state.positions.filter((item) => item.id !== positionId),
@@ -291,7 +320,7 @@ function explicitLegs(legs: readonly unknown[] | undefined): PaperLegs | undefin
       || !Number.isInteger(qty)
       || qty <= 0
     ) return undefined
-    return { code: row.code, side: row.side, qty, fillPrice: price }
+    return { code: row.code, side: row.side, qty, fillPrice: price, priceSource: 'pick' }
   })
   return parsed.every((leg) => leg !== undefined) ? parsed as PaperLegs : undefined
 }
@@ -304,6 +333,7 @@ export function decidePaperOpen(input: {
   marginFor: (legs: PaperLegs) => number | undefined
   nowIso: string
   cash: number
+  feePerContract?: number
 }): { fill: Omit<PaperFill, 'cashAfter'> } | { skip: PaperFill } | { noop: true } {
   const { rec } = input
   if (
@@ -400,6 +430,7 @@ export function decidePaperOpen(input: {
     }
 
     const legs = unitLegs.map((leg) => ({ ...leg, qty: leg.qty * qty }))
+    const feeCny = fillFeeCny(legs, input.feePerContract ?? OPTION_PAPER_FEE_PER_CONTRACT)
     return {
       fill: {
         id: `${pick.underlying}:${rec.bucketStart}:open`,
@@ -413,6 +444,7 @@ export function decidePaperOpen(input: {
         premiumCny: premiumPer * qty,
         marginCny: marginPer * qty,
         reason: 'signal',
+        ...(feeCny === 0 ? {} : { feeCny }),
       },
     }
   }
@@ -505,9 +537,11 @@ export async function tryPaperOpen(input: {
   nowIso: string
   getChain: (underlying: string) => Promise<OptionChain | undefined>
   getMargin: (legs: PaperFill['legs']) => Promise<number | undefined>
+  feePerContract?: number
 }): Promise<void> {
   await withPaperStateLock(input.root, async () => {
   try {
+    const feePerContract = input.feePerContract ?? OPTION_PAPER_FEE_PER_CONTRACT
     const state = await loadPaperState(input.root, input.date, input.nowIso)
     const gate = decidePaperOpen({
       rec: { ...input.rec, picks: [] },
@@ -517,6 +551,7 @@ export async function tryPaperOpen(input: {
       marginFor: () => 0,
       nowIso: input.nowIso,
       cash: state.account.cash,
+      feePerContract,
     })
     if ('noop' in gate) return
     if ('skip' in gate && gate.skip.skip === 'duplicate_bucket') {
@@ -539,6 +574,7 @@ export async function tryPaperOpen(input: {
           marginFor: () => 0,
           nowIso: input.nowIso,
           cash: state.account.cash,
+          feePerContract,
         })
         if ('skip' in decision) lastSkip = decision.skip
         continue
@@ -555,6 +591,7 @@ export async function tryPaperOpen(input: {
           marginFor: () => 0,
           nowIso: input.nowIso,
           cash: state.account.cash,
+          feePerContract,
         })
         if ('skip' in decision) lastSkip = decision.skip
         continue
@@ -586,6 +623,7 @@ export async function tryPaperOpen(input: {
           marginFor: () => margin,
           nowIso: input.nowIso,
           cash: state.account.cash,
+          feePerContract,
         })
         if ('skip' in decision) {
           lastSkip = decision.skip
@@ -627,14 +665,14 @@ export async function tryPaperOpen(input: {
 
 async function closeLegs(
   position: PaperPosition,
-  getMark: (code: string, side: 'buy' | 'sell') => Promise<number | undefined>,
+  getMark: (code: string, side: 'buy' | 'sell') => Promise<PaperMarkQuote | undefined>,
 ): Promise<PaperLegs | undefined> {
   const legs: PaperLegs[number][] = []
   for (const leg of position.legs) {
     const side = leg.side === 'sell' ? 'buy' : 'sell'
-    const fillPrice = await getMark(leg.code, side)
-    if (fillPrice === undefined) return undefined
-    legs.push({ code: leg.code, side, qty: leg.qty, fillPrice })
+    const mark = await getMark(leg.code, side)
+    if (mark === undefined) return undefined
+    legs.push({ code: leg.code, side, qty: leg.qty, fillPrice: mark.price, priceSource: mark.source })
   }
   return legs
 }
@@ -646,11 +684,12 @@ export async function tryPaperManage(input: {
   nowIso: string
   session: OptionIntradaySession
   calendarDate: string
-  getMark: (code: string, side: 'buy' | 'sell') => Promise<number | undefined>
+  getMark: (code: string, side: 'buy' | 'sell') => Promise<PaperMarkQuote | undefined>
   getLastClose: (underlying: string) => Promise<{
     lastClose: number
     volumeRatio?: number
   } | undefined>
+  feePerContract?: number
 }): Promise<void> {
   await withPaperStateLock(input.root, async () => {
   try {
@@ -682,7 +721,14 @@ export async function tryPaperManage(input: {
         if (reason === undefined) continue
         const legs = await closeLegs(position, input.getMark)
         if (legs === undefined) continue
-        state = applyClose(state, position.id, legs, reason, input.nowIso)
+        state = applyClose(
+          state,
+          position.id,
+          legs,
+          reason,
+          input.nowIso,
+          input.feePerContract ?? OPTION_PAPER_FEE_PER_CONTRACT,
+        )
       } catch {
         // A failed market lookup only skips this position for the current tick.
       }

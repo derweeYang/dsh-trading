@@ -3,7 +3,8 @@
  * 例外：cn_get_option_intraday_box 读 CN 现货 1 分钟 K（iquant）。
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { CnOptionsService, MarketDataService, OptionChain, OptionSource, PaperFill } from '@dshtrading/api'
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { OPTION_PAPER_FEE_PER_CONTRACT, type CnOptionsService, type MarketDataService, type OptionBarRecommendation, type OptionChain, type OptionSource, type PaperFill } from '@dshtrading/api'
 import { BOX_HORIZON_MIN, collectIntradayBox } from './intraday-box.js'
 import { tryPaperOpen } from './option-paper.js'
 import {
@@ -25,6 +26,8 @@ export interface OptionToolOptions {
   dataRoot?: () => string
   getChain?: (underlying: string) => Promise<OptionChain | undefined>
   getMargin?: (legs: PaperFill['legs']) => Promise<number | undefined>
+  /** 模拟盘手续费（元/张）；缺省 OPTION_PAPER_FEE_PER_CONTRACT。 */
+  feePerContract?: number
 }
 
 function resolveService(options: OptionToolOptions): CnOptionsService {
@@ -577,7 +580,7 @@ export function createPutOptionBarRecommendationTool(options: OptionToolOptions 
       schema: { type: 'string' },
       render: (_args, value) => [{ type: 'text', text: String(value) }],
     },
-    async execute(raw) {
+    async execute(raw, exec?: ToolRunContext) {
       const args = (raw ?? {}) as { recommendation?: unknown; forecasts?: unknown }
       const parsed = typeof args.recommendation === 'string'
         ? JSON.parse(args.recommendation) as unknown
@@ -607,11 +610,18 @@ export function createPutOptionBarRecommendationTool(options: OptionToolOptions 
         heldFromPacket,
         packetMap,
       )
-      await appendJsonlLine(recommendationsPath(root, date), row)
+      // 宿主侧身份与时间在 normalize 之后注入：模型 JSON 里的同名伪造字段已被丢弃，不可 spoof。
+      const sessionId = typeof exec?.agent?.id === 'string' ? exec.agent.id : undefined
+      const enriched: OptionBarRecommendation = {
+        ...row,
+        ...optionalField('sessionId', sessionId),
+        hostAsOf: new Date(nowMs).toISOString(),
+      }
+      await appendJsonlLine(recommendationsPath(root, date), enriched)
       void tryPaperOpen({
         root,
         date,
-        rec: row,
+        rec: enriched,
         forecastByUnderlying,
         nowIso: new Date(nowMs).toISOString(),
         getChain: async (underlying) => {
@@ -628,6 +638,7 @@ export function createPutOptionBarRecommendationTool(options: OptionToolOptions 
             return undefined
           }
         },
+        feePerContract: options.feePerContract ?? OPTION_PAPER_FEE_PER_CONTRACT,
       }).catch(() => {})
       return JSON.stringify({ ok: true, bucketStart: row.bucketStart, opportunity: row.opportunity })
     },

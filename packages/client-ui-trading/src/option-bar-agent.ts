@@ -4,7 +4,7 @@
  */
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { CnOptionsService, OptionBarContextPacket, OptionBarFact, OptionBarRecommendation, OptionCycle, OptionCycleLoop } from '@dshtrading/api'
+import type { CnOptionsService, OptionBarContextPacket, OptionBarFact, OptionBarRecommendation, OptionBarSessionEvent, OptionBarSessionOutcome, OptionCycle, OptionCycleLoop } from '@dshtrading/api'
 import {
   OPTION_BAR_AGENT_PROMPT,
   appendJsonlLine,
@@ -14,6 +14,7 @@ import {
   foldDailyReview,
   makeSkipRecommendation,
   opportunityDecide,
+  optionSessionsPath,
   packetsPath,
   recommendationsPath,
   reviewsPath,
@@ -27,7 +28,7 @@ import {
   type LaneDecision,
   type TraderLane,
 } from '@dshtrading/kit-cn'
-import type { TasksRunner } from './tasks/runner.ts'
+import { SessionLaunchError, type ExecutionInspection, type TasksRunner } from './tasks/runner.ts'
 
 export interface OptionBarAgentOptions {
   dataRoot: () => string
@@ -44,6 +45,9 @@ export class OptionBarAgentHost {
   inFlight = false
   private openSessionId: string | undefined = undefined
   private openStartedAt = 0
+  /** launch 时快照的桶与日历日，settle 写 sessions 台账用（进程内即终局，不跨日）。 */
+  private openBucketStart: string | undefined = undefined
+  private openDate: string | undefined = undefined
   private readonly options: OptionBarAgentOptions
 
   constructor(options: OptionBarAgentOptions) {
@@ -123,10 +127,26 @@ export class OptionBarAgentHost {
       })
       this.openSessionId = sessionId
       this.openStartedAt = ctx.nowMs
+      this.openBucketStart = bucketStart
+      this.openDate = date
+      await this.writeSessionEvent(date, {
+        kind: 'launch',
+        bucketStart,
+        sessionId,
+        launchedAt: asOf,
+      })
     } catch (error) {
       this.inFlight = false
       this.openSessionId = undefined
       this.options.log?.('option-bar launch failed', error)
+      await this.writeSessionEvent(date, {
+        kind: 'settle',
+        bucketStart,
+        ...(error instanceof SessionLaunchError ? { sessionId: error.sessionId } : {}),
+        settledAt: new Date(ctx.nowMs).toISOString(),
+        outcome: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      })
       await this.writeRec(root, date, makeSkipRecommendation({
         bucketStart,
         asOf: new Date(ctx.nowMs).toISOString(),
@@ -168,17 +188,63 @@ export class OptionBarAgentHost {
   settle(): void {
     this.inFlight = false
     this.openSessionId = undefined
+    this.openBucketStart = undefined
+    this.openDate = undefined
   }
 
   private async refreshInFlight(): Promise<void> {
     if (!this.inFlight || this.openSessionId === undefined) return
     const runner = this.options.runner?.()
     if (runner === undefined) return
+    const sessionId = this.openSessionId
+    const bucketStart = this.openBucketStart
+    const date = this.openDate
+    let inspection: ExecutionInspection | undefined
     try {
-      const inspection = await runner.inspect(this.openSessionId, this.openStartedAt)
-      if (inspection.outcome !== 'pending') this.settle()
+      inspection = await runner.inspect(sessionId, this.openStartedAt)
     } catch (error) {
       this.options.log?.('option-bar inspect failed', error)
+      return
+    }
+    if (inspection.outcome === 'pending') return
+    this.settle()
+    if (bucketStart === undefined || date === undefined) return
+    try {
+      const outcome = await this.settleOutcome(date, bucketStart, inspection)
+      await this.writeSessionEvent(date, {
+        kind: 'settle',
+        bucketStart,
+        sessionId,
+        settledAt: new Date(this.options.now?.() ?? Date.now()).toISOString(),
+        outcome,
+        ...(inspection.outcome === 'failed' || inspection.outcome === 'cancelled'
+          ? { error: inspection.error }
+          : {}),
+      })
+    } catch (error) {
+      this.options.log?.('option-bar session persist failed', error)
+    }
+  }
+
+  /** runner 说 succeeded 时核对当日该桶 recommendations 是否真有行（工具调用可能被跳过）→ no_rec。 */
+  private async settleOutcome(
+    date: string,
+    bucketStart: string,
+    inspection: ExecutionInspection,
+  ): Promise<OptionBarSessionOutcome> {
+    if (inspection.outcome === 'failed') return 'failed'
+    if (inspection.outcome === 'cancelled') return 'cancelled'
+    // 剩下 succeeded（pending 在调用前已被早退过滤）：该桶无推荐行 = 会话跑完没调工具。
+    const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(this.options.dataRoot(), date))
+    return recs.some((row) => row.bucketStart === bucketStart) ? 'succeeded' : 'no_rec'
+  }
+
+  /** sessions 台账 append（launch/settle 事件）；失败只记 log，不阻断主流程。 */
+  private async writeSessionEvent(date: string, event: OptionBarSessionEvent): Promise<void> {
+    try {
+      await appendJsonlLine(optionSessionsPath(this.options.dataRoot(), date), event)
+    } catch (error) {
+      this.options.log?.('option-bar session persist failed', error)
     }
   }
 
