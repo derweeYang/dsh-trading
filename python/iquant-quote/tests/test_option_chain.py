@@ -7,7 +7,8 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from dsh_iquant_quote.errors import QuoteGatewayError
-from dsh_iquant_quote.live import LiveBackend
+from dsh_iquant_quote.live import LiveBackend, seasonal_focus_months
+from dsh_iquant_quote.service import QuoteService, _parse_atm_focus
 
 _CST = timezone(timedelta(hours=8))
 _LIVE_NOW = datetime(2026, 9, 8, 10, 0, tzinfo=_CST)
@@ -202,3 +203,180 @@ def test_option_chain_closed_window_skips_tick_subscription():
     chain = _backend(client, now=_CLOSED_NOW).option_chain("SHO", "510050", "2609")
     assert client.subscribed is None  # 窗口外不订阅
     assert chain["calls"][0]["last"] == pytest.approx(0.205)  # 走日 K 回落
+
+
+def _strike_grid_names(strikes: list[str]):
+    """510050 九月链 C/P 双边名单（行权价 2600→'2.60' 拆两档小数）。"""
+    names = []
+    for index, raw in enumerate(strikes):
+        names.append(
+            {
+                "market": "SHO",
+                "code": f"10011{index * 2:02d}",
+                "name": f"50ETF购9月{raw}",
+            }
+        )
+        names.append(
+            {
+                "market": "SHO",
+                "code": f"10011{index * 2 + 1:02d}",
+                "name": f"50ETF沽9月{raw}",
+            }
+        )
+    return names
+
+
+def _bars(close: float):
+    return [
+        {
+            "timestamp_ms": 1_756_800_000_000,
+            "open": close,
+            "high": close,
+            "low": close,
+            "close": close,
+            "volume": 10,
+        },
+        {
+            "timestamp_ms": 1_756_886_400_000,
+            "open": close,
+            "high": close,
+            "low": close,
+            "close": close,
+            "volume": 20,
+        },
+    ]
+
+
+def test_option_chain_atm_focus_trims_strikes_and_daily_fallback():
+    """atm_focus 只回落 ATM±N 档：5 档链 spot=2.68 → 2.65/2.70/2.75，日 K 只打 6 合约。"""
+    strikes = ["2600", "2650", "2700", "2750", "2800"]
+    bars_by_code = {
+        f"10011{i:02d}": _bars(0.1 + i * 0.01) for i in range(len(strikes) * 2)
+    }
+    client = _FakeQuoteClient(
+        _strike_grid_names(strikes), ticks={}, bars_by_code=bars_by_code
+    )
+    chain = _backend(client, now=_CLOSED_NOW).option_chain(
+        "SHO", "510050", "2609", atm_focus={"spot": 2.68, "strikes": 3}
+    )
+    assert [c["strike"] for c in chain["calls"]] == pytest.approx([2.65, 2.70, 2.75])
+    assert [p["strike"] for p in chain["puts"]] == pytest.approx([2.65, 2.70, 2.75])
+    # 日 K 回落只发生在保留的 6 个合约上；2.60/2.80 档不打 SDK。
+    assert sorted(code for _m, code in client.history_calls) == [
+        f"10011{i:02d}" for i in (2, 3, 4, 5, 6, 7)
+    ]
+
+
+def test_option_chain_atm_focus_tie_prefers_lower_strike():
+    """spot 落在两档正中时取低档（稳定序，不抖动）。"""
+    client = _FakeQuoteClient(
+        _strike_grid_names(["2600", "2650", "2700"]),
+        ticks={},
+        bars_by_code={f"10011{i:02d}": _bars(0.1) for i in range(6)},
+    )
+    chain = _backend(client, now=_CLOSED_NOW).option_chain(
+        "SHO", "510050", "2609", atm_focus={"spot": 2.675, "strikes": 1}
+    )
+    assert [c["strike"] for c in chain["calls"]] == pytest.approx([2.65])
+
+
+def test_seasonal_focus_months_covers_current_and_next():
+    assert seasonal_focus_months(datetime(2026, 9, 11, 12, 0, tzinfo=_CST)) == [
+        "2609",
+        "2610",
+    ]
+
+
+def test_seasonal_focus_months_skips_expired_current_month():
+    # 2026-09 的第四个周三是 09-23；24 日起当月链已摘牌。
+    assert seasonal_focus_months(datetime(2026, 9, 24, 9, 30, tzinfo=_CST)) == ["2610"]
+
+
+def test_seasonal_focus_months_keeps_expiry_day_and_wraps_year():
+    assert seasonal_focus_months(datetime(2026, 9, 23, 15, 0, tzinfo=_CST)) == [
+        "2609",
+        "2610",
+    ]
+    assert seasonal_focus_months(datetime(2026, 12, 5, 10, 0, tzinfo=_CST)) == [
+        "2612",
+        "2701",
+    ]
+
+
+def test_parse_atm_focus_valid_and_default():
+    assert _parse_atm_focus(None) is None
+    assert _parse_atm_focus({"spot": 3.1, "strikes": 3}) == {
+        "spot": 3.1,
+        "strikes": 3,
+    }
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "full",
+        {"spot": 0, "strikes": 3},
+        {"spot": -2.5, "strikes": 3},
+        {"spot": 3.1},
+        {"spot": 3.1, "strikes": 0},
+        {"spot": 3.1, "strikes": 11},
+        {"spot": 3.1, "strikes": True},
+    ],
+)
+def test_parse_atm_focus_rejects_invalid(raw):
+    with pytest.raises(QuoteGatewayError) as err:
+        _parse_atm_focus(raw)
+    assert err.value.code == "BAD_REQUEST"
+
+
+def test_service_option_chain_routes_focus_and_full_chain():
+    """handle_command 带 atmFocus → 收窄透传到 backend；缺省 → 不带关键字（全链）。"""
+    calls = []
+
+    class _RecordingBackend:
+        def option_instruments(self, market, underlying):
+            return [
+                {
+                    "code": "510050C2609M02600",
+                    "shortCode": "1001",
+                    "optionType": "C",
+                    "strike": 2.6,
+                    "expiryMonth": "2609",
+                    "expiryDate": "2026-09-23",
+                },
+                {
+                    "code": "510050C2609M02650",
+                    "shortCode": "1002",
+                    "optionType": "C",
+                    "strike": 2.65,
+                    "expiryMonth": "2609",
+                    "expiryDate": "2026-09-23",
+                },
+                {
+                    "code": "510050C2609M02700",
+                    "shortCode": "1003",
+                    "optionType": "C",
+                    "strike": 2.7,
+                    "expiryMonth": "2609",
+                    "expiryDate": "2026-09-23",
+                },
+            ]
+
+        def option_chain(self, market, underlying, expiry_month, atm_focus=None):
+            calls.append(atm_focus)
+            return {"calls": [], "puts": []}
+
+    service = QuoteService(_RecordingBackend())
+    service.handle_command(
+        "option_chain",
+        {
+            "market": "SH",
+            "underlying": "510050",
+            "expiryMonth": "2609",
+            "atmFocus": {"spot": 2.68, "strikes": 2},
+        },
+    )
+    service.handle_command(
+        "option_chain", {"market": "SH", "underlying": "510050", "expiryMonth": "2609"}
+    )
+    assert calls == [{"spot": 2.68, "strikes": 2}, None]

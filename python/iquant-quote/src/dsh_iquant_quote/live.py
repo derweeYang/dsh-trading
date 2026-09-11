@@ -54,6 +54,44 @@ def expected_latest_open_ms(moment: datetime) -> int | None:
     return int((midnight + timedelta(minutes=minute_of_day)).timestamp() * 1000)
 
 
+def fourth_wednesday(year: int, month: int) -> date:
+    """该月第四个周三（沪深 ETF 期权行权日）；与 connector-options expiryDateOf 同口径。"""
+    import calendar
+
+    wednesdays = [
+        day
+        for day in range(1, calendar.monthrange(year, month)[1] + 1)
+        if date(year, month, day).weekday() == 2
+    ]
+    return date(year, month, wednesdays[3])
+
+
+def seasonal_focus_months(now: datetime | None = None) -> list[str]:
+    """当月、次月中未过行权日的 YYMM（对齐 bridge seasonalExpiryMonths()[0..1]）。
+
+    当月第四个周三已过 → 链已摘牌，跳过（预热摘牌月只会 NO_DATA）。
+    """
+    moment = now or datetime.now(tz=CST)
+    out: list[str] = []
+    for step in (0, 1):
+        total = moment.year * 12 + (moment.month - 1) + step
+        year, month_zero = divmod(total, 12)
+        month = month_zero + 1
+        if fourth_wednesday(year, month) < moment.date():
+            continue
+        out.append(f"{year % 100:02d}{month:02d}")
+    return out
+
+
+def focus_chain_rows(
+    rows: list[dict[str, Any]], spot: float, strikes: int
+) -> list[dict[str, Any]]:
+    """只留距 spot 最近的 strikes 个行权价档（C/P 成对保留）；并列时低价优先。"""
+    by_strike = sorted({float(row["strike"]) for row in rows})
+    keep = set(sorted(by_strike, key=lambda s: (abs(s - spot), s))[: max(strikes, 1)])
+    return [row for row in rows if float(row["strike"]) in keep]
+
+
 DEFAULT_SDK_ROOT = r"D:\workspace\myquant\iquant_market_clean_fresh"
 DEFAULT_VENDOR_ROOT = r"D:\workspace\myquant\installed\国信iQuant策略交易平台"
 
@@ -364,7 +402,11 @@ class LiveBackend:
         return out
 
     def option_chain(
-        self, market: str, underlying: str, expiry_month: str
+        self,
+        market: str,
+        underlying: str,
+        expiry_month: str,
+        atm_focus: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         token = (market or "").strip().upper()
         if token in {"SH", "SZ"}:
@@ -383,6 +425,12 @@ class LiveBackend:
             raise QuoteGatewayError(
                 "NO_DATA",
                 f"no option contracts for {underlying} {month} on {token}",
+            )
+        # ATM 焦点收窄：IV 路径只需要 ATM 附近档位，整链逐合约日 K 回落是首屏
+        # 8s+ 的来源（2026-09-11 overview 慢诊断）；T 板不传 atm_focus，仍全链。
+        if atm_focus is not None:
+            rows = focus_chain_rows(
+                rows, float(atm_focus["spot"]), int(atm_focus["strikes"])
             )
         shorts = [row["shortCode"] for row in rows if row["shortCode"]]
         ticks = self._collect_ticks(token, shorts)

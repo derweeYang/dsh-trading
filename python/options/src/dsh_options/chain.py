@@ -103,7 +103,10 @@ def fetch_board(board_name: str, expiry_month: str) -> list[dict[str, Any]]:
 
 
 def _chain_iquant(request: dict[str, Any], underlying: str, month: str) -> dict[str, Any]:
-    """经 iquant-quote ``option_chain`` 取 T 型报价;深交所不再是缺口。"""
+    """经 iquant-quote ``option_chain`` 取 T 型报价;深交所不再是缺口。
+
+    请求带 ``atmFocus``(IV 路径收窄到 ATM 附近档位)时原样下传;T 板不传 → 全链。
+    """
     from dsh_options import iquant
 
     row = iquant.require_row(underlying)
@@ -113,6 +116,11 @@ def _chain_iquant(request: dict[str, Any], underlying: str, month: str) -> dict[
             "market": iquant.option_market_of(row),
             "underlying": underlying,
             "expiryMonth": month,
+            **(
+                {"atmFocus": request["atmFocus"]}
+                if isinstance(request.get("atmFocus"), dict)
+                else {}
+            ),
         },
         request,
     )

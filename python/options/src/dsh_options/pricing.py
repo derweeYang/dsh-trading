@@ -439,21 +439,27 @@ def _snapshot_akshare(underlying: str, month: str, price_field: str) -> dict[str
 def _snapshot_iquant(
     underlying: str, month: str, price_field: str, request: dict[str, Any]
 ) -> dict[str, Any]:
-    """iquant 链截面:option_chain + 标的 snapshot;prevSettle 来自 L1 昨收。"""
+    """iquant 链截面:option_chain + 标的 snapshot;prevSettle 来自 L1 昨收。
+
+    默认带 ``atmFocus`` 收窄到 ATM 附近 3 档(2026-09-11 overview 首屏慢诊断:
+    整链逐合约日 K 回落是 8s+ 的来源);请求显式 ``"atmFocus": false`` 可回全链。
+    """
     from dsh_options import iquant
     from dsh_options.registry import find_underlying
 
     row = find_underlying("iquant", underlying)
     if row is None:
         raise OptionsError("BAD_REQUEST", f"unknown underlying {underlying!r}; see underlyings")
-    board = chain.handle_chain(
-        {
-            **{key: request[key] for key in ("iquantArgvPrefix",) if key in request},
-            "source": "iquant",
-            "underlying": underlying,
-            "expiryMonth": month,
-        }
-    )
+    spot = iquant.fetch_spot(underlying, request)
+    chain_request: dict[str, Any] = {
+        **{key: request[key] for key in ("iquantArgvPrefix",) if key in request},
+        "source": "iquant",
+        "underlying": underlying,
+        "expiryMonth": month,
+    }
+    if request.get("atmFocus") is not False:
+        chain_request["atmFocus"] = {"spot": spot, "strikes": 3}
+    board = chain.handle_chain(chain_request)
     key = "last" if price_field == "last" else "prevSettle"
     calls, puts = [], []
     for side, bucket in (("C", board["calls"]), ("P", board["puts"])):
@@ -470,7 +476,7 @@ def _snapshot_iquant(
     return {
         "calls": calls,
         "puts": puts,
-        "spot": iquant.fetch_spot(underlying, request),
+        "spot": spot,
         "snapshotAt": board["snapshotAt"],
         "expiryDate": board["expiryDate"],
         "asOfDate": board["snapshotAt"][:10],

@@ -4,11 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from dsh_options import chain, contracts, daily, iquant, underlying_daily
+from dsh_options import chain, contracts, daily, iquant, pricing, underlying_daily
 from dsh_options.protocol import OptionsError
 
 
-def _quote(code: str, strike: float, last: float = 0.18, pre_close: float = 0.17, volume: int = 1000):
+def _quote(
+    code: str, strike: float, last: float = 0.18, pre_close: float = 0.17, volume: int = 1000
+):
     return {
         "code": code,
         "strike": strike,
@@ -58,7 +60,9 @@ def _install_runner(monkeypatch, calls: list):
                 "expiryDate": "2026-09-23",
                 "snapshotAt": "2026-09-01T15:00:00+08:00",
                 "calls": [_quote(f"{underlying}C{month}M{scaled}", strike)],
-                "puts": [_quote(f"{underlying}P{month}M{scaled}", strike, last=0.01, pre_close=0.012)],
+                "puts": [
+                    _quote(f"{underlying}P{month}M{scaled}", strike, last=0.01, pre_close=0.012)
+                ],
             }
         if subcommand == "history_bars":
             start = body["startMs"]
@@ -317,3 +321,75 @@ def test_run_quote_live_missing_host_path_raises(monkeypatch):
         )
     assert err.value.code == "BAD_REQUEST"
     assert called is False
+
+
+def _install_chain_only_runner(monkeypatch, calls: list):
+    """只回应 option_chain 的 runner;断言 IV 路径给网关下传了什么。"""
+
+    def run(subcommand: str, body: dict, _request: dict | None = None):
+        assert body["source"] == "synth"
+        if subcommand != "option_chain":
+            raise AssertionError(f"unexpected subcommand {subcommand}")
+        calls.append(dict(body))
+        underlying = body["underlying"]
+        strike = 2.85
+        scaled = f"{round(strike * 1000):05d}"
+        return {
+            "expiryDate": "2026-09-23",
+            "snapshotAt": "2026-09-01T15:00:00+08:00",
+            "calls": [_quote(f"{underlying}C2609M{scaled}", strike)],
+            "puts": [_quote(f"{underlying}P2609M{scaled}", strike, last=0.01, pre_close=0.012)],
+        }
+
+    monkeypatch.setattr(iquant, "call_quote", run)
+
+
+def test_implied_vol_iquant_sends_atm_focus(monkeypatch):
+    """implied_vol(iquant) 默认收窄:先取 spot,再把 atmFocus{spot,strikes:3}下传链请求。"""
+    calls: list = []
+    _install_chain_only_runner(monkeypatch, calls)
+    monkeypatch.setattr(iquant, "fetch_spot", lambda _u, _r: 2.86)
+    result = pricing.handle_implied_vol(
+        {
+            "source": "iquant",
+            "underlying": "510050",
+            "expiryMonth": "2609",
+            "rate": 0.02,
+            "priceField": "last",
+        }
+    )
+    assert result["summary"]["n"] == 2
+    assert calls[0]["atmFocus"] == {"spot": 2.86, "strikes": 3}
+
+
+def test_implied_vol_iquant_atm_focus_opt_out(monkeypatch):
+    """显式 ``atmFocus: false`` 不收窄(离线复算全链 IV 曲线场景)。"""
+    calls: list = []
+    _install_chain_only_runner(monkeypatch, calls)
+    monkeypatch.setattr(iquant, "fetch_spot", lambda _u, _r: 2.86)
+    pricing.handle_implied_vol(
+        {
+            "source": "iquant",
+            "underlying": "510050",
+            "expiryMonth": "2609",
+            "rate": 0.02,
+            "priceField": "last",
+            "atmFocus": False,
+        }
+    )
+    assert "atmFocus" not in calls[0]
+
+
+def test_chain_iquant_passes_atm_focus_through(monkeypatch):
+    """chain 请求自带 atmFocus dict 时原样透传(不经 pricing 的缺省构造)。"""
+    calls: list = []
+    _install_chain_only_runner(monkeypatch, calls)
+    chain.handle_chain(
+        {
+            "source": "iquant",
+            "underlying": "510050",
+            "expiryMonth": "2609",
+            "atmFocus": {"spot": 2.9, "strikes": 2},
+        }
+    )
+    assert calls[0]["atmFocus"] == {"spot": 2.9, "strikes": 2}

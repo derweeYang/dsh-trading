@@ -125,11 +125,18 @@ class _PreheatStub:
         self.calls.append(f"ticker:{symbol}")
         if symbol in self.fail_symbols:
             raise RuntimeError("boom")
-        return {"symbol": symbol}
+        return {"symbol": symbol, "last": 3.1}
 
     def klines(self, symbol, interval="1d", limit=100):
         self.calls.append(f"klines:{symbol}:{interval}")
         return []
+
+    def handle_command(self, command, body):
+        self.calls.append(
+            f"chain:{body.get('underlying')}:{body.get('expiryMonth')}"
+            f"{':atm' if body.get('atmFocus') else ':full'}"
+        )
+        return {"calls": [], "puts": []}
 
 
 def test_preheat_symbols_env_override(monkeypatch):
@@ -160,3 +167,39 @@ def test_preheat_failure_per_symbol_is_one_line(monkeypatch, capsys):
     assert "[preheat] 510300.SH failed" in out
     assert "[preheat] 510050.SH ok" in out
     assert "[preheat] done in" in out
+
+
+def test_preheat_chains_atm_wave_before_full_wave(monkeypatch, capsys):
+    """链预热：每标的每月份先 atmFocus 波再全链波；月份钉死避免跨月跑测试漂移。"""
+    stub = _PreheatStub()
+    monkeypatch.setattr(gateway, "SERVICE", stub)
+    monkeypatch.setenv("IQUANT_QUOTE_PREHEAT_SYMBOLS", "510050.SH,159915.SZ")
+    monkeypatch.setattr(
+        gateway, "seasonal_focus_months", lambda now=None: ["2609", "2610"]
+    )
+    gateway.preheat()
+    chains = [call for call in stub.calls if call.startswith("chain:")]
+    assert chains == [
+        "chain:510050:2609:atm",
+        "chain:510050:2610:atm",
+        "chain:159915:2609:atm",
+        "chain:159915:2610:atm",
+        "chain:510050:2609:full",
+        "chain:510050:2610:full",
+        "chain:159915:2609:full",
+        "chain:159915:2610:full",
+    ]
+    out = capsys.readouterr().out
+    assert "[preheat] chain atm 510050.SH 2609 ok" in out
+    assert "[preheat] chain full 159915.SZ 2610 ok" in out
+
+
+def test_preheat_chains_skips_symbols_without_spot(monkeypatch, capsys):
+    """ticker 失败（无 spot）的标的不进链预热，其余照常。"""
+    stub = _PreheatStub(fail_symbols={"510050.SH"})
+    monkeypatch.setattr(gateway, "SERVICE", stub)
+    monkeypatch.setenv("IQUANT_QUOTE_PREHEAT_SYMBOLS", "510050.SH,159915.SZ")
+    monkeypatch.setattr(gateway, "seasonal_focus_months", lambda now=None: ["2609"])
+    gateway.preheat()
+    chains = [call for call in stub.calls if call.startswith("chain:")]
+    assert chains == ["chain:159915:2609:atm", "chain:159915:2609:full"]

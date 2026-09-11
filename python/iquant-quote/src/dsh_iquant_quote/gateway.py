@@ -12,8 +12,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from dsh_iquant_quote.errors import QuoteGatewayError
-from dsh_iquant_quote.live import LiveBackend
+from dsh_iquant_quote.live import LiveBackend, seasonal_focus_months
 from dsh_iquant_quote.service import QuoteService
+from dsh_iquant_quote.symbols import parse_symbol
 
 HOST = os.environ.get("IQUANT_QUOTE_GATEWAY_HOST", "127.0.0.1")
 PORT = int(os.environ.get("IQUANT_QUOTE_GATEWAY_PORT", "5810"))
@@ -156,16 +157,17 @@ class GatewayServer(ThreadingHTTPServer):
 
 
 def preheat_symbols() -> list[str]:
-    """预热标的清单：默认页面轮询的 ETF 自选，可用环境变量覆盖。"""
+    """预热标的清单：默认九标的期权页名册，可用环境变量覆盖。"""
     raw = os.environ.get(
         "IQUANT_QUOTE_PREHEAT_SYMBOLS",
-        "510050.SH,510300.SH,588000.SH,588080.SH,159901.SZ,159915.SZ,159919.SZ",
+        "510050.SH,510300.SH,510500.SH,588000.SH,588080.SH,"
+        "159901.SZ,159915.SZ,159919.SZ,159922.SZ",
     )
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def preheat() -> None:
-    """后台预热：login + SHO/SZO 合约表 + 常用标的 ticker/1m K 缓存。
+    """后台预热：login + SHO/SZO 合约表 + 常用标的 ticker/1m K 缓存 + 链日 K。
 
     尽力而为：任一步失败只记一行；跑在 daemon 线程，health 不等它。
     """
@@ -175,14 +177,69 @@ def preheat() -> None:
             SERVICE.instruments(market)
         except Exception as err:  # noqa: BLE001
             print(f"[preheat] instruments {market} failed: {err}", flush=True)
+    spots: dict[str, float] = {}
     for symbol in preheat_symbols():
         try:
-            SERVICE.ticker(symbol)
+            row = SERVICE.ticker(symbol)
+            last = float(row.get("last") or 0)
+            if last > 0:
+                spots[symbol] = last
             SERVICE.klines(symbol, "1m", 60)
             print(f"[preheat] {symbol} ok", flush=True)
         except Exception as err:  # noqa: BLE001
             print(f"[preheat] {symbol} failed: {err}", flush=True)
+    _preheat_chains(spots)
     print(f"[preheat] done in {time.monotonic() - started:.1f}s", flush=True)
+
+
+def _preheat_chains(spots: dict[str, float]) -> None:
+    """九标的 × 未过期近/次月链：先 ATM 波（保 overview 首屏），再全链波（保 T 板）。
+
+    盘外链快照靠逐合约日 K 回落，冷打一条全链 ~10s；不预热则网关重启后的
+    首屏 / T 板要现场冷打（2026-09-11 overview 慢诊断）。ATM 波每链仅 ~6 合约，
+    先跑完让 implied_vol 秒开；全链波排后面慢慢热。
+    """
+    months = seasonal_focus_months()
+    if not months or not spots:
+        return
+    plan = [(symbol, parse_symbol(symbol), spot) for symbol, spot in spots.items()]
+    for symbol, parsed, spot in plan:
+        if parsed.market not in ("SH", "SZ"):
+            continue
+        market = "SHO" if parsed.market == "SH" else "SZO"
+        for month in months:
+            try:
+                SERVICE.handle_command(
+                    "option_chain",
+                    {
+                        "market": market,
+                        "underlying": parsed.code,
+                        "expiryMonth": month,
+                        "atmFocus": {"spot": spot, "strikes": 3},
+                    },
+                )
+                print(f"[preheat] chain atm {symbol} {month} ok", flush=True)
+            except Exception as err:  # noqa: BLE001
+                print(f"[preheat] chain atm {symbol} {month} failed: {err}", flush=True)
+    for symbol, parsed, _spot in plan:
+        if parsed.market not in ("SH", "SZ"):
+            continue
+        market = "SHO" if parsed.market == "SH" else "SZO"
+        for month in months:
+            try:
+                SERVICE.handle_command(
+                    "option_chain",
+                    {
+                        "market": market,
+                        "underlying": parsed.code,
+                        "expiryMonth": month,
+                    },
+                )
+                print(f"[preheat] chain full {symbol} {month} ok", flush=True)
+            except Exception as err:  # noqa: BLE001
+                print(
+                    f"[preheat] chain full {symbol} {month} failed: {err}", flush=True
+                )
 
 
 def main() -> None:
