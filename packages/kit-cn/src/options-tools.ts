@@ -42,6 +42,24 @@ function resolveMarket(options: OptionToolOptions): MarketDataService | undefine
   return options.marketData ?? options.getMarketData?.()
 }
 
+/**
+ * 拉近月链：completeVerticalLegs 需要真实链行与报价。
+ * getOptionChain 必须带 expiryMonth（缺失即 throw）；曾因两处注入只传 underlying
+ * 导致所有 vertical 空 legs 推荐必然 no_quote（2026-09-11，4 条推荐 0 成交）。
+ */
+export async function fetchNearestChain(
+  service: CnOptionsService | undefined,
+  underlying: string,
+  nowMs: number,
+): Promise<OptionChain | undefined> {
+  if (service === undefined) return undefined
+  const calendar = await service.getOptionExpiries({ underlying })
+  const today = shanghaiCalendarDate(nowMs)
+  const month = calendar.months.find((row) => row.expiryDate >= today) ?? calendar.months[0]
+  if (month === undefined) return undefined
+  return await service.getOptionChain({ underlying, expiryMonth: month.expiryMonth })
+}
+
 function asSource(value: unknown): OptionSource | undefined {
   return value === 'synth' || value === 'akshare' || value === 'iquant' ? value : undefined
 }

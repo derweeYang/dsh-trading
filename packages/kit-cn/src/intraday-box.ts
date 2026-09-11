@@ -21,6 +21,10 @@ export const BOX_HORIZON_MIN = 5 as const
 export const BOX_VOLUME_SURGE = 1.5
 export const BOX_VOL_EXPAND = 1.8
 export const BOX_EDGE = 0.2
+/** 尾 bar 落后"应有位置"超过该值判 K 线停更（消费端第二道闸，网关侧另有 STALE_DATA）。 */
+export const KLINE_STALE_MS = 3.5 * 60_000
+/** ticker 与尾 1m close 的相对偏差超过该值时弃 ticker 腿（防日 K 回退值钉死箱体中心）。 */
+export const LAST_TOLERANCE = 0.005
 
 const TWIN: Readonly<Record<string, string>> = {
   '510300': '159919',
@@ -73,6 +77,41 @@ export function bareUnderlying(raw: string): string {
   const six = trimmed.match(/^(\d{6})/)
   if (six?.[1] !== undefined) return six[1]
   return trimmed.replace(/\.(SH|SZ)$/u, '')
+}
+
+/**
+ * 上海时区"此刻应已存在的最新 1m bar"的 open 时间（毫秒）。
+ * null = 无法预期（周末、09:31 之前），调用方跳过新鲜度校验；
+ * 午休回指 11:30、收盘后回指 15:00，差 1 根以内由 KLINE_STALE_MS 吸收。
+ */
+export function expectedLatestBarOpenMs(nowMs: number): number | null {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Shanghai',
+    weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(nowMs))
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
+  const weekday = get('weekday')
+  if (weekday === 'Sat' || weekday === 'Sun') return null
+  const year = Number(get('year'))
+  const month = Number(get('month'))
+  const day = Number(get('day'))
+  const hour = Number(get('hour'))
+  const minute = Number(get('minute'))
+  if (!Number.isFinite(year) || !Number.isFinite(hour) || !Number.isFinite(minute)) return null
+  const t = hour * 60 + minute
+  if (t < 9 * 60 + 31) return null
+  const expectedMinute = t > 15 * 60
+    ? 15 * 60
+    : t > 11 * 60 + 30 && t < 13 * 60 + 1 ? 11 * 60 + 30 : t
+  // 上海当日 0 点的 UTC 毫秒：按上海日期构造 UTC 0 点再回退 8 小时。
+  const midnightMs = Date.UTC(year, month - 1, day) - 8 * 3_600_000
+  return midnightMs + expectedMinute * 60_000
 }
 
 /** 名册去 SYNTH；underlying 空 / all = 全表；指定但未命中 = []。 */
@@ -169,8 +208,7 @@ export function buildIntradayBox(input: BuildIntradayBoxInput): OptionIntradayBo
 
   const ordered = [...input.klines].sort((a, b) => a.closeTime - b.closeTime).slice(-BOX_LOOKBACK)
   const lastClose = ordered[ordered.length - 1]?.close
-  const last = input.last ?? lastClose
-  if (ordered.length < BOX_SIGMA_BARS + 1 || last === undefined || last <= 0) {
+  if (ordered.length < BOX_SIGMA_BARS + 1 || lastClose === undefined || lastClose <= 0) {
     return {
       ...base,
       regime: 'no_trade',
@@ -178,6 +216,27 @@ export function buildIntradayBox(input: BuildIntradayBoxInput): OptionIntradayBo
       candidates: [],
     }
   }
+
+  // 停更保护（2026-09-11：厂商 1m 库停在 10:30，箱体被钉死 3 小时）：
+  // 尾 bar 落后应有位置超过容差即整行 no_trade，不编造箱体。
+  const latestOpen = ordered[ordered.length - 1]?.openTime
+  const expectedOpen = expectedLatestBarOpenMs(input.nowMs)
+  if (latestOpen !== undefined && expectedOpen !== null
+    && expectedOpen - latestOpen > KLINE_STALE_MS) {
+    return {
+      ...base,
+      regime: 'no_trade',
+      noTradeReason: 'stale_klines',
+      candidates: [],
+    }
+  }
+
+  // ticker 腿防钉死：与尾 1m close 偏差超容差时弃 ticker（ticker 失败会回退
+  // 日 K close，曾把早间 3.017 钉到午后 2.96 的行情上），以 klines 为准。
+  const last = input.last !== undefined
+    && Math.abs(input.last - lastClose) <= lastClose * LAST_TOLERANCE
+    ? input.last
+    : lastClose
 
   const closes = ordered.map((bar) => bar.close)
   const sigma30 = logReturnStdev(closes.slice(-(BOX_SIGMA_BARS + 1)))

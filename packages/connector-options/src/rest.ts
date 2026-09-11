@@ -265,6 +265,9 @@ export class OptionsRestClient implements CnOptionsService {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify(body),
+        // 网关侧单请求预算约 30s（history timeout 30s / chain 回退 8s）；
+        // 无超时的 fetch 会吊满 undici 默认 300s，拖死 paper 开仓路径。
+        signal: AbortSignal.timeout(30_000),
       })
     } catch (err) {
       throw new TradingServiceError(

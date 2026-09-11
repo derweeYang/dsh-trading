@@ -10,6 +10,7 @@ import {
   createGetOptionUnderlyingDailyTool,
   createGetOptionVolAnalyticsTool,
   createOptionParityCheckTool,
+  fetchNearestChain,
 } from '../src/options-tools.ts'
 
 function fakeService(chain: OptionChain): CnOptionsService {
@@ -536,5 +537,45 @@ describe('阶段 3 内核上桥：vol_analytics / underlying_daily / price / par
     expect(text).not.toContain('openTime')
     await expect(tool.execute({ underlying: '600519.SH', asOf }))
       .rejects.toThrow(/unknown underlying/)
+  })
+})
+
+describe('fetchNearestChain', () => {
+  const NOW = Date.parse('2026-09-11T02:30:00.000Z') // 上海 2026-09-11 10:30
+
+  function calendarService(months: Array<{ expiryMonth: string; expiryDate: string }>): {
+    service: CnOptionsService
+    chainQueries: Array<Record<string, unknown>>
+  } {
+    const chainQueries: Array<Record<string, unknown>> = []
+    const service: CnOptionsService = {
+      ...fakeService(emptyChain()),
+      getOptionExpiries: async () => ({ underlying: '510050', source: 'iquant', months }),
+      getOptionChain: async (query) => {
+        chainQueries.push(query as Record<string, unknown>)
+        return { ...emptyChain(), expiryMonth: query.expiryMonth ?? '' }
+      },
+    }
+    return { service, chainQueries }
+  }
+
+  it('选未到期的最近月并把 expiryMonth 传给 getOptionChain（不再缺参 throw）', async () => {
+    const { service, chainQueries } = calendarService([
+      { expiryMonth: '2609', expiryDate: '2026-09-23' },
+      { expiryMonth: '2610', expiryDate: '2026-10-28' },
+    ])
+    const chain = await fetchNearestChain(service, '510050', NOW)
+    expect(chain?.expiryMonth).toBe('2609')
+    expect(chainQueries[0]).toMatchObject({ underlying: '510050', expiryMonth: '2609' })
+  })
+
+  it('全部到期月已过期 → 回退第一个月；月份表空 → undefined；服务缺席 → undefined', async () => {
+    const stale = calendarService([{ expiryMonth: '2608', expiryDate: '2026-08-26' }])
+    expect((await fetchNearestChain(stale.service, '510050', NOW))?.expiryMonth).toBe('2608')
+
+    const empty = calendarService([])
+    expect(await fetchNearestChain(empty.service, '510050', NOW)).toBeUndefined()
+
+    expect(await fetchNearestChain(undefined, '510050', NOW)).toBeUndefined()
   })
 })

@@ -70,10 +70,11 @@ export interface PaperMarkQuote {
 export function quoteFillPriceWithSource(
   row: OptionQuoteRow & { bid?: number; ask?: number },
 ): PaperMarkQuote | undefined {
-  if (typeof row.last === 'number' && Number.isFinite(row.last) && row.last >= 0) {
+  // 正价才有效：iquant 链缺价合约回 last=0，0 价成交会伪造盈利。
+  if (typeof row.last === 'number' && Number.isFinite(row.last) && row.last > 0) {
     return { price: row.last, source: 'last' }
   }
-  if (typeof row.prevSettle === 'number' && Number.isFinite(row.prevSettle) && row.prevSettle >= 0) {
+  if (typeof row.prevSettle === 'number' && Number.isFinite(row.prevSettle) && row.prevSettle > 0) {
     return { price: row.prevSettle, source: 'prev_settle' }
   }
   return undefined

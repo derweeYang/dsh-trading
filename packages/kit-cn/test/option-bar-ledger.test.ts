@@ -244,6 +244,27 @@ describe('tagIvRegime / buildBarContextPacket', () => {
     })
     expect(packet.rows[0]?.volumeRatio).not.toBe(2.2)
   })
+
+  it('IV 离群值（2026-09-11 atmIv 4.46/0.43）不得触发 event_front/rich，packet 也不外吐', () => {
+    // 4.46 vs 次月正常值会被判 event_front——检疫后应回落 unknown
+    expect(tagIvRegime({ atmIv: 4.46, nextAtmIv: 0.2 })).toBe('unknown')
+    expect(tagIvRegime({ atmIv: 0.003, hv20: 0.2 })).toBe('unknown')
+    expect(tagIvRegime({ atmIv: 0.28, hv20: 0.18 })).toBe('rich')
+    const packet = buildBarContextPacket({
+      bucketStart: '2026-09-11T02:30:00.000Z',
+      asOf: '2026-09-11T02:30:04.000Z',
+      loop: { rows: [{ underlying: '588000', latest: { id: '588000:1', forecast: forecast() } }] },
+      factsByUnderlying: {
+        '588000': { underlying: '588000', atmIv: 4.8632, nextAtmIv: 0.4335, hv20: 0.1342 },
+      },
+    })
+    const row = packet.rows[0]
+    expect(row?.ivRegime).toBe('unknown')
+    // 检疫逐值：4.8632 被剔除，区间内的 nextAtmIv/hv20 保留。
+    expect(row?.atmIv).toBeUndefined()
+    expect(row?.nextAtmIv).toBe(0.4335)
+    expect(row?.hv20).toBe(0.1342)
+  })
 })
 
 describe('packets jsonl', () => {
@@ -367,11 +388,16 @@ describe('decideBarAgent', () => {
 })
 
 describe('shouldWriteDailyReview / foldDailyReview', () => {
-  it('close5 且文件不存在才写；第二次不写', () => {
-    expect(shouldWriteDailyReview('close5', false)).toBe(true)
-    expect(shouldWriteDailyReview('close5', true)).toBe(false)
-    expect(shouldWriteDailyReview('regular', false)).toBe(false)
-    expect(shouldWriteDailyReview('closed', false)).toBe(true)
+  it('盘收完（有尾盘桶）才写：close5 覆盖重写、盘后首写、午夜空档不写', () => {
+    expect(shouldWriteDailyReview({ session: 'close5', exists: false, hasClosedBuckets: true })).toBe(true)
+    // close5 允许覆盖重写：冲掉历史遗留的午夜空版
+    expect(shouldWriteDailyReview({ session: 'close5', exists: true, hasClosedBuckets: true })).toBe(true)
+    expect(shouldWriteDailyReview({ session: 'regular', exists: false, hasClosedBuckets: true })).toBe(false)
+    expect(shouldWriteDailyReview({ session: 'closed', exists: false, hasClosedBuckets: true })).toBe(true)
+    expect(shouldWriteDailyReview({ session: 'closed', exists: true, hasClosedBuckets: true })).toBe(false)
+    // 2026-09-11 事故形状：午夜跨日第一个 tick，session='closed' 但当日无盘中桶 → 不抢写
+    expect(shouldWriteDailyReview({ session: 'closed', exists: false, hasClosedBuckets: false })).toBe(false)
+    expect(shouldWriteDailyReview({ session: 'close5', exists: false, hasClosedBuckets: false })).toBe(false)
   })
 
   it('折叠含打分表与 overlap 计数，样本不足', () => {
@@ -399,6 +425,20 @@ describe('shouldWriteDailyReview / foldDailyReview', () => {
     expect(md).toContain('overlap: 1')
     expect(md).toContain('样本不足')
     expect(md).toContain('不构成投资建议')
+  })
+
+  it('paper skip（no_quote 等）计入跳过统计', () => {
+    const md = foldDailyReview({
+      date: '2026-09-11',
+      cycles: [],
+      recommendations: [],
+      fills: [
+        { bucketStart: '2026-09-11T02:30:00.000Z', reason: 'skipped', skip: 'no_quote' },
+        { bucketStart: '2026-09-11T02:50:00.000Z', reason: 'skipped', skip: 'no_quote' },
+        { bucketStart: '2026-09-11T03:00:00.000Z', reason: 'open', legs: [] },
+      ],
+    })
+    expect(md).toContain('paper no_quote: 2')
   })
 })
 

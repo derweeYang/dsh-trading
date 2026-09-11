@@ -40,6 +40,7 @@ import {
   createGetOptionUnderlyingDailyTool,
   createGetOptionVolAnalyticsTool,
   createOptionParityCheckTool,
+  fetchNearestChain,
 } from './options-tools.js'
 import type { CnOptionsService } from '@dshtrading/api'
 
@@ -261,7 +262,7 @@ export function apply(ctx: Context, config: Config): void {
     getMarketData: lookupMarket,
     getChain: async (underlying) => {
       try {
-        return await lookupOptions()?.getOptionChain({ underlying })
+        return await fetchNearestChain(lookupOptions(), underlying, Date.now())
       } catch {
         return undefined
       }

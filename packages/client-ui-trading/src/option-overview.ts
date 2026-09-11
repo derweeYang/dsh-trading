@@ -10,6 +10,7 @@ import type {
   OptionOverviewSort,
   Ticker,
 } from '@dshtrading/api'
+import { quarantineIv } from '@dshtrading/kit-cn'
 
 export const HV20_WINDOW = 20
 /** 日 K 根数：量能用近 20 根；HV20 需要 window+1 根收盘。 */
@@ -161,7 +162,7 @@ export function extractAtmIv(report: unknown): number | undefined {
       if (item === null || typeof item !== 'object') continue
       const row = item as Record<string, unknown>
       if (row.status !== 'ok') continue
-      const atm = finiteNumber(row.atmIv)
+      const atm = quarantineIv(finiteNumber(row.atmIv))
       if (atm !== undefined) return atm
     }
   }
@@ -182,7 +183,8 @@ export function extractAtmIv(report: unknown): number | undefined {
     Math.abs(row.strike - target) < Math.abs(best.strike - target) ? row : best).strike
   const atAtm = live.filter((row) => Math.abs(row.strike - atmStrike) < 1e-9).map((row) => row.iv)
   if (atAtm.length === 0) return undefined
-  return atAtm.reduce((sum, iv) => sum + iv, 0) / atAtm.length
+  // 年化 IV 合理区间外的均值（贴反解上界的离群报价）不外吐，见 kit-cn quarantineIv。
+  return quarantineIv(atAtm.reduce((sum, iv) => sum + iv, 0) / atAtm.length)
 }
 
 export function sortOverviewRows(

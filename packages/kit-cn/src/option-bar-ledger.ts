@@ -63,6 +63,17 @@ export const IV_PERCENTILE_HIGH = 0.8
 export const IV_PERCENTILE_LOW = 0.2
 export const IV_HV_RICH = 1.3
 export const IV_HV_CHEAP = 0.7
+/** 年化 IV/HV 合理区间：深度实值反解会贴 bsm 上界 5.0 收敛出 3~5 的离群值
+ * （2026-09-11 多标的 atmIv 3.76-4.89 被标成 event_front），区间外一律置空。 */
+export const IV_ABS_MIN = 0.01
+export const IV_ABS_MAX = 1.5
+
+export function quarantineIv(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined
+  return Number.isFinite(value) && value >= IV_ABS_MIN && value <= IV_ABS_MAX
+    ? value
+    : undefined
+}
 /** 近月 ATM / 次月 ATM ≥ 此值 → event_front（期限倒挂）。 */
 export const IV_EVENT_FRONT = 1.15
 
@@ -131,10 +142,10 @@ export function atmIvPercentile(
   currentIv: number,
   window = IV_PERCENTILE_WINDOW,
 ): number | undefined {
-  if (window < 2 || !Number.isFinite(currentIv)) return undefined
+  if (window < 2 || quarantineIv(currentIv) === undefined) return undefined
   const byDate = new Map<string, number>()
   for (const row of history) {
-    if (Number.isFinite(row.atmIv)) byDate.set(row.date, row.atmIv)
+    if (quarantineIv(row.atmIv) !== undefined) byDate.set(row.date, row.atmIv)
   }
   const values = [...byDate.entries()]
     .sort((left, right) => left[0].localeCompare(right[0]))
@@ -160,11 +171,12 @@ export function foldIvDaily(input: {
     map.set(`${row.date}:${row.underlying}`, row)
   }
   for (const row of input.packet.rows) {
-    if (row.atmIv === undefined || !Number.isFinite(row.atmIv)) continue
+    const atmIv = quarantineIv(row.atmIv)
+    if (atmIv === undefined) continue
     map.set(`${input.date}:${row.underlying}`, {
       date: input.date,
       underlying: row.underlying,
-      atmIv: row.atmIv,
+      atmIv,
       ...(row.hv20 === undefined ? {} : { hv20: row.hv20 }),
     })
   }
@@ -211,13 +223,14 @@ export function mergeReplayIvDaily(
     map.set(`${row.date}:${row.underlying}`, row)
   }
   for (const row of replay) {
-    if (row.atmIv === undefined || !Number.isFinite(row.atmIv)) continue
+    const atmIv = quarantineIv(row.atmIv)
+    if (atmIv === undefined) continue
     const key = `${row.date}:${row.underlying}`
     if (map.has(key)) continue
     map.set(key, {
       date: row.date,
       underlying: row.underlying,
-      atmIv: row.atmIv,
+      atmIv,
       ...(row.hv20 === undefined ? {} : { hv20: row.hv20 }),
     })
   }
@@ -277,8 +290,8 @@ export function tagIvRegime(input: {
   readonly nextAtmIv?: number
   readonly hv20?: number
 }): OptionIvRegime {
-  const atm = input.atmIv
-  const next = input.nextAtmIv
+  const atm = quarantineIv(input.atmIv)
+  const next = quarantineIv(input.nextAtmIv)
   if (
     atm !== undefined && next !== undefined
     && Number.isFinite(atm) && next > 0
@@ -292,7 +305,7 @@ export function tagIvRegime(input: {
     if (pct >= IV_PERCENTILE_HIGH) return 'rich'
     if (pct <= IV_PERCENTILE_LOW) return 'cheap'
   }
-  const hv = input.hv20
+  const hv = quarantineIv(input.hv20)
   if (atm !== undefined && hv !== undefined && Number.isFinite(atm) && hv > 0) {
     if (atm > IV_HV_RICH * hv) return 'rich'
     if (atm < IV_HV_CHEAP * hv) return 'cheap'
@@ -310,11 +323,15 @@ export function buildBarContextPacket(input: {
   for (const loopRow of input.loop.rows) {
     const forecast = loopRow.latest?.forecast
     const facts = input.factsByUnderlying?.[loopRow.underlying]
+    // IV/HV 入口检疫：离群值（贴反解上界的 3~5）不进 packet，LLM 只见干净值或缺失。
+    const atmIv = quarantineIv(facts?.atmIv)
+    const nextAtmIv = quarantineIv(facts?.nextAtmIv)
+    const hv20 = quarantineIv(facts?.hv20)
     const ivRegime = tagIvRegime({
       ...(facts?.ivPercentile === undefined ? {} : { ivPercentile: facts.ivPercentile }),
-      ...(facts?.atmIv === undefined ? {} : { atmIv: facts.atmIv }),
-      ...(facts?.nextAtmIv === undefined ? {} : { nextAtmIv: facts.nextAtmIv }),
-      ...(facts?.hv20 === undefined ? {} : { hv20: facts.hv20 }),
+      ...(atmIv === undefined ? {} : { atmIv }),
+      ...(nextAtmIv === undefined ? {} : { nextAtmIv }),
+      ...(hv20 === undefined ? {} : { hv20 }),
     })
     const templates = forecast?.candidates.map((item) => item.template) ?? []
     const invalidIf = forecast?.candidates[0]?.invalidIf
@@ -327,9 +344,9 @@ export function buildBarContextPacket(input: {
       ...(forecast?.boxLow === undefined ? {} : { boxLow: forecast.boxLow }),
       ...(forecast?.boxHigh === undefined ? {} : { boxHigh: forecast.boxHigh }),
       ...(invalidIf === undefined ? {} : { invalidIf }),
-      ...(facts?.atmIv === undefined ? {} : { atmIv: facts.atmIv }),
-      ...(facts?.nextAtmIv === undefined ? {} : { nextAtmIv: facts.nextAtmIv }),
-      ...(facts?.hv20 === undefined ? {} : { hv20: facts.hv20 }),
+      ...(atmIv === undefined ? {} : { atmIv }),
+      ...(nextAtmIv === undefined ? {} : { nextAtmIv }),
+      ...(hv20 === undefined ? {} : { hv20 }),
       ...(facts?.ivPercentile === undefined ? {} : { ivPercentile: facts.ivPercentile }),
       ...(facts?.return5d === undefined ? {} : { return5d: facts.return5d }),
       ...(facts?.volumeRatio === undefined ? {} : { volumeRatio: facts.volumeRatio }),
@@ -543,15 +560,26 @@ export function decideBarAgent(input: {
   return { action: 'launch', bucketStart }
 }
 
-export function shouldWriteDailyReview(session: OptionIntradaySession, exists: boolean): boolean {
-  if (exists) return false
-  return session === 'close5' || session === 'closed'
+export function shouldWriteDailyReview(input: {
+  session: OptionIntradaySession
+  exists: boolean
+  /** 当日 cycles 已出现尾盘桶（bucketStart >= 14:50）= 盘确实收完了。 */
+  hasClosedBuckets: boolean
+}): boolean {
+  // 只在盘收完后写：午夜跨日的第一个 tick session='closed' 但当日尚无盘中桶，
+  // 曾把复盘抢写成全 0 定格全天（2026-09-11 复盘 00:02 落盘，盘中 4 条推荐全被无视）。
+  if (!input.hasClosedBuckets) return false
+  // close5 允许覆盖重写：冲掉历史遗留的午夜空版。
+  if (input.session === 'close5') return true
+  return !input.exists && input.session === 'closed'
 }
 
 export function foldDailyReview(input: {
   date: string
   cycles: readonly OptionCycle[]
   recommendations: readonly OptionBarRecommendation[]
+  /** paper fills（含 skip 行）；缺省 = 不统计执行层跳过。 */
+  fills?: readonly { reason?: unknown; skip?: unknown }[]
 }): string {
   const latestCycles = latestByKey(input.cycles, (cycle) => cycle.id)
   const stats = new Map<string, { hit: number; miss: number; partial: number; skipped: number }>()
@@ -568,11 +596,16 @@ export function foldDailyReview(input: {
   const valid = recs.filter((row) => row.skipReason === undefined && !row.noTrade)
   const overlaps = recs.filter((row) => row.skipReason === 'overlap').length
   const failed = recs.filter((row) => row.skipReason === 'launch_failed').length
+  const paperSkips = new Map<string, number>()
+  for (const fill of input.fills ?? []) {
+    if (fill.reason !== 'skipped' || typeof fill.skip !== 'string') continue
+    paperSkips.set(fill.skip, (paperSkips.get(fill.skip) ?? 0) + 1)
+  }
   const scored = latestCycles.filter((cycle) => cycle.score !== undefined && cycle.score.verdict !== 'skipped').length
   const lines = [
     `# 复盘 · ${input.date} ETF 期权 5 分钟 K`,
     '',
-    '> 确定性汇总；无 LLM。数字只来自 cycles / recommendations jsonl。非投资建议。',
+    '> 确定性汇总；无 LLM。数字只来自 cycles / recommendations / paper fills jsonl。非投资建议。',
     '',
     '## 1. 各标的打分',
     '',
@@ -595,6 +628,9 @@ export function foldDailyReview(input: {
   lines.push('', '## 4. 跳过', '')
   lines.push(`- overlap: ${overlaps}`)
   lines.push(`- launch_failed: ${failed}`)
+  for (const [skip, count] of [...paperSkips.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    lines.push(`- paper ${skip}: ${count}`)
+  }
   lines.push('', '## 5. 明日剧本', '')
   lines.push(scored < 10 ? '- 样本不足（有效打分 < 10），只记不改 skill。' : '- 对照 miss 集中的 regime，至多改一条选场/否决。')
   lines.push('', '## 6. 免责', '')

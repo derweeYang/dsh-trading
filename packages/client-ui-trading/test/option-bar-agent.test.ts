@@ -3,13 +3,17 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { OptionBarRecommendation, OptionBarSessionEvent } from '@dshtrading/api'
-import { appendJsonlLine, optionSessionsPath, readJsonl, recommendationsPath, reviewsPath } from '@dshtrading/kit-cn'
+import { appendJsonlLine, cyclesPath, optionSessionsPath, readJsonl, recommendationsPath, reviewsPath } from '@dshtrading/kit-cn'
 import { SessionLaunchError, type ExecutionInspection } from '../src/tasks/runner.ts'
 import { createOpportunityLane, OptionBarAgentHost } from '../src/option-bar-agent.ts'
 
 const LUNCH = Date.parse('2026-09-08T03:25:00.000Z')
 const CLOSE5 = Date.parse('2026-09-08T06:55:00.000Z')
 const REGULAR = Date.parse('2026-09-08T01:45:12.000Z')
+// 上海 2026-09-09 00:05：午夜跨日第一个 tick，session='closed' 但当日无 cycles。
+const MIDNIGHT = Date.parse('2026-09-08T16:05:00.000Z')
+// 上海 15:10：盘后 closed。
+const AFTER_CLOSE = Date.parse('2026-09-08T07:10:00.000Z')
 
 describe('OptionBarAgentHost', () => {
   it('lunch 新桶写 session 桩且不 launch', async () => {
@@ -61,23 +65,79 @@ describe('OptionBarAgentHost', () => {
     expect(daily[0]).toMatchObject({ date: '2026-09-08', underlying: '510050', atmIv: 0.28, hv20: 0.18 })
   })
 
-  it('close5 写出复盘且第二次不覆盖', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'bar-agent-'))
+  it('盘收完（尾盘桶落盘）close5 写出复盘；午夜空档不抢写', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'bar-agent-rev-'))
+    // 尾盘桶（上海 14:50）已进 cycles = 盘确实收完了。
+    await appendJsonlLine(cyclesPath(dir, '2026-09-08'), {
+      id: '510050:1',
+      underlying: '510050',
+      bucketStart: '2026-09-08T06:50:00.000Z',
+      asOf: '2026-09-08T06:50:01.000Z',
+      calibration: 'none',
+    })
     const host = new OptionBarAgentHost({ dataRoot: () => dir })
     await host.afterTick({
       ticked: true,
       nowMs: CLOSE5,
       loop: { running: true, horizonMin: 5, lastBucket: '2026-09-08T06:55:00.000Z', rows: [] },
     })
-    const first = reviewsPath(dir, '2026-09-08')
-    const { readFile, writeFile } = await import('node:fs/promises')
-    await writeFile(first, 'KEEP\n', 'utf8')
+    const { readFile } = await import('node:fs/promises')
+    const first = await readFile(reviewsPath(dir, '2026-09-08'), 'utf8')
+    expect(first).toContain('复盘')
+
+    // 2026-09-11 事故形状：午夜跨日第一个 tick session='closed'，
+    // 当日 cycles 还没有尾盘桶 → 不抢写空版复盘。
+    const mid = await mkdtemp(path.join(os.tmpdir(), 'bar-agent-mid-'))
+    const host2 = new OptionBarAgentHost({ dataRoot: () => mid })
+    await host2.afterTick({
+      ticked: true,
+      nowMs: MIDNIGHT,
+      loop: { running: true, horizonMin: 5, lastBucket: '2026-09-08T16:05:00.000Z', rows: [] },
+    })
+    await expect(access(reviewsPath(mid, '2026-09-09'))).rejects.toThrow()
+  })
+
+  it('复盘已存在：close5 重写吸收新数据；closed 不覆盖', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'bar-agent-ovr-'))
+    await appendJsonlLine(cyclesPath(dir, '2026-09-08'), {
+      id: '510050:1',
+      underlying: '510050',
+      bucketStart: '2026-09-08T06:50:00.000Z',
+      asOf: '2026-09-08T06:50:01.000Z',
+      calibration: 'none',
+    })
+    const host = new OptionBarAgentHost({ dataRoot: () => dir })
     await host.afterTick({
       ticked: true,
       nowMs: CLOSE5,
       loop: { running: true, horizonMin: 5, lastBucket: '2026-09-08T06:55:00.000Z', rows: [] },
     })
-    expect(await readFile(first, 'utf8')).toBe('KEEP\n')
+    // close5 窗口内追加打分再 tick → 覆盖重写吸收最新 verdict。
+    await appendJsonlLine(cyclesPath(dir, '2026-09-08'), {
+      id: '510050:1',
+      underlying: '510050',
+      bucketStart: '2026-09-08T06:50:00.000Z',
+      asOf: '2026-09-08T06:58:01.000Z',
+      calibration: 'none',
+      score: { verdict: 'hit', barCount: 5 },
+    })
+    await host.afterTick({
+      ticked: true,
+      nowMs: CLOSE5 + 2 * 60_000,
+      loop: { running: true, horizonMin: 5, lastBucket: '2026-09-08T06:55:00.000Z', rows: [] },
+    })
+    const { readFile, writeFile } = await import('node:fs/promises')
+    const rewritten = await readFile(reviewsPath(dir, '2026-09-08'), 'utf8')
+    expect(rewritten).toContain('| 510050 | 1 | 0 | 0 | 0 |')
+
+    // 盘后（closed）已存在 → 保留既有版本，不覆盖。
+    await writeFile(reviewsPath(dir, '2026-09-08'), 'KEEP\n', 'utf8')
+    await host.afterTick({
+      ticked: true,
+      nowMs: AFTER_CLOSE,
+      loop: { running: true, horizonMin: 5, lastBucket: '2026-09-08T06:55:00.000Z', rows: [] },
+    })
+    expect(await readFile(reviewsPath(dir, '2026-09-08'), 'utf8')).toBe('KEEP\n')
   })
 
   it('regular 新桶 launch 且不写桩', async () => {

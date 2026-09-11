@@ -553,7 +553,7 @@ export interface OptionIntradayBoxRow {
   readonly regime: OptionIntradayRegime
   readonly bias?: OptionIntradayBias
   readonly session: OptionIntradaySession
-  readonly noTradeReason?: OptionIntradaySession | 'insufficient' | 'calibrated'
+  readonly noTradeReason?: OptionIntradaySession | 'insufficient' | 'calibrated' | 'stale_klines'
   readonly candidates: readonly OptionIntradayCandidate[]
 }
 

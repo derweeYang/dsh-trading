@@ -4,6 +4,7 @@ import {
   BOX_HORIZON_MIN,
   BOX_LOOKBACK,
   buildIntradayBox,
+  expectedLatestBarOpenMs,
   selectBoxTargets,
   sessionFlag,
   twinUnderlyingOf,
@@ -16,6 +17,12 @@ const CST_1128 = Date.parse('2026-09-08T03:28:00.000Z')
 const CST_1302 = Date.parse('2026-09-08T05:02:00.000Z')
 const CST_1457 = Date.parse('2026-09-08T06:57:00.000Z')
 const CST_2000 = Date.parse('2026-09-08T12:00:00.000Z')
+const CST_1120 = Date.parse('2026-09-08T03:20:00.000Z')
+const CST_1145 = Date.parse('2026-09-08T03:45:00.000Z')
+const CST_1530 = Date.parse('2026-09-08T07:30:00.000Z')
+const CST_0920 = Date.parse('2026-09-08T01:20:00.000Z')
+const CST_1310 = Date.parse('2026-09-08T05:10:00.000Z')
+const SAT_1030 = Date.parse('2026-09-12T02:30:00.000Z')
 
 function bars(opts: {
   count: number
@@ -211,5 +218,80 @@ describe('buildIntradayBox', () => {
     expect(row.regime).toBe('no_trade')
     expect(row.last).toBeUndefined()
     expect(row.sigma1).toBeUndefined()
+  })
+
+  it('尾 bar 落后应有位置超过容差（厂商停更）→ no_trade stale_klines，不编箱体', () => {
+    // 2026-09-11 事故形状：K 线窗停在 10:00，now 已 10:30
+    const row = buildIntradayBox({
+      underlying: '510050',
+      name: '华夏上证50ETF',
+      exchange: 'SSE',
+      klines: quietBars(CST_1030 - 30 * 60_000),
+      nowMs: CST_1030,
+    })
+    expect(row.regime).toBe('no_trade')
+    expect(row.noTradeReason).toBe('stale_klines')
+    expect(row.candidates).toEqual([])
+    expect(row.boxLow).toBeUndefined()
+    expect(row.last).toBeUndefined()
+  })
+
+  it('午后 regular 时尾 bar 停在上午（跨午休停更）→ no_trade stale_klines', () => {
+    // 13:10 回源但 K 线窗停在 11:20：上午停更一直延续到下午，必须拦截
+    const row = buildIntradayBox({
+      underlying: '510050',
+      name: '华夏上证50ETF',
+      exchange: 'SSE',
+      klines: quietBars(CST_1120),
+      nowMs: CST_1310,
+    })
+    expect(row.regime).toBe('no_trade')
+    expect(row.noTradeReason).toBe('stale_klines')
+  })
+
+  it('ticker 与尾 1m close 偏差超 0.5%（钉死的日 K 回退腿）→ 弃 ticker 用 close', () => {
+    // 2026-09-11 事故形状：ticker last=3.017 钉死，真实尾 close 2.96
+    const klines = bars({
+      count: BOX_LOOKBACK,
+      endMs: CST_1030,
+      close: () => 2.96,
+    })
+    const row = buildIntradayBox({
+      underlying: '510050',
+      name: '华夏上证50ETF',
+      exchange: 'SSE',
+      klines,
+      nowMs: CST_1030,
+      last: 3.017,
+    })
+    expect(row.last).toBe(2.96)
+    expect(row.regime).not.toBe('no_trade')
+  })
+
+  it('ticker 与尾 1m close 偏差在容差内 → 采纳 ticker', () => {
+    const klines = bars({
+      count: BOX_LOOKBACK,
+      endMs: CST_1030,
+      close: () => 2.96,
+    })
+    const row = buildIntradayBox({
+      underlying: '510050',
+      name: '华夏上证50ETF',
+      exchange: 'SSE',
+      klines,
+      nowMs: CST_1030,
+      last: 2.97,
+    })
+    expect(row.last).toBe(2.97)
+  })
+})
+
+describe('expectedLatestBarOpenMs', () => {
+  it('盘中=当前分钟；午休回指 11:30；收盘后回指 15:00；盘前/周末无法预期', () => {
+    expect(expectedLatestBarOpenMs(CST_1030)).toBe(Date.parse('2026-09-08T02:30:00.000Z'))
+    expect(expectedLatestBarOpenMs(CST_1145)).toBe(Date.parse('2026-09-08T03:30:00.000Z'))
+    expect(expectedLatestBarOpenMs(CST_1530)).toBe(Date.parse('2026-09-08T07:00:00.000Z'))
+    expect(expectedLatestBarOpenMs(CST_0920)).toBeNull()
+    expect(expectedLatestBarOpenMs(SAT_1030)).toBeNull()
   })
 })

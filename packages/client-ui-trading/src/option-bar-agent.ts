@@ -16,6 +16,8 @@ import {
   opportunityDecide,
   optionSessionsPath,
   packetsPath,
+  paperFillsPath,
+  fetchNearestChain,
   recommendationsPath,
   reviewsPath,
   sessionAt,
@@ -160,19 +162,28 @@ export class OptionBarAgentHost {
     const session = sessionAt(nowMs)
     const date = shanghaiCalendarDate(nowMs)
     const root = this.options.dataRoot()
+    // iv-daily 折叠幂等（每文件 last-wins），不受复盘抢写闸门约束。
+    if (session === 'close5' || session === 'closed') {
+      try {
+        await backfillIvDailyFromPackets(root)
+      } catch (error) {
+        this.options.log?.('option-bar iv-daily backfill failed', error)
+      }
+    }
     const reviewFile = reviewsPath(root, date)
-    const exists = await fileExists(reviewFile)
-    if (!shouldWriteDailyReview(session, exists)) return
     const cycles = await readJsonl<OptionCycle>(cyclesPath(root, date))
+    // 尾盘桶（上海 14:50 起）已落盘 = 盘收完了；午夜空档没有它，不抢写。
+    const closeThresholdMs = Date.parse(`${date}T06:50:00.000Z`)
+    const hasClosedBuckets = cycles.some(
+      (cycle) => Date.parse(cycle.bucketStart) >= closeThresholdMs,
+    )
+    const exists = await fileExists(reviewFile)
+    if (!shouldWriteDailyReview({ session, exists, hasClosedBuckets })) return
     const recommendations = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
-    const md = foldDailyReview({ date, cycles, recommendations })
+    const fills = await readJsonl<{ reason?: unknown; skip?: unknown }>(paperFillsPath(root, date))
+    const md = foldDailyReview({ date, cycles, recommendations, fills })
     await mkdir(path.dirname(reviewFile), { recursive: true })
     await writeFile(reviewFile, md, 'utf8')
-    try {
-      await backfillIvDailyFromPackets(root)
-    } catch (error) {
-      this.options.log?.('option-bar iv-daily backfill failed', error)
-    }
   }
 
   /** 兼容旧入口：单车道机会路径（无 Director）。 */
@@ -295,7 +306,7 @@ export class OptionBarAgentHost {
         nowIso: row.asOf,
         getChain: async (underlying) => {
           try {
-            return await this.options.getCnOptions?.()?.getOptionChain({ underlying })
+            return await fetchNearestChain(this.options.getCnOptions?.(), underlying, Date.now())
           } catch {
             return undefined
           }
