@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from dsh_iquant_quote.live import LiveBackend
 
 
@@ -90,11 +92,14 @@ def test_history_bars_matches_sdk_arity_and_callback():
 
 
 def test_klines_1m_uses_minute_period_ms():
+    # 1m klines 有停更闸门：注入盘中时钟，最新 bar 钉在同一分钟避免 STALE 误报。
+    now = datetime(2026, 9, 11, 10, 30, tzinfo=timezone(timedelta(hours=8)))
     backend = LiveBackend()
+    backend._now = lambda: now
     client = _FakeClient(
         [
             {
-                "timestamp_ms": 1,
+                "timestamp_ms": int(now.timestamp() * 1000),
                 "open": 1,
                 "high": 1,
                 "low": 1,
