@@ -6,7 +6,7 @@
  * （有会话 id 的运行中执行继续观察，无 id 的启动中断取消不重发）。所有定时器
  * 异常吞掉并记入 scheduler.error，绝不打断宿主进程。
  */
-import { TasksLedger, TaskActionError, type AppliedAction } from './ledger.ts'
+import { LedgerLockedError, TasksLedger, TaskActionError, type AppliedAction } from './ledger.ts'
 import {
   type TaskPermission,
   type TasksActionEnvelope,
@@ -24,6 +24,14 @@ export interface TasksMeta {
   sessionDefaultPermission: TaskPermission
   workspaces: Array<{ id: string; name?: string }>
   agentPresets: Array<{ id: string }>
+}
+
+export interface TasksAvailability {
+  available: boolean
+  writable: boolean
+  mode: 'exclusive' | 'readonly' | 'unavailable'
+  holderPid?: number
+  reason?: string
 }
 
 export interface TradingTasksServiceOptions {
@@ -63,11 +71,16 @@ export class TradingTasksService {
     this.options = options
     this.tickMs = options.tickMs ?? TICK_MS
     this.pollMs = options.pollMs ?? POLL_MS
-    // LedgerLockedError 直接上抛：桥层据此把任务面降级为 503（特性不挂，宿主照跑）。
-    this.ledger = new TasksLedger(options.ledgerPath, {
+    const ledgerOptions = {
       ...(options.sessionDefaultPermission === undefined ? {} : { sessionDefaultPermission: options.sessionDefaultPermission }),
       ...(options.now === undefined ? {} : { now: options.now }),
-    })
+    }
+    try {
+      this.ledger = new TasksLedger(options.ledgerPath, ledgerOptions)
+    } catch (error) {
+      if (!(error instanceof LedgerLockedError)) throw error
+      this.ledger = new TasksLedger(options.ledgerPath, { ...ledgerOptions, onLockConflict: 'readonly' })
+    }
     this.ledger.subscribe(() => { options.onEvent?.() })
     this.runner = new TasksRunner(
       options.gateway,
@@ -78,9 +91,32 @@ export class TradingTasksService {
 
   // ── 生命周期 ────────────────────────────────────────────────────────────
 
-  /** 启动对账 + 定时器（幂等；dispose 后拒绝）。 */
+  isAvailable(): boolean {
+    return !this.disposed
+  }
+
+  isWritable(): boolean {
+    return !this.disposed && this.ledger.mode === 'exclusive'
+  }
+
+  availability(): TasksAvailability {
+    if (this.disposed) {
+      return { available: false, writable: false, mode: 'unavailable', reason: 'disposed' }
+    }
+    return {
+      available: true,
+      writable: this.ledger.mode === 'exclusive',
+      mode: this.ledger.mode,
+      ...(this.ledger.holderPid === undefined ? {} : { holderPid: this.ledger.holderPid }),
+      ...(this.ledger.mode === 'readonly'
+        ? { reason: 'task ledger is locked by another live host; serving read-only' }
+        : {}),
+    }
+  }
+
+  /** 启动对账 + 定时器（幂等；dispose / 只读降级后拒绝）。 */
   start(): void {
-    if (this.disposed || this.timers.length > 0) return
+    if (this.disposed || this.timers.length > 0 || !this.isWritable()) return
     this.ledger.reconcileStartup()
     const tickTimer = setInterval(() => { void this.tick() }, this.tickMs)
     const pollTimer = setInterval(() => { void this.poll() }, this.pollMs)

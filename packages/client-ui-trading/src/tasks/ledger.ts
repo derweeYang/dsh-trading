@@ -206,11 +206,16 @@ export interface AppliedAction {
   openedRun?: { taskId: string; executionId: string; trigger: 'cron' | 'manual' }
 }
 
+export type LedgerLockConflict = 'throw' | 'readonly'
+export type TasksLedgerMode = 'exclusive' | 'readonly'
+
 export interface TasksLedgerOptions {
   /** 会话默认权限（确认门基准）；缺省 read-only。 */
   sessionDefaultPermission?: TaskPermission
   /** 可注入时钟（测试）。 */
   now?: () => number
+  /** 活锁冲突：抛错（默认）或降级只读。 */
+  onLockConflict?: LedgerLockConflict
 }
 
 export class TasksLedger {
@@ -220,18 +225,34 @@ export class TasksLedger {
   private readonly now: () => number
   private readonly sessionDefaultPermission: TaskPermission
   private disposed = false
+  private ownsLock = false
+  readonly mode: TasksLedgerMode
+  readonly holderPid: number | undefined
 
   constructor(readonly filePath: string, options: TasksLedgerOptions = {}) {
     this.lockPath = `${filePath}.lock`
     this.now = options.now ?? Date.now
     this.sessionDefaultPermission = options.sessionDefaultPermission ?? DEFAULT_SESSION_PERMISSION
-    this.acquireLock()
+    const conflictPid = this.tryAcquireLock()
+    if (conflictPid !== undefined) {
+      if (options.onLockConflict === 'readonly') {
+        this.mode = 'readonly'
+        this.holderPid = conflictPid
+        this.document = this.load()
+        return
+      }
+      throw new LedgerLockedError(conflictPid, this.lockPath)
+    }
+    this.mode = 'exclusive'
+    this.ownsLock = true
+    this.holderPid = process.pid
     this.document = this.load()
   }
 
   // ── 生命周期 ────────────────────────────────────────────────────────────
 
-  private acquireLock(): void {
+  /** 拿到锁返回 undefined；活锁返回持有者 pid。 */
+  private tryAcquireLock(): number | undefined {
     mkdirSync(dirname(this.filePath), { recursive: true })
     if (existsSync(this.lockPath)) {
       let holderPid = 0
@@ -241,12 +262,20 @@ export class TasksLedger {
         holderPid = 0
       }
       if (Number.isFinite(holderPid) && holderPid > 0 && processAlive(holderPid)) {
-        throw new LedgerLockedError(holderPid, this.lockPath)
+        return holderPid
       }
       // 持有者已死 → 接管。同进程双开（另一实例还活着）同样拒绝：两个实例各挂
       // 一套调度器是真实双写者场景，不豁免同 pid。
     }
     writeFileSync(this.lockPath, String(process.pid), { flag: 'w' })
+    return undefined
+  }
+
+  private assertWritable(): void {
+    if (this.disposed) throw new TaskActionError(503, 'TASKS_LEDGER_DISPOSED', 'task ledger is disposed')
+    if (this.mode === 'readonly') {
+      throw new TaskActionError(503, 'TASKS_LEDGER_READONLY', 'task ledger is read-only (locked by another live host)')
+    }
   }
 
   private load(): LedgerDocument {
@@ -301,6 +330,7 @@ export class TasksLedger {
   /** 释放目录锁（幂等；dispose 后其余方法拒绝工作）。 */
   dispose(): void {
     this.disposed = true
+    if (!this.ownsLock) return
     try {
       if (existsSync(this.lockPath)) unlinkSync(this.lockPath)
     } catch {
@@ -312,6 +342,7 @@ export class TasksLedger {
 
   /** 当前快照（深拷贝——调用方拿不到账本内部引用）。 */
   snapshot(): TasksSnapshot {
+    if (this.mode === 'readonly') this.document = this.load()
     return {
       schemaVersion: TASKS_SCHEMA_VERSION,
       revision: this.document.revision,
@@ -358,6 +389,7 @@ export class TasksLedger {
   // ── 写面（串行 + 原子持久化 + 修订广播） ────────────────────────────────
 
   private commit(next: LedgerDocument): void {
+    this.assertWritable()
     next.revision += 1
     next.recentRequests = next.recentRequests.slice(-MAX_REQUEST_CACHE)
     this.document = next
@@ -400,7 +432,7 @@ export class TasksLedger {
    * run 动作在账本内开执行记录，启动返回给服务层异步进行。
    */
   apply(envelope: TasksActionEnvelope): AppliedAction {
-    if (this.disposed) throw new TaskActionError(503, 'TASKS_LEDGER_DISPOSED', 'task ledger is disposed')
+    this.assertWritable()
     const fingerprint = fingerprintOf(envelope.action)
     const cached = this.document.recentRequests.find(item => item.requestId === envelope.requestId)
     if (cached !== undefined) {
@@ -484,7 +516,7 @@ export class TasksLedger {
    * 结算执行（同任务不并发）、权限门待确认（cron 与手动一致拒绝）。
    */
   openRun(taskId: string, trigger: 'cron' | 'manual'): { taskId: string; executionId: string } {
-    if (this.disposed) throw new TaskActionError(503, 'TASKS_LEDGER_DISPOSED', 'task ledger is disposed')
+    this.assertWritable()
     const next = JSON.parse(JSON.stringify(this.document)) as LedgerDocument
     const opened = this.openRunIn(next, taskId, trigger, this.now())
     if (opened === undefined) throw new TaskActionError(404, 'TASKS_NOT_FOUND', `task not found: ${taskId}`)

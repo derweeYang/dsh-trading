@@ -195,4 +195,28 @@ describe('TradingTasksService', () => {
       service.dispose()
     }
   })
+
+  it('账本锁冲突：构造不抛，可用性=只读，调度与写入关闭', () => {
+    const fake = makeGateway()
+    const ledgerPath = join(dir, 'shared.json')
+    const writer = new TradingTasksService({ ledgerPath, gateway: () => fake.gateway, tickMs: 1_000, pollMs: 500 })
+    const reader = new TradingTasksService({ ledgerPath, gateway: () => fake.gateway, tickMs: 1_000, pollMs: 500 })
+    try {
+      expect(writer.isAvailable()).toBe(true)
+      expect(writer.isWritable()).toBe(true)
+      expect(reader.isAvailable()).toBe(true)
+      expect(reader.isWritable()).toBe(false)
+      expect(reader.availability().mode).toBe('readonly')
+      expect(reader.availability().holderPid).toBe(process.pid)
+      expect(() => reader.apply({
+        requestId: 'x',
+        action: { kind: 'create', id: 't', input: { title: 'x', prompt: 'y' } },
+      } as never)).toThrowError(/read-only|readonly|locked|TASKS_/i)
+      reader.start()
+      expect(reader.snapshot().tasks).toEqual([])
+    } finally {
+      reader.dispose()
+      writer.dispose()
+    }
+  })
 })

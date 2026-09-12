@@ -32,9 +32,11 @@ import {
 } from './bridge.ts'
 import { attachEventStream } from './sse.ts'
 import { TaskActionError } from './tasks/ledger.ts'
+import { defaultTasksLedgerPath } from './tasks/paths.ts'
 import { registerTasksTools } from './tasks/tools.ts'
 import { TASKS_ACTION_BYTES_LIMIT, parseTasksEnvelope } from './client/tasks-protocol.ts'
 import { TradingTasksService } from './tasks/service.ts'
+import { describeOpenSettingsCapability, tryInvokeHostOpenSettings } from './shell-settings.ts'
 import { TasksRunner, type SessionCommandDispatcher, type SessionGateway } from './tasks/runner.ts'
 import { OptionBarAgentHost } from './option-bar-agent.ts'
 import { TraderDirectorHost } from './trader-director-host.ts'
@@ -211,7 +213,7 @@ export function apply(ctx: Context): void {
     let tasksService: TradingTasksService | undefined
     try {
       tasksService = new TradingTasksService({
-        ledgerPath: process.env.DSH_TRADING_TASKS_LEDGER ?? path.join(os.homedir(), '.dsh', 'trading-tasks', 'ledger-v1.json'),
+        ledgerPath: defaultTasksLedgerPath(process.env),
         gateway: () => resolveHostService('typertGateway') as SessionGateway | undefined,
         commands: () => resolveHostService('commands') as SessionCommandDispatcher | undefined,
         workspaces: () => resolveHostService('workspaceRegistry') as import('./tasks/service.ts').WorkspaceDirectoryLike | undefined,
@@ -312,6 +314,10 @@ export function apply(ctx: Context): void {
           if (req.method === 'PUT' || req.method === 'POST') {
             body = await readJsonBody(req)
           }
+          if (sub === '/shell/settings' || sub === '/shell/open-settings') {
+            handleShellSettingsRoute(resolveHostService, req, res, sub)
+            return
+          }
           // 定时任务子面（右侧栏）：独立账本与调度，行情桥不感知。
           if (sub === '/tasks' || sub.startsWith('/tasks/')) {
             await handleTasksRoute(tasks, req, res, sub, body)
@@ -357,9 +363,8 @@ export function apply(ctx: Context): void {
 }
 
 /**
- * 定时任务子面分发：GET /tasks（revision 快照）、GET /tasks/meta（确认门基准
- * + 工作区/预设名册）、POST /tasks/action（幂等动作信封，64KiB 封顶）。
- * 账本缺席（锁被夺/未挂）→ 503 降级，不影响行情桥。
+ * 定时任务子面分发：GET /tasks（revision 快照）、GET /tasks/availability、
+ * GET /tasks/meta、POST /tasks/action。锁冲突时服务仍在（只读）；完全缺席才 503。
  */
 async function handleTasksRoute(
   service: TradingTasksService | undefined,
@@ -368,6 +373,15 @@ async function handleTasksRoute(
   sub: string,
   body: unknown,
 ): Promise<void> {
+  if (req.method === 'GET' && sub === '/tasks/availability') {
+    sendJson(res, 200, service?.availability() ?? {
+      available: false,
+      writable: false,
+      mode: 'unavailable',
+      reason: 'task ledger is unavailable',
+    })
+    return
+  }
   if (service === undefined) {
     sendJson(res, 503, { ok: false, code: 'TASKS_UNAVAILABLE', message: 'task ledger is unavailable (locked by another live host?)' })
     return
@@ -402,6 +416,28 @@ async function handleTasksRoute(
     return
   }
   sendJson(res, 404, { ok: false, code: 'TASKS_ROUTE_NOT_FOUND', message: 'unknown tasks route: ' + sub })
+}
+
+function handleShellSettingsRoute(
+  resolveHostService: (name: string) => unknown,
+  req: IncomingMessage,
+  res: ServerResponse,
+  sub: string,
+): void {
+  const host = {
+    settings: resolveHostService('settings') as { open?: () => void } | undefined,
+    ui: resolveHostService('ui') as { openSettings?: () => void } | undefined,
+  }
+  if (req.method === 'GET' && sub === '/shell/settings') {
+    sendJson(res, 200, describeOpenSettingsCapability(host))
+    return
+  }
+  if (req.method === 'POST' && sub === '/shell/open-settings') {
+    const result = tryInvokeHostOpenSettings(host)
+    sendJson(res, result.ok ? 200 : 501, result)
+    return
+  }
+  sendJson(res, 404, { ok: false, code: 'SHELL_ROUTE_NOT_FOUND', message: 'unknown shell route: ' + sub })
 }
 
 /** JSON body 读取（PUT/POST 用；1MB 封顶，非法 JSON → 400 协议错误）。 */

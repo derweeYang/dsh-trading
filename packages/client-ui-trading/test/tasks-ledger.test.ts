@@ -108,6 +108,21 @@ describe('TasksLedger', () => {
     quarantined.dispose()
   })
 
+  it('目录锁：活锁默认可降级只读（不抛、不占锁、写入拒绝）', () => {
+    const pathA = join(env.dir, 'lock-ro.json')
+    const first = new TasksLedger(pathA, { now: () => T0 })
+    first.apply(createAction('locked-src') as never)
+    const second = new TasksLedger(pathA, { now: () => T0, onLockConflict: 'readonly' })
+    expect(second.mode).toBe('readonly')
+    expect(second.holderPid).toBe(process.pid)
+    expect(second.snapshot().tasks.some(item => item.id === 'locked-src')).toBe(true)
+    expect(() => second.apply(createAction('nope') as never)).toThrowError(/read-only|readonly|locked/i)
+    second.dispose()
+    // 只读实例 dispose 不得摘掉写者的锁。
+    expect(() => new TasksLedger(pathA, { now: () => T0, onLockConflict: 'throw' })).toThrowError(LedgerLockedError)
+    first.dispose()
+  })
+
   it('目录锁：活锁拒绝（报持有者 pid），死锁接管', () => {
     const pathA = join(env.dir, 'lock-a.json')
     const first = new TasksLedger(pathA, { now: () => T0 })

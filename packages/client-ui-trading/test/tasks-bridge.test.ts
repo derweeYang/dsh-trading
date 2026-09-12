@@ -113,4 +113,25 @@ describe('/dshtrading/api/tasks 子面', () => {
     expect(wire.tasks[0]?.id).toBe('task-1')
     expect(wire.tasks[0]?.schedule?.enabled).toBe(true)
   })
+
+  it('GET /tasks/availability 始终 200 并带 mode/writable', async () => {
+    const { ctx, registered: routes } = makeCtx()
+    apply(ctx)
+    const out = await request(routes[0], { url: '/dshtrading/api/tasks/availability' })
+    expect(out.status).toBe(200)
+    expect(JSON.parse(out.body)).toMatchObject({ available: true, writable: true, mode: 'exclusive' })
+  })
+
+  it('GET /shell/settings 暴露 openSettings 事件契约', async () => {
+    const { ctx, registered: routes } = makeCtx()
+    apply(ctx)
+    const out = await request(routes[0], { url: '/dshtrading/api/shell/settings' })
+    expect(out.status).toBe(200)
+    expect(JSON.parse(out.body)).toMatchObject({
+      ok: true,
+      event: 'dshtrading:open-settings',
+      capability: 'event',
+      upstreamGap: true,
+    })
+  })
 })

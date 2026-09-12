@@ -25,6 +25,6 @@ Status: implemented
 ## Consequences
 
 - 桌面端/trading-web profile 更新 `@dshtrading/client-ui-trading` 与 `@dshtrading/eventbus` 副本并重启实例后生效；账本落在 `~/.dsh/trading-tasks/ledger-v1.json`（0600，POSIX）。
-- 多宿主并发（桌面壳 + trading-web profile 同机同跑）：后启动的一方账本面降级 503（`TASKS_UNAVAILABLE`），行情桥不受影响——锁失败关闭是有意行为。
+- 多宿主并发（桌面壳 + trading-web profile 同机同跑）：后启动的一方账本面只读降级（`GET /tasks/availability`，写入 `TASKS_LEDGER_READONLY`），行情桥不受影响。锁仍单写者。后续按 profile 分目录见 [2026-09-12-tasks-ledger-availability-and-open-settings](../bug-fix/2026-09-12-tasks-ledger-availability-and-open-settings.md)。
 - 执行消耗 API 额度：定时任务是宿主行为，到点即建真实会话；高于会话默认权限的任务有确认门兜底，cron 不补跑漏掉的触发点。
 - 验证证据：包内 vitest 191 用例全绿（新增 28：cron 引擎 10 / 账本 10 / 调度编排 4 / 桥接线 4，含幂等、确认门、目录锁、损坏隔离、重启对账、假网关全链路），`pnpm build` 全仓绿，i18n 审计 OK（zh 761 键对齐）；UI 托管 HTTP + 无头 Chrome 截图另录。
