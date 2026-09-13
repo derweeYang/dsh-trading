@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import type { OptionChain } from '@dshtrading/api'
-import type { ArbitrageChain } from '../src/arbitrage/types.ts'
-import { parityMatrix, scanParityArbitrage } from '../src/arbitrage/parity.ts'
-import { scanBoxArbitrage } from '../src/arbitrage/box.ts'
+import type { ArbitrageChain, ArbitrageOpportunity } from '../src/arbitrage/types.ts'
+import { parityMatrix, paritySignedEdge, scanParityArbitrage } from '../src/arbitrage/parity.ts'
+import { boxSignedEdge, scanBoxArbitrage } from '../src/arbitrage/box.ts'
 import { buildVerticalSpread, scanVerticalSpreads } from '../src/arbitrage/vertical.ts'
 import { fromOptionChain } from '../src/arbitrage/adapter.ts'
 import { scanArbitrage } from '../src/arbitrage/index.ts'
@@ -154,5 +154,59 @@ describe('fromOptionChain（adapter，后端链路）', () => {
     const ops = scanArbitrage(fromOptionChain(wireChain({})), { asOf, threshold: 0.0001 })
     for (const op of ops) expect(op.executable).toBe(false)
     expect(ops.length).toBeGreaterThan(0)
+  })
+})
+
+/** 每行按 last ± halfSpread 挂真实盘口（mid=last，全部 executable）。 */
+function quoted(chain: ArbitrageChain, halfSpread: number): ArbitrageChain {
+  const map = (rows: readonly ArbitrageChain['calls'][number][]) => rows.map((r) => (
+    r.last === undefined ? r : { ...r, bid: r.last - halfSpread, ask: r.last + halfSpread }
+  ))
+  return { ...chain, calls: map(chain.calls), puts: map(chain.puts) }
+}
+
+describe('paritySignedEdge / boxSignedEdge（持仓监控签名边，2026-09-13 C2）', () => {
+  const parityDir = (op: ArbitrageOpportunity) =>
+    op.direction as 'buy_synthetic_sell_spot' | 'sell_synthetic_buy_spot'
+  const boxDir = (op: ArbitrageOpportunity) => op.direction as 'long_box' | 'short_box'
+
+  it.each([
+    ['无盘口（mid 近似）', () => fixture()],
+    ['全行真实盘口（executable）', () => quoted(fixture(), 0.001)],
+  ])('%s：与 scanArbitrage 同值同号，executable 传播一致', (_name, make) => {
+    const chain = make()
+    const ops = scanArbitrage(chain, { asOf, threshold: 0.0001 })
+    expect(ops.length).toBeGreaterThan(0)
+    for (const op of ops) {
+      const signed = op.kind === 'parity'
+        ? paritySignedEdge(chain, op.strike!, parityDir(op), { asOf })
+        : boxSignedEdge(chain, op.lowStrike!, op.highStrike!, boxDir(op), { asOf })
+      expect(signed).toBeDefined()
+      expect(signed!.edgePerShare).toBeCloseTo(op.edgePerShare, 10)
+      expect(signed!.executable).toBe(op.executable)
+    }
+  })
+
+  it('反向持仓的残余边为负（收敛/反转判据的符号语义）', () => {
+    // K=2.90 call_rich（deviation≈0.0084）：sell_synthetic 方向为正，反向为负。
+    const parityOp = scanParityArbitrage(fixture(), { asOf, threshold: 0.0001 })
+      .find((o) => o.strike === 2.9)
+    expect(parityOp?.direction).toBe('sell_synthetic_buy_spot')
+    const reverseParity = paritySignedEdge(fixture(), 2.9, 'buy_synthetic_sell_spot', { asOf })
+    expect(reverseParity!.edgePerShare).toBeLessThan(0)
+
+    // fixture 的正边是 long_box → short_box 反向为负（无盘口时两向互为相反数）。
+    const boxOp = scanBoxArbitrage(fixture(), { asOf, threshold: 0.0001 })[0]
+    expect(boxOp?.direction).toBe('long_box')
+    const reverseBox = boxSignedEdge(fixture(), boxOp!.lowStrike!, boxOp!.highStrike!, 'short_box', { asOf })
+    expect(reverseBox!.edgePerShare).toBeCloseTo(-boxOp!.edgePerShare, 10)
+  })
+
+  it('缺行 / 缺 spot / 缺到期 → undefined（调用方 hold 等下轮）', () => {
+    expect(paritySignedEdge(fixture(), 2.8, 'sell_synthetic_buy_spot', { asOf })).toBeUndefined()
+    expect(paritySignedEdge({ ...fixture(), spot: undefined }, 2.9, 'sell_synthetic_buy_spot', { asOf })).toBeUndefined()
+    expect(paritySignedEdge({ ...fixture(), expiryDate: undefined }, 2.9, 'sell_synthetic_buy_spot', { asOf })).toBeUndefined()
+    expect(boxSignedEdge(fixture(), 2.8, 2.9, 'long_box', { asOf })).toBeUndefined()
+    expect(boxSignedEdge({ ...fixture(), expiryDate: undefined }, 2.85, 2.9, 'long_box', { asOf })).toBeUndefined()
   })
 })
