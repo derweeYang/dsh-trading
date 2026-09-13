@@ -156,3 +156,63 @@ OptionOverviewLeg {
       既存用例不设置 `opportunities` → 该区块保持隐藏，不破坏）。
 - [ ] 已定价条目腿表与风险指标（净权利金/最大亏损/盈亏平衡）正确透传；未定价条目不出腿表、只出闸门提示。
 - [ ] i18n 审计 `node scripts/i18n-audit.mjs --check` 仍全绿（`options.detected.*` 已加齐中/英键值对与占位符）。
+
+---
+
+## 任务 #12 — 期权纸账户工作台（执行链路缺口可视化）（状态：done，2026-09-13）
+
+### 12.1 背景（为什么要做）
+
+2026-09-13 审计发现期权纸账户执行链路存在三个缺口，且页面完全看不到：
+
+- **缺口 A（记录缺口）**：2026-09-10 盘中 7 条 mean_reversion 候选（13:40–14:25 北京）
+  因执行器/落盘器当日 17:40 后才上线（bf7fbcb / 3a71f90），fills 无任何行——
+  「有候选、无 fill」的事后无法从 UI 发现。
+- **缺口 B（执行卡死）**：2026-09-11 4 条 direction_delta 候选全部 `skip:no_quote`
+  （链报价未预热，9d30ca7 修复后尚未经历交易日验证）。
+- **缺口 C（复盘失真）**：09-10/09-11 reviews md 是午夜 00:02/00:03 抢写空版
+  （9eb1d7d 已修），统计与 jsonl 实况不符；且 cycles 打分 verdict 全部 `skipped`
+  （闭环空转）在 md 里表现为全 0 表。
+
+纸账户三个既有端点（account/fills/reset）前端零消费，recommendations 无独立端点。
+
+### 12.2 契约（已实现）
+
+```
+GET /options/paper/desk?days=1..30（缺省 10，越界 400）
+OptionPaperDeskWire { ok, desk: OptionPaperDesk }
+OptionPaperDesk { account, equity, positions, days[], dayCount, recentFills[], asOf }
+OptionPaperDeskDay { date, candidates, filled, gapBuckets,
+                     skipReasons: Record, paperSkips: Record,
+                     verdicts { hit, partial, miss, skipped }, scored }
+```
+
+三态划分口径（与盘后复盘 md 同源，`dailyLedgerCore`）：
+- candidates = `latestByKey(recommendations, bucketStart)` 去重后 `!noTrade && !skipReason`
+- filled = fills 中 `offset=open && reason=signal && qty>0`（close 行复用开仓桶，不复计）
+- gapBuckets = 候选桶当日 fills 无任何 open 行（含 skip 桩）→ 记录缺口
+- verdicts = `latestByKey(cycles, id)` 去重后四象计数；空日（三账本全空）不出行
+
+### 12.3 实现位置
+
+- `packages/api/src/index.ts`：OptionPaperDesk/Day/Verdicts/Wire 四类型
+- `packages/kit-cn/src/option-bar-ledger.ts`：`dailyLedgerCore`（foldDailyReview 重构抽取，
+  md 输出逐字节不变）；`foldPaperDeskDay` / `loadPaperDesk`（三目录日期并集、坏日跳过、
+  recentFills 跨日 asOf 降序截 50）
+- `packages/client-ui-trading/src/bridge.ts`：`optionPaperDesk()` + 路由
+  （equity 复用 `optionPaperAccount()` 盯市，零持仓零链调用）
+- `packages/client-ui-trading/src/client/`：`OptionsPaperDesk.tsx`（账户条 + 日级表 +
+  近期流水；**空数据不隐藏**）+ `options-paper-desk.module.css` + MiddleView 30s 轮询接线
+  （不进 P2-8 sourceProbes）+ i18n `options.desk.*` 37 键（zh/en）
+
+### 12.4 验收证据
+
+- [x] `pnpm --filter @dshtrading/kit-cn test`：171 passed（含 foldDailyReview 字节不变回归锁
+      + foldPaperDeskDay 三态 + loadPaperDesk 空日剔除/坏日跳过）
+- [x] `pnpm --filter @dshtrading/client-ui-trading test`：509 passed（bridge desk 用例
+      gap/no_quote/400 三断言 + options-paper-desk.smoke 3 用例：空数据不隐藏锁）
+- [x] `node scripts/i18n-audit.mjs --check`：OK（1273 zh keys 对齐）
+- [x] `node scripts/typecheck-gate.mjs`：与主仓基底持平（基底基线过时为已知存量债，
+      本任务零新增；worktree 与主仓错误数逐 tsconfig 相同）
+- [ ] 2026-09-14（周一）开盘后页面复核：日级表 09-10 行 candidates=7/filled=0/gap=7、
+      09-11 行 paperSkips.no_quote=4，与审计数字一致

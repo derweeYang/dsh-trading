@@ -14,7 +14,7 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionArbitrageScanResult, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink, OptionPrediction, OptionPredictionAutoSettleResult, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft, OptionPredictionSettle, PredictionKnowledgeItem, MarketExpectation, VolExpectation, PredictionBias } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionArbitrageScanResult, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperDeskWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink, OptionPrediction, OptionPredictionAutoSettleResult, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft, OptionPredictionSettle, PredictionKnowledgeItem, MarketExpectation, VolExpectation, PredictionBias } from '@dshtrading/api'
 import { OPTION_PAPER_FEE_PER_CONTRACT } from '@dshtrading/api'
 import {
   OVERVIEW_KLINE_LIMIT,
@@ -50,6 +50,9 @@ import {
   loadOverviewSnapshot,
   writeOverviewSnapshot,
   loadPaperState,
+  loadPaperDesk,
+  PAPER_DESK_DEFAULT_DAYS,
+  PAPER_DESK_MAX_DAYS,
   OptionCycleBook,
   OPTION_MULTIPLIER,
   readJsonl,
@@ -1713,6 +1716,29 @@ export class TradingBridge {
     return await this.optionPaperAccount()
   }
 
+  /** 纸账户工作台：近 N 日执行链路统计 + 账户快照 + 跨日流水（诊断"有候选无成交"缺口）。 */
+  async optionPaperDesk(daysRaw?: string): Promise<OptionPaperDeskWire> {
+    const days = daysRaw === undefined || daysRaw.trim() === '' ? PAPER_DESK_DEFAULT_DAYS : Number(daysRaw)
+    if (!Number.isInteger(days) || days <= 0 || days > PAPER_DESK_MAX_DAYS) {
+      throw new BridgeProtocolError(400, 'options paper desk: days must be an integer in 1..30')
+    }
+    const nowMs = Date.now()
+    const ledger = await loadPaperDesk(optionsDataRoot(), days)
+    const { account, equity, positions } = await this.optionPaperAccount()
+    return {
+      ok: true,
+      desk: {
+        account,
+        equity,
+        positions,
+        days: ledger.days,
+        dayCount: ledger.dayCount,
+        recentFills: ledger.recentFills,
+        asOf: new Date(nowMs).toISOString(),
+      },
+    }
+  }
+
   #paperMarkLookup(): (code: string, side: 'buy' | 'sell') => Promise<PaperMarkQuote | undefined> {
     const service = this.host.getCnOptions?.()
     const chains = new Map<string, Promise<OptionChain | undefined>>()
@@ -2809,6 +2835,9 @@ export async function dispatchBridgeRequest(
       }
       case '/options/paper/fills': {
         return { status: 200, payload: await bridge.optionPaperFills(search.get('limit') ?? undefined) }
+      }
+      case '/options/paper/desk': {
+        return { status: 200, payload: await bridge.optionPaperDesk(search.get('days') ?? undefined) }
       }
       case '/options/overview': {
         return {
