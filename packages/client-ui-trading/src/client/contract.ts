@@ -983,6 +983,25 @@ export type MarketLocaleKey =
   | 'tasks.exec.trigger.cron'
   | 'tasks.exec.trigger.manual'
   | 'tasks.exec.openSession'
+  /* WB-14 detected option opportunities (5-min bucket detection ledger aggregated by backend; read-only display) */
+  | 'options.detected.title'
+  | 'options.detected.hint'
+  | 'options.detected.edge'
+  | 'options.detected.logic'
+  | 'options.detected.playbook'
+  | 'options.detected.invalid'
+  | 'options.detected.disclaimer'
+  | 'options.detected.expandMore'
+  | 'options.detected.collapse'
+  | 'options.detected.bucket'
+  | 'options.detected.sell'
+  | 'options.detected.buy'
+  | 'options.detected.struct'
+  | 'options.detected.netCredit'
+  | 'options.detected.maxLoss'
+  | 'options.detected.breakeven'
+  | 'options.detected.legs'
+  | 'options.detected.unpriced'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {

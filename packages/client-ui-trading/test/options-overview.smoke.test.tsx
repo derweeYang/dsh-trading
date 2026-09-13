@@ -16,6 +16,7 @@ import { OptionsOverview } from '../src/client/OptionsOverview.tsx'
 import { OptionsCycleLoop } from '../src/client/OptionsCycleLoop.tsx'
 import { SCAN_ALL } from '../src/client/scan-feedback.ts'
 import type { MarketLocaleKey } from '../src/client/contract.ts'
+import type { DetectedOpportunity } from '../src/client/OptionsDetectedOpportunities.tsx'
 
 /** key 直出翻译（断言用 key 而非文案，与词典解耦）。 */
 const t = (key: MarketLocaleKey, _params?: Record<string, unknown>): string => key
@@ -594,5 +595,73 @@ describe('OptionsCycleLoop — WB-12 定时桶 packet 对齐', () => {
     expect(container.textContent).toContain('options.loop.volumeRatioDaily')
     expect(container.textContent).toContain('1.50')
     expect(container.textContent).toContain('0.80')
+  })
+})
+
+describe('OptionsOverview — WB-14 检测到的期权机会（后端 overview.opportunities）', () => {
+  // 视图模型夹具：一条已定价（带腿表）、一条未定价（闸门提示）。文案以 key 出（t 直出），
+  // 数据字段（status / code）以原文出——与运行时 JSON 行为一致。
+  const DETECTED = [
+    {
+      id: '2026-09-10T06:00:00Z-588000',
+      date: '2026-09-10',
+      bucketStartUtc: '2026-09-10T06:00:00.000Z',
+      bucketStartCst: '2026-09-10 14:00:00',
+      session: 'regular',
+      opportunity: 'mean_reversion',
+      opportunityLabel: '均值回归（收反转溢价）',
+      noTrade: false,
+      underlyings: ['588000'],
+      picks: [{
+        underlying: '588000', regime: 'mean_revert', regimeLabel: '反转', template: 'vertical',
+        structure: 'bear_call_credit', expiryMonth: '2609', expiryDate: '2026-09-23', maxContracts: 10,
+        legs: [
+          { code: '588000C2609M01700', side: 'sell', optionType: 'C', strike: 1.7, last: 0.0566, prevSettle: 0.0475 },
+          { code: '588000C2609M01750', side: 'buy', optionType: 'C', strike: 1.75, last: 0.0348, prevSettle: 0.0309 },
+        ],
+        netCreditCnyPerSpread: 218, maxLossCnyPerSpread: 282, breakevenAtExpiry: 1.7218,
+        verification: null, quoteSource: 'test', status: '已定价',
+      }],
+      edgeZh: 'E', logicZh: 'L', playbookZh: 'P', invalidIfZh: 'I',
+    },
+    {
+      id: '2026-09-10T05:50:00Z-510050',
+      date: '2026-09-10',
+      bucketStartUtc: '2026-09-10T05:50:00.000Z',
+      bucketStartCst: '2026-09-10 13:50:00',
+      session: 'regular',
+      opportunity: 'mean_reversion',
+      opportunityLabel: '均值回归（收反转溢价）',
+      noTrade: false,
+      underlyings: ['510050'],
+      picks: [{
+        underlying: '510050', regime: 'mean_revert', regimeLabel: '反转', template: 'vertical',
+        structure: null, expiryMonth: null, expiryDate: null, maxContracts: null,
+        legs: [], netCreditCnyPerSpread: null, maxLossCnyPerSpread: null, breakevenAtExpiry: null,
+        verification: null, quoteSource: null, status: '已识别·未定价',
+      }],
+      edgeZh: 'E2', logicZh: 'L2', playbookZh: 'P2', invalidIfZh: 'I2',
+    },
+  ] as unknown as DetectedOpportunity[]
+
+  it('后端未给 opportunities → 检测区整体不渲染（不整页空白）', () => {
+    const { queryByText } = renderOverview()
+    expect(queryByText('options.detected.title')).toBeNull()
+  })
+
+  it('后端给 opportunities → 渲染检测区、定价腿表与未定价闸门提示', () => {
+    const { container, getByText } = renderOverview({
+      overview: { ...OVERVIEW, opportunities: DETECTED } as unknown as OptionOverview,
+    })
+    // 区标题（i18n 键直出）
+    expect(getByText('options.detected.title')).not.toBeNull()
+    // 已定价标的：腿表 code + 状态徽章原文
+    expect(getByText('588000C2609M01700')).not.toBeNull()
+    expect(getByText('已定价')).not.toBeNull()
+    // 未定价标的：闸门提示键（不编造价位）
+    expect(getByText('options.detected.unpriced')).not.toBeNull()
+    // 腿表「腿」标签仅已定价标的出现一次（未定价出闸门提示而非腿表）
+    const legsOccurrences = container.textContent?.split('options.detected.legs').length ?? 0
+    expect(legsOccurrences).toBe(2) // split 成 2 段 = 出现 1 次
   })
 })
