@@ -1,0 +1,108 @@
+/* OptionsArbitrageTable —— T 板内套利机会表（2026-09-13 WB-13）。
+   token 与 options-stage.module.css 同族（--dsw-futu-*）。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  padding-top: 8px;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.notice {
+  font-size: 12px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  padding: 6px 0;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+.table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--dsw-futu-text-secondary, #4a5060);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+}
+
+.table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--dsw-futu-border-subtle, #f0f1f4);
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  white-space: nowrap;
+}
+
+.edge {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--dsw-futu-up, #e0392b);
+}
+
+.debit {
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.credit {
+  color: var(--dsw-futu-down, #1a9e5a);
+}
+
+.table td[data-exec='yes'] {
+  color: var(--dsw-futu-down, #1a9e5a);
+}
+
+.table td[data-exec='no'] {
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.theory {
+  font-size: 11px;
+  color: var(--dsw-futu-warning, #e6a23c);
+}
+
+.verticalHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.verticalTitle {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--dsw-futu-text-secondary, #4a5060);
+}
+
+.ghostBtn {
+  appearance: none;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  background: transparent;
+  color: var(--dsw-futu-accent, #3b82f6);
+  border-radius: 6px;
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}

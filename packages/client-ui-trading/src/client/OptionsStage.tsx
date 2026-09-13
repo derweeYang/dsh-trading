@@ -36,6 +36,7 @@ import { usePoll } from './usePoll.ts'
 import { REGIME_KEY, SESSION_REASON_KEY, TEMPLATE_KEY } from './option-vocabulary.ts'
 import { scanLabelKey, type ScanPhase } from './scan-feedback.ts'
 import { StrategyPreview } from './StrategyPreview.tsx'
+import { OptionsArbitrageTable } from './OptionsArbitrageTable.tsx'
 import css from './options-stage.module.css'
 
 export type OptionsStageTranslate = (key: MarketLocaleKey, params?: Record<string, unknown>) => string
@@ -389,7 +390,7 @@ export function OptionsStage({
                 ? <div className={css.notice}>{t('options.empty')}</div>
                 : (
                   <div className={css.tableWrap}>
-                    <table className={css.table}>
+                    <table className={css.table} data-dshtrading-options-t-table="">
                       <thead>
                         <tr>
                           <th colSpan={4} className={css.sideHead}>{t('options.calls')}</th>
@@ -471,6 +472,11 @@ export function OptionsStage({
                     </table>
                   </div>
                 )}
+
+      {/* WB-13：套利机会表（T 板内浏览器内 scanArbitrage；仅链就绪且有合约时渲染）。 */}
+      {chain !== null && strikes.length > 0 && (
+        <OptionsArbitrageTable t={t} chain={chain} multiplier={multiplier} />
+      )}
 
       {/* 下单面板（选中合约后出现；阶段 3 交易面） */}
       {selectedLeg !== null && (

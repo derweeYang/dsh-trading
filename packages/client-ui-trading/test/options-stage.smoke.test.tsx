@@ -79,14 +79,17 @@ describe('OptionsStage', () => {
     expect(getByText('options.strike')).toBeTruthy()
     expect(getByText('options.puts')).toBeTruthy()
     // 行权价升序两档（认沽只在 2.85 挂出 → 2.90 行认购侧有值、认沽侧为 —）
-    const rows = container.querySelectorAll('tbody tr')
+    // 只数 T 板表（data-dshtrading-options-t-table），避免把 WB-13 套利机会表也数进来。
+    const tTable = container.querySelector('[data-dshtrading-options-t-table]')
+    expect(tTable).toBeTruthy()
+    const rows = tTable!.querySelectorAll('tbody tr')
     expect(rows.length).toBe(2)
     // 行权价列（第 5 列）升序；按列取而非 getByText——标的现价格式化后可能与档位同文案。
-    const strikes = Array.from(container.querySelectorAll('tbody tr td:nth-child(5)')).map(td => td.textContent)
+    const strikes = Array.from(tTable!.querySelectorAll('tbody tr td:nth-child(5)')).map(td => td.textContent)
     expect(strikes).toEqual(['2.85', '2.90'])
     // 最新价（第 4 列认购 / 第 6 列认沽）：期权价格 4 位小数（priceDigits <1 规则）；
     // IV 是小数 sigma → 百分比（0.2 → +20.00%）。
-    const firstRow = container.querySelector('tbody tr:nth-child(1)')
+    const firstRow = tTable!.querySelector('tbody tr:nth-child(1)')
     expect(firstRow?.querySelector('td:nth-child(4)')?.textContent).toBe('0.1200')
     expect(firstRow?.querySelector('td:nth-child(6)')?.textContent).toBe('0.0800')
     expect(getByText('+20.00%')).toBeTruthy()
