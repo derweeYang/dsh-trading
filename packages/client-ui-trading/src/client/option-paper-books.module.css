@@ -1,0 +1,348 @@
+/* OptionPaperBooks —— 资产面板「期权账户」页签（2026-09-13 WB-15）。
+ *
+ * 配色全部走 tokens.css 的 --dsw-futu-* 双主题令牌；语义琥珀/绿沿用宿主
+ * HoldingsPanel 的 --hp-* 局部变量（本组件挂在其 .root 之下，直接继承，
+ * 不在本文件重复定义，避免两处取值漂移）。
+ *
+ * 版式沿用面板语言：窄列（约 380px）内不铺宽表，改用「卡 + 两行 meta」；
+ * 表头语义由 meta 行的字段前缀文案承担，测试用 data-opt-paper-* 钩子断言。
+ * 方向语义（涨跌）不写死色值——文字色由 TSX directionColor 注入。
+ */
+
+.root {
+  padding: 10px 12px 16px;
+}
+
+.hint {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--dsw-futu-text-muted);
+  margin-bottom: 9px;
+}
+
+.errorRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  margin-bottom: 9px;
+  border: 1px solid var(--hp-error);
+  border-radius: var(--dsw-futu-radius-md);
+  background: var(--hp-amber-bg);
+  color: var(--hp-error);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* ── 账本卡 ───────────────────────────────────────────── */
+
+.bookCard {
+  border: 1px solid var(--dsw-futu-border-subtle);
+  border-radius: var(--dsw-futu-radius-md);
+  background: var(--dsw-futu-bg-base);
+  padding: 9px 11px 10px;
+  margin-bottom: 10px;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.bookCard:hover {
+  border-color: var(--dsw-futu-border-default);
+  box-shadow: var(--dsw-futu-shadow-sm);
+}
+
+.bookHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.headSpacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.bookName {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--dsw-futu-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookBadge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--dsw-futu-radius-pill);
+  background: var(--dsw-futu-accent-subtle);
+  color: var(--dsw-futu-accent-text);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  margin: 8px 0 2px;
+  padding: 8px 0 0;
+  border-top: 1px dashed var(--dsw-futu-border-subtle);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.metricLabel {
+  font-size: 9.5px;
+  color: var(--dsw-futu-text-muted);
+}
+
+.metricValue {
+  font-family: var(--dsw-futu-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--dsw-futu-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookEmpty {
+  margin-top: 8px;
+  font-size: 10.5px;
+  color: var(--dsw-futu-text-muted);
+}
+
+/* ── 持仓卡 ───────────────────────────────────────────── */
+
+.posRow {
+  margin-top: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--dsw-futu-border-subtle);
+  border-radius: var(--dsw-futu-radius-sm);
+  background: var(--dsw-futu-bg-surface);
+}
+
+.posRowHead {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.caretBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: var(--dsw-futu-radius-xs);
+  background: transparent;
+  color: var(--dsw-futu-text-muted);
+  cursor: pointer;
+}
+
+.caretBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.caret {
+  display: inline-flex;
+  transition: transform 0.16s ease;
+}
+
+.caret[data-expanded='true'] {
+  transform: rotate(90deg);
+}
+
+.posSymbol {
+  font-family: var(--dsw-futu-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--dsw-futu-text-primary);
+}
+
+.tag {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: var(--dsw-futu-radius-pill);
+  background: var(--dsw-futu-bg-surface-hover);
+  color: var(--dsw-futu-text-secondary);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.tagMono {
+  flex: none;
+  font-family: var(--dsw-futu-font-mono);
+  font-size: 9.5px;
+  color: var(--dsw-futu-text-muted);
+}
+
+.expiringBadge {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--hp-amber-border);
+  border-radius: var(--dsw-futu-radius-pill);
+  background: var(--hp-amber-bg);
+  color: var(--hp-amber);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.posMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  row-gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--dsw-futu-text-muted);
+}
+
+.num {
+  font-family: var(--dsw-futu-font-mono);
+  font-weight: 600;
+  color: var(--dsw-futu-text-secondary);
+}
+
+.invalidIf {
+  width: 100%;
+  font-size: 9.5px;
+  color: var(--dsw-futu-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 腿明细 ───────────────────────────────────────────── */
+
+.legList {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--dsw-futu-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.legRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-family: var(--dsw-futu-font-mono);
+  min-width: 0;
+}
+
+.sidePill {
+  flex: none;
+  padding: 0 5px;
+  border-radius: var(--dsw-futu-radius-pill);
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.legCode {
+  color: var(--dsw-futu-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legSpacer {
+  flex: 1;
+  min-width: 6px;
+}
+
+.legUnit {
+  color: var(--dsw-futu-text-muted);
+}
+
+/* ── 成交流水 ─────────────────────────────────────────── */
+
+.fillRow {
+  padding: 8px 9px;
+  border: 1px solid var(--dsw-futu-border-subtle);
+  border-radius: var(--dsw-futu-radius-sm);
+  background: var(--dsw-futu-bg-surface);
+  margin-bottom: 7px;
+}
+
+.fillHead {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.timeCell {
+  font-family: var(--dsw-futu-font-mono);
+  font-size: 10px;
+  color: var(--dsw-futu-text-muted);
+  flex: none;
+}
+
+.fillUnderlying {
+  font-family: var(--dsw-futu-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--dsw-futu-text-primary);
+}
+
+/* reason 徽标：按事件分档着色，与价格涨跌色板解耦（建仓不是「涨」）。 */
+.reasonBadge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--dsw-futu-radius-pill);
+  border: 1px solid var(--dsw-futu-border-default);
+  background: var(--dsw-futu-bg-surface-hover);
+  color: var(--dsw-futu-text-secondary);
+  font-size: 9.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.reasonBadge[data-reason-kind='open'] {
+  border-color: var(--dsw-futu-accent-border);
+  background: var(--dsw-futu-accent-subtle);
+  color: var(--dsw-futu-accent-text);
+}
+
+.reasonBadge[data-reason-kind='converge'] {
+  border-color: var(--hp-green-border);
+  background: var(--hp-green-bg);
+  color: var(--hp-green);
+}
+
+.reasonBadge[data-reason-kind='reverse'],
+.reasonBadge[data-reason-kind='expiry'] {
+  border-color: var(--hp-amber-border);
+  background: var(--hp-amber-bg);
+  color: var(--hp-amber);
+}
+
+.reasonBadge[data-reason-kind='skip'] {
+  opacity: 0.72;
+}
+
+.disclaimer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--dsw-futu-border-subtle);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--dsw-futu-text-muted);
+}

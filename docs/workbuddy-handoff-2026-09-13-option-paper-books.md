@@ -143,7 +143,7 @@ in-flight 闸），前端**不需要**任何触发动作；`POST /options/cycles
 
 ---
 
-## C. 资产面板对接需求（HoldingsPanel）
+## C. 资产面板对接需求（HoldingsPanel）—— 状态：**done 2026-09-13（WB-15，前端泳道）**
 
 现状：HoldingsPanel 只有股票三源（paper 模拟 / live 实盘 / imported 导入），
 `GET /options/paper/*` 前端零消费。需求：新增「**期权虚拟账户**」分区（或页签），
@@ -163,6 +163,44 @@ in-flight 闸），前端**不需要**任何触发动作；`POST /options/cycles
 5. **重置**：`POST /options/paper/reset?book=` 按账本单独重置（回 10 万），**必须二次确认**。
 6. **免责口径**（分区底部固定一行）：
    > 纸面模拟账户：假设一档盘口全量成交、卖空现货为融券近似，绩效偏乐观；量化信号，非投资建议。
+
+### C.1 实施记录（2026-09-13，workbuddy，本分支）
+
+全部落点在 `packages/client-ui-trading/src/client/**`（前端泳道，未碰后端）：
+
+| 文件 | 内容 |
+|---|---|
+| `api.ts:517-632` | `OPTION_PAPER_FILLS_LIMIT`、`fetchOptionPaperAccounts` / `fetchOptionPaperAccount` / `fetchOptionPaperFills` / `resetOptionPaper`（`OptionsOutcome` 分诊信封） |
+| `option-paper-view.ts`（新） | 账本/结构/方向/原因/价格来源 → 词典键闭集映射；收益率、到期天数（UTC+8 整日）、行权价、原因分档 |
+| `OptionPaperBooks.tsx`（新） | 两账本卡 + 持仓区 + 可展开腿明细 + 成交流水 + 单账本重置 + 免责声明；30s `usePoll` |
+| `option-paper-books.module.css`（新） | 分区样式（全走 `--dsw-futu-*` 双主题令牌 + 面板 `--hp-*` 语义色） |
+| `HoldingsPanel.tsx:69/92/1131` | 新增 `optPaper` 页签（标签「期权账户」），渲染 `<OptionPaperBooks t={t} />` |
+| `contract.ts` / `locales.ts` | 61 个键（页签 `trade.tab.optPaper` + 60 个 `trade.optPaper.*`，中英 1:1） |
+
+落点选择与口径遵守：
+
+- 需求「分区**或**页签」→ 取**页签**：窄列（约 380px）里两张卡并排是主诉求，
+  页签内先账户后流水，避免第 7 个页签把标签挤成缩略语。
+- `activeTab === 'optPaper'` **不受 `tradeMode` 影响**：paper/live 开关切的是股票面
+  数据源，期权账本是它自己的模拟账本，两者不相干（若跟着切会出现「切 live 后期权
+  账本消失」的伪故障）。
+- 需求 §C3「持仓表」→ 实现为**卡 + meta 行**（窄列不横向滚动），字段一项不少，
+  并给 `data-opt-paper-position` / `data-opt-paper-expiry-days` / `data-leg-asset` 等
+  钩子供确定性断言；临期阈值 3 天（`isExpiringSoon`，仅未过期才贴「临期」）。
+- 需求 §C5 重置 → `window.confirm` 文案带账本名；**按账本单独重置**，成功用回包就地
+  替换该卡（不等下一跳轮询），失败出提示且不假装归零；另一账本不受影响。
+- 需求 §C6 免责声明 → 分区底部常驻。
+- 需求「不做换算」→ 前端零金额运算，`premiumCny` / `marginCny` / `cashAfter` / `equity`
+  原样展示；唯一派生量是收益率（§C2 要求）。
+
+验证（串行门禁）：build 绿（产物含新钩子与中英免责键）｜`npx vitest run` **537/537**
+（60 文件，+30 新增：视图层 12 / api 8 / jsdom 冒烟 10）｜`i18n-audit --check` OK
+（1299 zh keys）｜`typecheck-gate` **本变更零新增**（总数 261 = 变更前本 worktree 基线；
+六个包的既有存量债未动、未替他人清）。详见
+`.agents/notes/implemented/feature/2026-09-13-option-paper-books-asset-panel.md`。
+
+未做（有意，留给后端泳道）：`GET /options/paper/account` 单账本视图当前无调用点——
+桥路由已就绪，供将来「点开某账本看全屏流水」；此处只登记接口，不删也不硬接。
 
 ### 验证口径
 

@@ -7,9 +7,10 @@ import type { AccountBalance, Kline, MarketId, MarketInfo, Order, Orderbook, Pos
 import type {
   FundamentalsPackage, KernelReport, OptionBarContextPacket, OptionChain, OptionCycle, OptionCycleLoop,
   OptionExpiryCalendar, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewSort,
-  OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying,
+  OptionPaperAccountsWire, OptionPaperBookId, OptionPaperBookWire, OptionPosition,
+  OptionStrategyRequest, OptionStrategyResult, OptionUnderlying,
   OptionPrediction, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft,
-  OptionPredictionSettle, PredictionKnowledgeItem,
+  OptionPredictionSettle, PaperFill, PredictionKnowledgeItem,
 } from '@dshtrading/api'
 import type { CustomIndicatorRecord, IndicatorInstance } from '@dshtrading/indicators'
 import type { KnowledgeCard } from '@dshtrading/knowledge'
@@ -500,6 +501,111 @@ export async function fetchOptionPositions(): Promise<OptionsOutcome<readonly Op
       '/dshtrading/api/options/positions',
     )
     return { ok: true, data: Array.isArray(wire.positions) ? wire.positions : [] }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 期权纸账户（多账本：strategy 策略 / arbitrage 套利，2026-09-13 WB-15）    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 期权纸账户成交流水默认条数（桥端 `limit` 缺省值，两侧必须一致）。
+ * 语义是「最近 N 笔」，不是分页——面板只要一屏流水，不做翻页。
+ */
+export const OPTION_PAPER_FILLS_LIMIT = 48
+
+/**
+ * 两账本一次拉全（资产面板主入口）。桥按 `[arbitrage, strategy]` 顺序回，
+ * 账本缺一（例如只有 strategy 落过盘）也不补桩：按返回如实渲染。
+ *
+ * 走 `OptionsOutcome` 分诊信封——「桥未挂」与「有账本但为空」必须能分开，
+ * 否则资产面板会把 404 画成「权益 0」，那是把故障显示成事实。
+ */
+export async function fetchOptionPaperAccounts(): Promise<OptionsOutcome<OptionPaperAccountsWire>> {
+  try {
+    const wire = await getJson<OptionPaperAccountsWire>('/dshtrading/api/options/paper/accounts')
+    return { ok: true, data: { ok: true, books: Array.isArray(wire.books) ? wire.books : [] } }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/**
+ * 单账本视图（`book` 缺省 strategy，与桥一致）。
+ * 重置后用它的回包刷新卡片，省一次往返。
+ */
+export async function fetchOptionPaperAccount(book?: OptionPaperBookId): Promise<OptionsOutcome<OptionPaperBookWire>> {
+  try {
+    const search = new URLSearchParams()
+    if (book !== undefined) search.set('book', book)
+    const query = search.toString()
+    const wire = await getJson<OptionPaperBookWire>(
+      `/dshtrading/api/options/paper/account${query === '' ? '' : `?${query}`}`,
+    )
+    if (wire.account === undefined) return optionsFailure(new Error('account missing in wire'))
+    return { ok: true, data: { ok: true, book: wire.book, account: wire.account, equity: wire.equity, positions: wire.positions ?? [] } }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/**
+ * 成交流水（倒序，最新在前；`limit` 正整数，非正整数桥回 400）。
+ *
+ * 只返回 `fills`（不带 wire 包裹）：调用方要的是一屏流水，账本元信息
+ * 由 `fetchOptionPaperAccounts` 提供，重复拉一遍账户是纯浪费。
+ */
+export async function fetchOptionPaperFills(
+  book?: OptionPaperBookId,
+  limit: number = OPTION_PAPER_FILLS_LIMIT,
+): Promise<OptionsOutcome<readonly PaperFill[]>> {
+  try {
+    const search = new URLSearchParams({ limit: String(limit) })
+    if (book !== undefined) search.set('book', book)
+    const wire = await getJson<{ ok: boolean; fills: readonly PaperFill[] }>(
+      `/dshtrading/api/options/paper/fills?${search.toString()}`,
+    )
+    return { ok: true, data: Array.isArray(wire.fills) ? wire.fills : [] }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/**
+ * 重置单个账本回初始资金（10 万）。**破坏性操作**：调用方必须先做二次确认，
+ * 本封装不做任何确认——保持「api 只搬数据」的分层。
+ *
+ * 账本经 query 传递（桥 `search.get('book') ?? body.book` 两条路都收，
+ * 这里选 query：reset 语义上是「对某个资源动手」，不是提交表单）。
+ */
+export async function resetOptionPaper(book?: OptionPaperBookId): Promise<OptionsOutcome<OptionPaperBookWire>> {
+  try {
+    const search = new URLSearchParams()
+    if (book !== undefined) search.set('book', book)
+    const query = search.toString()
+    const response = await fetch(
+      `/dshtrading/api/options/paper/reset${query === '' ? '' : `?${query}`}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+    )
+    const wire = await response.json().catch(() => undefined) as
+      | { ok?: boolean; book?: OptionPaperBookId; account?: OptionPaperBookWire['account']; equity?: number; positions?: readonly OptionPaperBookWire['positions'][number][]; code?: string; message?: string }
+      | undefined
+    if (!response.ok || wire?.ok !== true || wire?.account === undefined) {
+      const code = wire?.code ?? `HTTP_${response.status}`
+      return { ok: false, code, message: wire?.message ?? code }
+    }
+    return {
+      ok: true,
+      data: {
+        ok: true,
+        book: wire.book ?? book ?? 'strategy',
+        account: wire.account,
+        equity: wire.equity ?? wire.account.cash,
+        positions: wire.positions ?? [],
+      },
+    }
   } catch (err) {
     return optionsFailure(err)
   }
