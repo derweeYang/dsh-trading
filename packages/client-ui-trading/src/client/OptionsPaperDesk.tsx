@@ -48,12 +48,18 @@ const PAPER_SKIP_KEY: Readonly<Record<PaperFillSkip, MarketLocaleKey>> = {
   one_fill: 'options.desk.paperskip.one_fill',
 }
 
-/** fill reason 词表；skipped 单独走 paper skip 词表（skip 字段才是原因）。 */
+/** fill reason 词表；skipped 单独走 paper skip 词表（skip 字段才是原因）。
+ *  feat/option-paper-books 扩的 arb 四值：desk 只读 strategy 账本、暂不出现，
+ *  词表仍穷尽覆盖（Record 穷尽性保留编译期保护，再扩值即报错提醒）。 */
 const FILL_REASON_KEY: Readonly<Record<Exclude<PaperFillReason, 'skipped'>, MarketLocaleKey>> = {
   signal: 'options.desk.fillreason.signal',
   invalidIf: 'options.desk.fillreason.invalidIf',
   close5: 'options.desk.fillreason.close5',
   session: 'options.desk.fillreason.session',
+  arb_open: 'options.desk.fillreason.arb_open',
+  arb_converge: 'options.desk.fillreason.arb_converge',
+  arb_reverse: 'options.desk.fillreason.arb_reverse',
+  arb_expiry: 'options.desk.fillreason.arb_expiry',
 }
 
 function mapLabel(t: OptionsPaperDeskTranslate, table: Readonly<Record<string, MarketLocaleKey>>, key: string): string {
