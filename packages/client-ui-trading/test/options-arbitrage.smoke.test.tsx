@@ -1,15 +1,13 @@
 /**
- * 套利机会表渲染冒烟（2026-09-13 WB-13；同日增强：分类显示 + 盈利>50 默认过滤）。
+ * 套利机会表渲染冒烟（2026-09-13 WB-13；同日增强：分类显示 + 盈利>50 过滤 + 收益前10 + 点击看组合）。
  *
  * 拦住「构建/逻辑全绿、一渲染就崩」：把 OptionsArbitrageTable 真正 mount 进 jsdom，
- * 验证它能在浏览器内跑 scanArbitrage / scanVerticalSpreads 并正确分诊
- * （有 spot+expiry → 检出机会；缺 spot/expiry → 空态；方向性表可展开）；
- * 并覆盖本次增强：按分类成组显示 + 默认只显示盈利>50、可展开全部。
+ * 验证它能在浏览器内跑 scanArbitrage / scanVerticalSpreads 并正确分诊；并覆盖各增强点。
  *
  * @vitest-environment jsdom
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, within } from '@testing-library/react'
 import type { OptionChain } from '@dshtrading/api'
 import { OptionsArbitrageTable } from '../src/client/OptionsArbitrageTable.tsx'
 import type { MarketLocaleKey } from '../src/client/contract.ts'
@@ -41,9 +39,8 @@ const CHAIN: OptionChain = {
 
 /**
  * 过滤测试专用链：制造一高一低两笔平价偏离 ——
- *  - K=3.00：合成远期 ≈ 现货远期 → 边际机会（edge ≤ 50 元/张，默认应被隐藏）
- *  - K=3.05：call 明显偏贵 → 显著机会（edge ≫ 50，默认应显示）
- * 两笔均无 bid/ask → executable=false（理论估算）。
+ *  - K=3.00：合成远期 ≈ 现货远期 → 边际机会（收益 ≤ 50 元/张，默认应被隐藏）
+ *  - K=3.05：call 明显偏贵 → 显著机会（收益 ≫ 50，默认应显示）
  */
 const FILTER_CHAIN: OptionChain = {
   underlying: '510050',
@@ -62,8 +59,21 @@ const FILTER_CHAIN: OptionChain = {
   ],
 }
 
+/** 12 档行权价、每档均生成一笔显著平价机会 → 用于「默认前 10 + 显示更多」断言。 */
+const MANY_CHAIN: OptionChain = {
+  underlying: '510050',
+  expiryMonth: '2609',
+  expiryDate: '2026-09-10',
+  snapshotAt: '2026-09-08T02:00:00+08:00',
+  source: 'akshare',
+  spot: 3.0,
+  calls: Array.from({ length: 12 }, (_, i) => ({ code: `C${i}`, strike: 3.0 + i * 0.01, last: 0.06 })),
+  puts: Array.from({ length: 12 }, (_, i) => ({ code: `P${i}`, strike: 3.0 + i * 0.01, last: 0.03 })),
+}
+
+/** 套利行（带 data-edge），排除展开的组合明细行。 */
 const arbRows = (c: HTMLElement): Element[] =>
-  Array.from(c.querySelectorAll('[data-dshtrading-options-arbitrage] tbody tr'))
+  Array.from(c.querySelectorAll('[data-dshtrading-options-arbitrage] tr[data-edge]'))
 const lowEdgeRows = (c: HTMLElement): Element[] =>
   arbRows(c).filter(r => Number(r.getAttribute('data-edge')) <= 50)
 
@@ -75,7 +85,6 @@ describe('OptionsArbitrageTable', () => {
 
   it('runs scanArbitrage in-browser and flags theoretical-only edges (no bid/ask)', () => {
     const { queryByText } = render(<OptionsArbitrageTable t={t} chain={CHAIN} multiplier={10000} />)
-    // 实时链无买卖盘 → executable=false → 理论估算提示必须出现。
     expect(queryByText('options.arbitrage.theoryNote')).toBeTruthy()
   })
 
@@ -87,32 +96,55 @@ describe('OptionsArbitrageTable', () => {
 
   it('toggles the directional vertical-spread section', () => {
     const { getByText } = render(<OptionsArbitrageTable t={t} chain={CHAIN} multiplier={10000} />)
-    // 默认收起 → 显示展开按钮；点击后显示方向性表标题。
-    const open = getByText('options.arbitrage.showVertical')
-    fireEvent.click(open)
+    fireEvent.click(getByText('options.arbitrage.showVertical'))
     expect(getByText('options.arbitrage.verticalTitle')).toBeTruthy()
-    // 再次点击收起。
     fireEvent.click(getByText('options.arbitrage.hideVertical'))
     expect(getByText('options.arbitrage.showVertical')).toBeTruthy()
   })
 
   it('groups opportunities by category (parity section has its own header)', () => {
     const { getByText } = render(<OptionsArbitrageTable t={t} chain={CHAIN} multiplier={10000} />)
-    // 分类显示：平价套利以独立小标题成组（kind 列已随分组移除，故该文案仅作分组标题出现）。
     expect(getByText('options.arbitrage.kind.parity')).toBeTruthy()
   })
 
   it('defaults to profit>50 only, and reveals the rest on demand', () => {
     const { container, getByText } = render(<OptionsArbitrageTable t={t} chain={FILTER_CHAIN} multiplier={10000} />)
-    // 默认：有显著机会显示，但盈利≤50 的边际机会被隐藏。
     expect(arbRows(container).length).toBeGreaterThan(0)
     expect(lowEdgeRows(container).length).toBe(0)
-    // 展开全部 → 边际机会出现，且按钮翻转为「仅显示盈利大于50」。
     fireEvent.click(getByText('options.arbitrage.filter.showAll'))
     expect(lowEdgeRows(container).length).toBeGreaterThan(0)
     expect(getByText('options.arbitrage.filter.onlyProfitable')).toBeTruthy()
-    // 再点回去 → 边际机会重新隐藏。
     fireEvent.click(getByText('options.arbitrage.filter.onlyProfitable'))
     expect(lowEdgeRows(container).length).toBe(0)
+  })
+
+  it('defaults to the top 10 by profit and reveals more on demand', () => {
+    const { container } = render(<OptionsArbitrageTable t={t} chain={MANY_CHAIN} multiplier={10000} />)
+    const parity = container.querySelector('[data-arb-group="parity"]') as HTMLElement
+    expect(parity).toBeTruthy()
+    const rows = (): NodeListOf<Element> => parity.querySelectorAll('tr[data-edge]')
+    // 默认只显示前 10 条（共 12 条平价机会）。
+    expect(rows().length).toBe(10)
+    fireEvent.click(within(parity).getByText('options.arbitrage.showMore'))
+    expect(rows().length).toBe(12)
+  })
+
+  it('expands a row to show the concrete leg combination (and collapses back)', () => {
+    const { container } = render(<OptionsArbitrageTable t={t} chain={CHAIN} multiplier={10000} />)
+    expect(container.querySelector('[data-arb-combo]')).toBeNull()
+    const row = container.querySelector('tr[data-arb-row]') as HTMLElement
+    expect(row).toBeTruthy()
+    fireEvent.click(row)
+    const combo = container.querySelector('[data-arb-combo]')
+    expect(combo).toBeTruthy()
+    const text = combo?.textContent ?? ''
+    expect(text).toContain('options.arbitrage.combo.title')
+    // 平价组合 = 两张期权腿（卖出 call / 买入 put）+ 现货腿。
+    expect(text).toContain('options.arbitrage.leg.sell')
+    expect(text).toContain('options.arbitrage.leg.buy')
+    expect(text).toContain('options.arbitrage.leg.spotBuy')
+    // 再次点击收起。
+    fireEvent.click(row)
+    expect(container.querySelector('[data-arb-combo]')).toBeNull()
   })
 })

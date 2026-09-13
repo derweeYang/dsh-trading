@@ -102,6 +102,46 @@
   color: var(--dsw-futu-accent, #3b82f6);
 }
 
+/* 可点击行：点击展开「具体操作组合」 */
+.rowClick {
+  cursor: pointer;
+}
+
+.rowClick:hover {
+  background: var(--dsw-futu-bg-hover, rgba(59, 130, 246, 0.08));
+}
+
+.rowClick:focus-visible {
+  outline: 1px solid var(--dsw-futu-accent, #3b82f6);
+  outline-offset: -1px;
+}
+
+.combo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px 8px;
+  white-space: normal; /* 长腿文案允许换行（.table td 默认 nowrap） */
+}
+
+.comboTitle {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--dsw-futu-text-secondary, #4a5060);
+}
+
+.legList {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.legList li {
+  line-height: 1.7;
+  font-variant-numeric: tabular-nums;
+}
+
 .verticalHead {
   display: flex;
   align-items: center;

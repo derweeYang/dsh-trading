@@ -1,5 +1,5 @@
 /**
- * 套利机会表（2026-09-13 WB-13，2026-09-13 增强：分类显示 + 盈利>50 默认过滤）。
+ * 套利机会表（2026-09-13 WB-13；同日二轮增强：分类显示 + 盈利>50 过滤 + 收益排序/前10 + 点击看组合）。
  * 在 T 板内对当前期权链运行 scanArbitrage（平价 + 箱型，无风险）与 scanVerticalSpreads
  * （方向性价差，非无风险），全部浏览器内计算（@dshtrading/strategies 纯库）。
  *
@@ -7,21 +7,24 @@
  * 因为实时链（api.OptionQuoteRow）无 bid/ask，内核 executable 通常为 false → 显示「理论估算」，
  * 并附 theoryNote 提示以可成交价复核（不伪造可执行性）。
  *
- * 本次增强：
+ * 增强要点：
  *  - 按套利机会分类显示：平价套利 / 箱型套利 各自成组（垂直价差仍走独立折叠区）。
- *  - 默认只显示「盈利 > 50 元/张」的机会；「显示全部机会」按钮揭示其余（盈利≤50 的边际机会）。
- *    内核默认 threshold（0.005/股=50/张）会把盈利≤50 直接剔除，故前端主动申请更低的透传下限
- *    （PASS_THROUGH_THRESHOLD），由前端独享 50 这道默认闸门，与后端路由解耦。
+ *  - 默认只显示「套利收益 > 50 元/张」的机会（收益 = edgePerContract）；「显示全部机会」揭示其余。
+ *    内核默认 threshold（0.005/股=50/张）会把 ≤50 直接剔除，故前端主动申请更低的透传下限
+ *    （PASS_THROUGH_THRESHOLD），由前端独享 50 这道默认闸门。
+ *  - 每组默认按收益从大到小排序、只显示前 10 条，「显示更多」逐级展开（+10）。
+ *  - 点击任一行 → 展开「具体操作组合」（各腿买卖/认购认沽/行权价/合约代码；平价另附现货腿）。
  *
  * 本页技术与行情分析面，不构成投资建议。
  */
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import type { OptionChain } from '@dshtrading/api'
 import {
   fromOptionChain,
   scanArbitrage,
   scanVerticalSpreads,
   type ArbitrageDirection,
+  type ArbitrageLeg,
   type ArbitrageOpportunity,
   type VerticalSpread,
 } from '@dshtrading/strategies'
@@ -31,10 +34,13 @@ import css from './options-arbitrage.module.css'
 
 export type OptionsArbitrageTranslate = (key: MarketLocaleKey, params?: Record<string, unknown>) => string
 
-/** 默认只显示盈利 > 该值（元/张）的套利机会；其余折叠到「显示全部机会」里。 */
+/** 默认只显示套利收益 > 该值（元/张）的机会；其余折叠到「显示全部机会」里。 */
 const MIN_EDGE_PER_CONTRACT = 50
 /** 前端向内核申请的透传下限（元/股），低于此视为噪声不计入；与后端默认阈值解耦。 */
 const PASS_THROUGH_THRESHOLD = 0.0001
+/** 每组默认显示行数；「显示更多」每次追加的行数。 */
+const DEFAULT_VISIBLE_ROWS = 10
+const ROWS_STEP = 10
 
 function directionKey(d: ArbitrageDirection): MarketLocaleKey {
   switch (d) {
@@ -45,47 +51,127 @@ function directionKey(d: ArbitrageDirection): MarketLocaleKey {
   }
 }
 
+function kindKey(kind: ArbitrageOpportunity['kind']): MarketLocaleKey {
+  return kind === 'parity' ? 'options.arbitrage.kind.parity' : 'options.arbitrage.kind.box'
+}
+
+function rightKey(right: 'C' | 'P'): MarketLocaleKey {
+  return right === 'C' ? 'options.arbitrage.right.call' : 'options.arbitrage.right.put'
+}
+
+function actionKey(action: 'buy' | 'sell'): MarketLocaleKey {
+  return action === 'buy' ? 'options.arbitrage.leg.buy' : 'options.arbitrage.leg.sell'
+}
+
 function strikeRange(low: number | undefined, high: number | undefined): string {
   const lo = low !== undefined ? fmtPrice(low) : '—'
   const hi = high !== undefined ? fmtPrice(high) : '—'
   return `${lo}–${hi}`
 }
 
-function kindKey(kind: ArbitrageOpportunity['kind']): MarketLocaleKey {
-  return kind === 'parity' ? 'options.arbitrage.kind.parity' : 'options.arbitrage.kind.box'
+function strikesCell(o: ArbitrageOpportunity): string {
+  return o.kind === 'parity'
+    ? (o.strike !== undefined ? fmtPrice(o.strike) : '—')
+    : strikeRange(o.lowStrike, o.highStrike)
 }
 
-/** 单个套利分类组（平价 / 箱型），独立小标题 + 表格。 */
+/** 具体操作组合：每腿 = 动作 + 认购/认沽 + 行权价 + 合约代码；平价另附现货腿。 */
+function describeLegs(o: ArbitrageOpportunity, t: OptionsArbitrageTranslate): string[] {
+  const lines = o.legs.map(
+    (l: ArbitrageLeg) => `${t(actionKey(l.action))} ${t(rightKey(l.right))} ${fmtPrice(l.strike)} (${l.code})`,
+  )
+  if (o.kind === 'parity') {
+    const spotKey: MarketLocaleKey = o.direction === 'sell_synthetic_buy_spot'
+      ? 'options.arbitrage.leg.spotBuy'
+      : 'options.arbitrage.leg.spotSell'
+    lines.push(`${t(spotKey)} ${o.underlying}`)
+  }
+  return lines
+}
+
+/** 单行稳定 key（过滤/展开时行会重排，用内容而非下标）。 */
+function rowKey(o: ArbitrageOpportunity): string {
+  return `${o.kind}-${o.strike ?? ''}-${o.lowStrike ?? ''}-${o.highStrike ?? ''}-${o.direction}`
+}
+
+/** 单个套利分类组（平价 / 箱型）：独立小标题 + 表格 + 前10/显示更多 + 行内展开组合。 */
 function ArbGroup({ kind, rows, t }: {
   kind: ArbitrageOpportunity['kind']
   rows: readonly ArbitrageOpportunity[]
   t: OptionsArbitrageTranslate
 }): React.JSX.Element {
+  const [limit, setLimit] = useState(DEFAULT_VISIBLE_ROWS)
+  const [expanded, setExpanded] = useState<string | null>(null)
+
+  // 默认按套利收益（元/张）从大到小排序。
+  const sorted = useMemo(() => [...rows].sort((a, b) => b.edgePerContract - a.edgePerContract), [rows])
+  const shown = sorted.slice(0, limit)
+  const remaining = sorted.length - shown.length
+
   return (
-    <div className={css.group}>
+    <div className={css.group} data-arb-group={kind}>
       <div className={css.groupTitle}>{t(kindKey(kind))}</div>
       <table className={css.table}>
         <thead>
           <tr>
             <th>{t('options.arbitrage.col.strikes')}</th>
             <th>{t('options.arbitrage.col.direction')}</th>
-            <th>{t('options.arbitrage.col.edgePerContract')}</th>
+            <th>{t('options.arbitrage.col.profit')}</th>
             <th>{t('options.arbitrage.col.status')}</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((o, i) => (
-            <tr key={i} data-kind={o.kind} data-edge={o.edgePerContract}>
-              <td>{o.kind === 'parity' ? (o.strike !== undefined ? fmtPrice(o.strike) : '—') : strikeRange(o.lowStrike, o.highStrike)}</td>
-              <td>{t(directionKey(o.direction))}</td>
-              <td className={css.edge}>{fmtPrice(o.edgePerContract)}</td>
-              <td data-exec={o.executable ? 'yes' : 'no'}>
-                {o.executable ? t('options.arbitrage.exec.yes') : t('options.arbitrage.exec.no')}
-              </td>
-            </tr>
-          ))}
+          {shown.map((o) => {
+            const key = rowKey(o)
+            const open = expanded === key
+            return (
+              <Fragment key={key}>
+                <tr
+                  className={css.rowClick}
+                  data-kind={o.kind}
+                  data-edge={o.edgePerContract}
+                  data-arb-row={key}
+                  title={t('options.arbitrage.rowHint')}
+                  tabIndex={0}
+                  onClick={() => { setExpanded(open ? null : key) }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setExpanded(open ? null : key)
+                    }
+                  }}
+                >
+                  <td>{strikesCell(o)}</td>
+                  <td>{t(directionKey(o.direction))}</td>
+                  <td className={css.edge}>{fmtPrice(o.edgePerContract)}</td>
+                  <td data-exec={o.executable ? 'yes' : 'no'}>
+                    {o.executable ? t('options.arbitrage.exec.yes') : t('options.arbitrage.exec.no')}
+                  </td>
+                </tr>
+                {open && (
+                  <tr data-arb-combo={key}>
+                    <td colSpan={4}>
+                      <div className={css.combo}>
+                        <div className={css.comboTitle}>
+                          {`${t('options.arbitrage.combo.title')} · ${t(directionKey(o.direction))}`}
+                        </div>
+                        <ul className={css.legList}>
+                          {describeLegs(o, t).map((line, k) => <li key={k}>{line}</li>)}
+                        </ul>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            )
+          })}
         </tbody>
       </table>
+      {remaining > 0 && (
+        <button type="button" className={css.ghostBtn} onClick={() => { setLimit(l => l + ROWS_STEP) }}>
+          {t('options.arbitrage.showMore', { remaining })}
+        </button>
+      )}
     </div>
   )
 }
@@ -183,11 +269,11 @@ export function OptionsArbitrageTable({ t, chain, multiplier }: OptionsArbitrage
                 </thead>
                 <tbody>
                   {vert.map((v: VerticalSpread, i) => {
-                    const rightKey = v.right === 'C' ? 'options.arbitrage.right.call' : 'options.arbitrage.right.put'
-                    const dirKey = v.direction === 'bull' ? 'options.arbitrage.dir.bull' : 'options.arbitrage.dir.bear'
+                    const rightK = v.right === 'C' ? 'options.arbitrage.right.call' : 'options.arbitrage.right.put'
+                    const dirK = v.direction === 'bull' ? 'options.arbitrage.dir.bull' : 'options.arbitrage.dir.bear'
                     return (
                       <tr key={i}>
-                        <td>{`${t(rightKey)}·${t(dirKey)}`}</td>
+                        <td>{`${t(rightK)}·${t(dirK)}`}</td>
                         <td>{strikeRange(v.lowStrike, v.highStrike)}</td>
                         <td>{fmtPrice(v.highStrike - v.lowStrike)}</td>
                         <td className={v.netDebit >= 0 ? css.debit : css.credit}>{fmtPrice(v.netDebit)}</td>
