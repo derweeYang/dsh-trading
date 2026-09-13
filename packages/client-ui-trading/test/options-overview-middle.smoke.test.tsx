@@ -13,7 +13,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import type { OptionOverview } from '@dshtrading/api'
 
 /** 桥取数桩（vi.hoisted 规避 mock 提升 TDZ；每个用例可改实现）。 */
@@ -112,5 +112,123 @@ describe('OptionsOverviewMiddleView 空态聚合（P2-8）', () => {
     expect(getByText('options.sources.loading')).toBeTruthy()
     expect(container.textContent).not.toContain('options.cycle.loading')
     expect(container.textContent).not.toContain('options.overview.loading')
+  })
+})
+
+/* ── task #11 检测机会的**端到端透传**（WB-16）──────────────────────────
+ *
+ * 叶组件（OptionsDetectedOpportunities）已有自己的冒烟，但它把 opportunities
+ * 直接塞进 OptionsOverview 的 props，**绕过了真实数据路径**：桥 JSON →
+ * `OptionsOverviewMiddleView.overview` state → `displayOverview = {...overview, rows}`
+ * → `OptionsOverview`（cast）→ 检测区。这段路上任何一处把 overview 重建成
+ * 字面量对象，`opportunities` 都会静默消失，而叶组件测试照样全绿。
+ *
+ * 交接单 §11.4 的口径正是「src/client/** 零改动下前端自动渲染」——所以这条必须
+ * 从**中栏挂载**开始验，才叫证据。
+ */
+describe('OptionsOverviewMiddleView → 检测机会端到端（task #11 / WB-16）', () => {
+  /** 桥返回的 overview 原文形状：额外带 opportunities（后端 task #11 的产出）。 */
+  const OVERVIEW_WITH_DETECTED = {
+    ...OVERVIEW,
+    opportunities: [
+      {
+        id: '2026-09-10T06:00:00Z-588000',
+        date: '2026-09-10',
+        bucketStartUtc: '2026-09-10T06:00:00.000Z',
+        bucketStartCst: '2026-09-10 14:00:00',
+        session: 'regular',
+        opportunity: 'mean_reversion',
+        opportunityLabel: 'MEAN-REV',
+        noTrade: false,
+        underlyings: ['588000'],
+        picks: [{
+          underlying: '588000', regime: 'mean_revert', regimeLabel: 'MR', template: 'vertical',
+          structure: 'bear_call_credit', expiryMonth: '2609', expiryDate: '2026-09-23', maxContracts: 10,
+          legs: [
+            { code: '588000C2609M01700', side: 'sell', optionType: 'C', strike: 1.7, last: 0.0566, prevSettle: 0.0475 },
+            { code: '588000C2609M01750', side: 'buy', optionType: 'C', strike: 1.75, last: 0.0348, prevSettle: 0.0309 },
+          ],
+          netCreditCnyPerSpread: 218, maxLossCnyPerSpread: 282, breakevenAtExpiry: 1.7218,
+          verification: null, quoteSource: 'test', status: 'PRICED',
+        }],
+        edge: 'E', logic: 'L', playbook: 'P', invalidIf: 'I',
+        edgeZh: 'E', logicZh: 'L', playbookZh: 'P', invalidIfZh: 'I',
+      },
+      {
+        id: '2026-09-10T05:50:00Z-510050',
+        date: '2026-09-10',
+        bucketStartUtc: '2026-09-10T05:50:00.000Z',
+        bucketStartCst: '2026-09-10 13:50:00',
+        session: 'regular',
+        opportunity: 'mean_reversion',
+        opportunityLabel: 'MEAN-REV',
+        noTrade: false,
+        underlyings: ['510050'],
+        picks: [{
+          underlying: '510050', regime: 'mean_revert', regimeLabel: 'MR', template: 'vertical',
+          structure: null, expiryMonth: null, expiryDate: null, maxContracts: null,
+          legs: [], netCreditCnyPerSpread: null, maxLossCnyPerSpread: null, breakevenAtExpiry: null,
+          verification: null, quoteSource: null, status: 'IDENTIFIED',
+        }],
+        edge: 'E2', logic: 'L2', playbook: 'P2', invalidIf: 'I2',
+        edgeZh: 'E2', logicZh: 'L2', playbookZh: 'P2', invalidIfZh: 'I2',
+      },
+    ],
+  }
+
+  it('桥原文带 opportunities（类型尚未进 api 契约）→ 中栏挂载即渲染检测区，前端零改动', async () => {
+    // 用 unknown 桥接：契约字段还没进 @dshtrading/api，前端正是靠 cast 透传（见 WB-14 note）
+    API.overview.mockResolvedValue({ ok: true, data: OVERVIEW_WITH_DETECTED as unknown as OptionOverview })
+    const { container } = render(<OptionsOverviewMiddleView {...props} />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-dshtrading-detected-opportunities]')).toBeTruthy()
+    })
+    const section = container.querySelector('[data-dshtrading-detected-opportunities]') as HTMLElement
+    // 两条机会都渲染，且**定价与否按数据判**（不看文案）
+    const cards = Array.from(section.querySelectorAll('[data-detected-card]'))
+    expect(cards.map(c => c.getAttribute('data-priced'))).toEqual(['true', 'false'])
+
+    // 已定价：腿表两行 + 三项风险指标（交接单 §11.4 第 3 条）
+    const priced = cards[0] as HTMLElement
+    const legs = priced.querySelectorAll('[data-detected-legs] tbody tr')
+    expect(legs.length).toBe(2)
+    expect(priced.textContent).toContain('588000C2609M01700')
+    const metrics = priced.querySelector('[data-detected-metrics]') as HTMLElement
+    expect(metrics.textContent).toContain('options.detected.netCredit')
+    expect(metrics.textContent).toContain('218')
+    expect(metrics.textContent).toContain('options.detected.maxLoss')
+    expect(metrics.textContent).toContain('282')
+    expect(metrics.textContent).toContain('options.detected.breakeven')
+    expect(metrics.textContent).toContain('1.7218')
+
+    // 未定价：只出闸门提示，不出腿表、不出风险指标（不编造价位）
+    const unpriced = cards[1] as HTMLElement
+    expect(unpriced.querySelector('[data-detected-blocker]')?.textContent).toBe('options.detected.unpriced')
+    expect(unpriced.querySelector('[data-detected-legs]')).toBeNull()
+    expect(unpriced.querySelector('[data-detected-metrics]')).toBeNull()
+  })
+
+  it('折叠开关在中栏路径下同样生效（收起后四段与腿表都不在文档里）', async () => {
+    API.overview.mockResolvedValue({ ok: true, data: OVERVIEW_WITH_DETECTED as unknown as OptionOverview })
+    const { container, getByText } = render(<OptionsOverviewMiddleView {...props} />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-detected-legs]')).toBeTruthy()
+    })
+    fireEvent.click(getByText('options.detected.collapse'))
+    expect(container.querySelector('[data-detected-legs]')).toBeNull()
+    expect(getByText('options.detected.expandMore')).toBeTruthy()
+  })
+
+  it('后端未发货（无 opportunities 键）→ 检测区整体不渲染，总览照常', async () => {
+    API.overview.mockResolvedValue({ ok: true, data: OVERVIEW })
+    const { container, getByText } = render(<OptionsOverviewMiddleView {...props} />)
+
+    await waitFor(() => {
+      expect(getByText('options.overview.title')).toBeTruthy()
+    })
+    expect(container.querySelector('[data-dshtrading-detected-opportunities]')).toBeNull()
+    expect(container.querySelectorAll(NOTICE_SELECTOR).length).toBe(0)
   })
 })

@@ -81,7 +81,7 @@
 
 ---
 
-## 任务 #11 — 后端把「检测到的期权机会」聚合进 `OptionOverview.opportunities`（状态：pending，后端）
+## 任务 #11 — 后端把「检测到的期权机会」聚合进 `OptionOverview.opportunities`（状态：pending，后端；**前端侧已就绪并取证，见 §11.5**）
 
 ### 11.1 背景与前端现状（WorkBuddy 已完成前端消费侧）
 
@@ -148,11 +148,39 @@ OptionOverviewLeg {
 }
 ```
 
-### 11.4 验收标准
+### 11.4 验收标准（前端侧已于 2026-09-13 WB-16 闭环并取证；后端侧待发货）
 
-- [ ] `OptionOverview` 加 `opportunities?`；`node scripts/typecheck-gate.mjs` 无新增 `↑`（存量债只降不升）。
-- [ ] `GET /options/overview` 返回快照含 `opportunities`（9 条去重），`src/client/**` 零改动下
-      前端自动渲染（见 `OptionsDetectedOpportunities.tsx` 与 `tests/options-overview.smoke.test.tsx`
-      既存用例不设置 `opportunities` → 该区块保持隐藏，不破坏）。
-- [ ] 已定价条目腿表与风险指标（净权利金/最大亏损/盈亏平衡）正确透传；未定价条目不出腿表、只出闸门提示。
-- [ ] i18n 审计 `node scripts/i18n-audit.mjs --check` 仍全绿（`options.detected.*` 已加齐中/英键值对与占位符）。
+- [ ] **（后端）** `OptionOverview` 加 `opportunities?`；`node scripts/typecheck-gate.mjs` 无新增 `↑`（存量债只降不升）。
+- [ ] **（后端）** `GET /options/overview` 返回快照含 `opportunities`（9 条去重）。
+      → 前端侧已就绪并**端到端取证**，后端一发货即零改动渲染（见 §11.5）。
+- [x] **（前端，已验证）** 已定价条目腿表与三项风险指标（净权利金/最大亏损/盈亏平衡）正确透传；
+      未定价条目不出腿表、只出闸门提示。*证据：`test/options-overview.smoke.test.tsx`（叶组件，
+      新增 `data-detected-*` 钩子断言）+ `test/options-overview-middle.smoke.test.tsx`（中栏路径，
+      桥原文 → 检测区）。*
+- [x] **（前端，已验证）** i18n 审计 `node scripts/i18n-audit.mjs --check` 仍全绿。
+      *证据：`[i18n-audit] OK: 5 namespaces, 1299 zh keys, 26 exemption(s)`；
+      `options.detected.*` 18 键中/英 1:1、占位符对齐、**且逐键都有渲染点**（无「定义了没渲染」的僵尸键）。*
+
+### 11.5 前端侧就绪证据（2026-09-13 WB-16，workbuddy）
+
+后端字段尚未落地，但「零改动即渲染」这句话必须**可验证**，否则后端发货后才发现透传断了。
+本轮把这条链从「叶组件自证」升级为**从桥原文到界面**的端到端取证：
+
+| 环节 | 证据 |
+|---|---|
+| 取数透传 | `api.ts fetchOptionsOverview` 原样返回桥 JSON（`data: wire.overview`），未知键不丢 |
+| 中栏重建 | `OptionsOverviewMiddleView.tsx:104` `return { ...overview, rows }`——**spread 而非字面量重建**，`opportunities` 随行 |
+| 消费侧 | `OptionsOverview.tsx:188` `(overview as OverviewDetectedShape).opportunities` → `:281` 渲染 |
+| 渲染分流 | `OptionsDetectedOpportunities.tsx`：已定价 → 腿表 + 三项风险指标；未定价 → 仅闸门提示 |
+
+新增/补强的用例（`data-detected-*` 钩子做确定性断言，不看文案）：
+
+- `test/options-overview-middle.smoke.test.tsx`：桥原文带 `opportunities` → 中栏挂载即出检测区；
+  两张卡 `data-priced` 分流为 `['true','false']`；已定价腿表 2 行 + `218 / 282 / 1.7218` 三项指标；
+  未定价只有 `[data-detected-blocker]`，腿表与指标**都不在**；折叠开关在中栏路径下同样生效；
+  无 `opportunities` 键 → 检测区整体不渲染且不打扰总览。
+- `test/options-overview.smoke.test.tsx`：叶组件侧同样按 `data-priced` 分流断言（补 §11.4 第 3 条）。
+
+后端**只需要**做 §11.2 的两件事（契约加可选字段 + bridge/kit-cn 聚合 `recommendations/*.jsonl`），
+前端不需要任何改动；若聚合产出的字段名与 §11.3 有出入，请先在此文档回写，前端同步改
+`OptionsDetectedOpportunities.tsx` 的视图模型（那是唯一需要跟改的地方）。

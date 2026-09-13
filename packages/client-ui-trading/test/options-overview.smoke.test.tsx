@@ -664,4 +664,29 @@ describe('OptionsOverview — WB-14 检测到的期权机会（后端 overview.o
     const legsOccurrences = container.textContent?.split('options.detected.legs').length ?? 0
     expect(legsOccurrences).toBe(2) // split 成 2 段 = 出现 1 次
   })
+
+  it('定价/未定价两条路按数据分流：腿表 + 三项风险指标 vs 仅闸门提示（WB-16 补强）', () => {
+    const { container } = renderOverview({
+      overview: { ...OVERVIEW, opportunities: DETECTED } as unknown as OptionOverview,
+    })
+    const cards = Array.from(container.querySelectorAll('[data-detected-card]'))
+    expect(cards.map(c => c.getAttribute('data-priced'))).toEqual(['true', 'false'])
+
+    // 已定价：腿表 2 行 + 净权利金 / 最大亏损 / 盈亏平衡三项（交接单 §11.4 第 3 条）
+    const priced = cards[0] as HTMLElement
+    expect(priced.querySelectorAll('[data-detected-legs] tbody tr').length).toBe(2)
+    const metrics = priced.querySelector('[data-detected-metrics]') as HTMLElement
+    expect(metrics.textContent).toContain('options.detected.netCredit')
+    expect(metrics.textContent).toContain('218')
+    expect(metrics.textContent).toContain('options.detected.maxLoss')
+    expect(metrics.textContent).toContain('282')
+    expect(metrics.textContent).toContain('options.detected.breakeven')
+    expect(metrics.textContent).toContain('1.7218')
+
+    // 未定价：闸门提示在，腿表与风险指标都不在（不编造价位）
+    const unpriced = cards[1] as HTMLElement
+    expect(unpriced.querySelector('[data-detected-blocker]')?.textContent).toBe('options.detected.unpriced')
+    expect(unpriced.querySelector('[data-detected-legs]')).toBeNull()
+    expect(unpriced.querySelector('[data-detected-metrics]')).toBeNull()
+  })
 })

@@ -96,7 +96,7 @@ function Block({ title, body }: { title: string; body: string }): React.JSX.Elem
 function LegsTable({ legs, t }: { legs: DetectedLeg[]; t: DetectedTranslate }): React.JSX.Element | null {
   if (legs.length === 0) return null
   return (
-    <table className={css.detectedLegs}>
+    <table className={css.detectedLegs} data-detected-legs="">
       <thead>
         <tr>
           <th>code</th>
@@ -129,7 +129,7 @@ function RiskMetrics({ pick, t }: { pick: DetectedPick; t: DetectedTranslate }):
     return null
   }
   return (
-    <div className={css.metrics}>
+    <div className={css.metrics} data-detected-metrics="">
       {pick.netCreditCnyPerSpread !== null && (
         <div className={css.metric}>
           <span className={css.metricLabel}>{t('options.detected.netCredit')}</span>
@@ -161,7 +161,7 @@ function DetectedCard({
   const priced = pricedPick !== undefined
   const statusText = pricedPick?.status ?? o.picks[0]?.status ?? ''
   return (
-    <div className={css.detectedCard}>
+    <div className={css.detectedCard} data-detected-card={o.id} data-priced={priced ? 'true' : 'false'}>
       <div className={css.detectedCardHead}>
         <span className={css.detectedLabel}>{o.opportunityLabel}</span>
         {o.underlyings.map(u => (
@@ -181,7 +181,7 @@ function DetectedCard({
           <Block title={t('options.detected.invalid')} body={o.invalidIfZh} />
 
           {o.picks.map((p, i) => (
-            <div key={`${p.underlying}-${i}`} className={css.detectedPick}>
+            <div key={`${p.underlying}-${i}`} className={css.detectedPick} data-detected-pick={p.underlying}>
               <div className={css.detectedPickHead}>
                 <span className={css.detectedCode}>{p.underlying}</span>
                 {p.structure !== null && (
@@ -199,7 +199,7 @@ function DetectedCard({
                     <RiskMetrics pick={p} t={t} />
                   </>
                 )
-                : <div className={css.blocker}>{t('options.detected.unpriced')}</div>}
+                : <div className={css.blocker} data-detected-blocker="">{t('options.detected.unpriced')}</div>}
             </div>
           ))}
         </>
@@ -216,7 +216,7 @@ export function OptionsDetectedOpportunities({
   if (items.length === 0) return <></>
 
   return (
-    <div className={css.detected}>
+    <div className={css.detected} data-dshtrading-detected-opportunities="">
       <div className={css.detectedHead}>
         <span className={css.detectedTitle}>{t('options.detected.title')}</span>
         <span className={css.detectedHint}>{t('options.detected.hint')}</span>
