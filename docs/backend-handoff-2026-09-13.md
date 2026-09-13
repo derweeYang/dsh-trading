@@ -242,5 +242,13 @@ OptionPaperDeskDay { date, candidates, filled, gapBuckets,
 - [x] `node scripts/i18n-audit.mjs --check`：OK（1273 zh keys 对齐）
 - [x] `node scripts/typecheck-gate.mjs`：与主仓基底持平（基底基线过时为已知存量债，
       本任务零新增；worktree 与主仓错误数逐 tsconfig 相同）
-- [ ] 2026-09-14（周一）开盘后页面复核：日级表 09-10 行 candidates=7/filled=0/gap=7、
-      09-11 行 paperSkips.no_quote=4，与审计数字一致
+- [x] 页面端到端复核（2026-09-13 深夜，:3081 期权总览 tab）：执行台 section 完整渲染——
+      账户条 cash=initialCash=equity=100000.00、持仓 0；日级表 5 行，其中 09-10 行
+      candidates=4/filled=0/**gap=4**（缺口列红显）、09-11 行 paperSkips「无报价×4」、
+      09-13/09-12/09-09 为 session 桩行；近期流水 4 条 510050 vertical 无报价行 + 免责声明。
+      API 层 `GET /options/paper/desk` 同数（equity=100000，dayCount=5，41ms）。
+      **口径勘误**：审计报告的「09-10 七候选」是全记录 picks 明细数（含 06:15/06:25 桶的
+      重复写，共 7 条 vertical pick 行）；执行台与复盘 md 同用 last-wins 桶口径
+      （`latestByKey` 去重后 4 个候选桶），4/0/4 为正确数字，非回归。
+- [ ] 2026-09-14（周一）开盘后复核：首个交易日真实信号下，fills 是否出现第一笔
+      带腿成交（执行器 9d30ca7 链预热修复的首次实战验证）
