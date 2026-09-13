@@ -4,7 +4,15 @@
     "rootDir": "src",
     "outDir": "lib"
   },
+  // include 首位锚定 index.ts：绕 TS 5.9 root 顺序敏感缺陷（2026-09-13 期权套利链路引入）。
+  // cordis 入口 index.d.ts 经 `export * from './context.ts'` 转发 Context，其混入成员
+  // （inject/plugin/get/set 等 18 个，来自 cordis 内部 5 处 declare module './context.ts'）
+  // 的合并对「哪个文件先进入程序」敏感：一旦某个先于 index.ts 的 root（如 arbitrage.ts）
+  // 先行请求模块图，入口转发的 Context 会丢失全部混入成员，super(ctx, ...) 在
+  // exactOptionalPropertyTypes 下报 TS2379。index.ts 钉在首位使 cordis 模块图从包名
+  // 入口先建立，错误消失（已验证单/双 root 可稳定翻转复现）。升级 TS 或 cordis 修复后可移除。
   "include": [
+    "src/index.ts",
     "src"
   ]
 }

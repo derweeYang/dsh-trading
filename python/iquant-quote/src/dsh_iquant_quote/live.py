@@ -456,6 +456,14 @@ class LiveBackend:
             }
             if pre_close:
                 item["changePct"] = round((last - pre_close) / pre_close * 100.0, 4)
+            # 买一/卖一（全推快照五档第一档）。0 = 无盘（停牌/回落日 K），缺省键，
+            # 下游套利扫描据此退回 last 近似（executable=false）。
+            bid = float(quote.get("bid") or 0)
+            ask = float(quote.get("ask") or 0)
+            if bid > 0:
+                item["bid"] = bid
+            if ask > 0:
+                item["ask"] = ask
             (calls if row["optionType"] == "C" else puts).append(item)
         if snapshot_ms > 0:
             snapshot_at = datetime.fromtimestamp(snapshot_ms / 1000, tz=CST).isoformat()
@@ -509,6 +517,21 @@ class LiveBackend:
                     snap.get("timestamp_ms") or snap.get("timestamp") or 0
                 ),
             }
+            # 五档数组第一档（iquant SDK snapshot_to_dict 的 ask/bid）；0 = 无盘不落键。
+            levels = snap.get("ask")
+            if (
+                isinstance(levels, (list, tuple))
+                and len(levels) > 0
+                and float(levels[0]) > 0
+            ):
+                out[code]["ask"] = float(levels[0])
+            levels = snap.get("bid")
+            if (
+                isinstance(levels, (list, tuple))
+                and len(levels) > 0
+                and float(levels[0]) > 0
+            ):
+                out[code]["bid"] = float(levels[0])
         return out
 
     def _last_daily_quote(self, market: str, code: str) -> dict[str, Any] | None:

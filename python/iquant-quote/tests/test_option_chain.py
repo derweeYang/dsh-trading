@@ -111,6 +111,8 @@ def test_option_chain_uses_ticks_when_drain_has_prints():
                 "pre_close": 0.35,
                 "volume": 1200,
                 "timestamp_ms": 1_757_000_000_000,
+                "ask": [0.366, 0.367, 0.0, 0.0, 0.0],
+                "bid": [0.3648, 0.3646, 0.0, 0.0, 0.0],
             },
             "10011256": {
                 "last": 0.012,
@@ -126,10 +128,39 @@ def test_option_chain_uses_ticks_when_drain_has_prints():
     assert chain["calls"][0]["last"] == pytest.approx(0.3658)
     assert chain["calls"][0]["preClose"] == pytest.approx(0.35)
     assert chain["calls"][0]["volume"] == 1200
+    # 全推快照五档第一档 → 买一/卖一透传（套利扫描可执行边界）。
+    assert chain["calls"][0]["ask"] == pytest.approx(0.366)
+    assert chain["calls"][0]["bid"] == pytest.approx(0.3648)
     assert chain["puts"][0]["code"] == "510050P2609M02650"
     assert chain["puts"][0]["last"] == pytest.approx(0.012)
+    # 无盘口字段的 tick（快照缺 ask/bid）不落键，不造 0 价。
+    assert "bid" not in chain["puts"][0]
+    assert "ask" not in chain["puts"][0]
     assert client.subscribed == ("SHO", ["10011255", "10011256"])
     assert client.unsubscribed == [7]
+
+
+def test_option_chain_first_level_zero_omits_bid_ask():
+    """五档第一档为 0（无盘/极端档）→ 不落 bid/ask 键，下游退回 last 近似。"""
+    client = _FakeQuoteClient(
+        [
+            {"market": "SHO", "code": "10011255", "name": "50ETF购9月2650"},
+        ],
+        ticks={
+            "10011255": {
+                "last": 0.3658,
+                "pre_close": 0.35,
+                "volume": 1200,
+                "timestamp_ms": 1_757_000_000_000,
+                "ask": [0.0, 0.0, 0.0, 0.0, 0.0],
+                "bid": [0.0, 0.0, 0.0, 0.0, 0.0],
+            },
+        },
+    )
+    chain = _backend(client).option_chain("SHO", "510050", "2609")
+    assert chain["calls"][0]["last"] == pytest.approx(0.3658)
+    assert "bid" not in chain["calls"][0]
+    assert "ask" not in chain["calls"][0]
 
 
 def test_option_chain_falls_back_to_daily_when_drain_empty():

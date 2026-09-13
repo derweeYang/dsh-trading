@@ -123,6 +123,43 @@ def test_chain_iquant_serves_sse_and_szse(monkeypatch):
     assert {body["market"] for _, body in calls} == {"SHO", "SZO"}
 
 
+def test_chain_iquant_forwards_bid_ask_when_present(monkeypatch):
+    """iquant-quote 全推快照买一/卖一 → chain 行透传（套利扫描可执行边界）。"""
+
+    def run(subcommand: str, body: dict, _request: dict | None = None):
+        assert subcommand == "option_chain"
+        quote = {
+            "code": "510050C2609M02850",
+            "strike": 2.85,
+            "last": 0.18,
+            "preClose": 0.17,
+            "volume": 1000,
+            "bid": 0.178,
+            "ask": 0.182,
+        }
+        bare = {
+            "code": "510050P2609M02850",
+            "strike": 2.85,
+            "last": 0.01,
+            "preClose": 0.012,
+            "volume": 500,
+        }
+        return {
+            "expiryDate": "2026-09-23",
+            "snapshotAt": "2026-09-11T15:00:00+08:00",
+            "calls": [quote],
+            "puts": [bare],
+        }
+
+    monkeypatch.setattr(iquant, "call_quote", run)
+    result = chain.handle_chain({"source": "iquant", "underlying": "510050", "expiryMonth": "2609"})
+    assert result["calls"][0]["bid"] == pytest.approx(0.178)
+    assert result["calls"][0]["ask"] == pytest.approx(0.182)
+    # 无盘口（日 K 回落）行不落键，不造 0 价。
+    assert "bid" not in result["puts"][0]
+    assert "ask" not in result["puts"][0]
+
+
 def test_contracts_iquant_writes_cache(tmp_path, monkeypatch):
     calls: list = []
     _install_runner(monkeypatch, calls)

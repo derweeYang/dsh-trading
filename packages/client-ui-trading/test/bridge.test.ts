@@ -827,6 +827,116 @@ describe('TradingBridge CN ETF options', () => {
     })
   })
 
+  it('GET /options/arbitrage：现价拼接 spot + 桥层默认模拟盘费率', async () => {
+    let seenQuery: Record<string, unknown> = {}
+    const bridge = new TradingBridge({
+      ...fakeHost({
+        tradingCnMarketData: fakeService({
+          getTicker: async (symbol) => ({ symbol, price: 2.9, timestamp: 1 }),
+        }),
+      }),
+      getCnOptions: () => ({
+        listUnderlyings: async () => [{
+          underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF',
+          multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board',
+        }],
+        getOptionExpiries: async () => {
+          throw new Error('unused')
+        },
+        getOptionChain: async () => {
+          throw new Error('unused')
+        },
+        getImpliedVol: async () => {
+          throw new Error('unused')
+        },
+        getStrategy: async () => {
+          throw new Error('unused')
+        },
+        getArbitrageScan: async (query: Record<string, unknown>) => {
+          seenQuery = query
+          return {
+            underlying: '510050',
+            expiryMonth: '2609',
+            source: 'iquant',
+            multiplier: 10000,
+            asOf: '2026-09-11T15:00:00+08:00',
+            assumptions: {
+              rate: 0.02,
+              thresholdPerShare: 0.005,
+              feePerContract: query.feePerContract ?? 0,
+              priceBasis: 'mid_last',
+            },
+            opportunities: [],
+            disclaimer: '量化信号非投资建议',
+          }
+        },
+      }),
+    })
+    const { status, payload } = await dispatchBridgeRequest(
+      bridge,
+      'GET',
+      '/options/arbitrage',
+      new URLSearchParams({ underlying: '510050.SH', expiryMonth: '2609' }),
+    )
+    expect(status).toBe(200)
+    // 现价来自 CN 行情 ticker（510050.SH → 2.9）；费率缺省注入模拟盘 1.7 元/张
+    expect(seenQuery.spot).toBeCloseTo(2.9, 6)
+    expect(seenQuery.feePerContract).toBeCloseTo(1.7, 6)
+    expect(payload).toMatchObject({ ok: true, scan: { underlying: '510050' } })
+  })
+
+  it('GET /options/arbitrage：fee=0 显式关费 / threshold 非数字 400 / 缺参 400', async () => {
+    const mkBridge = () => new TradingBridge({
+      ...fakeHost({}),
+      getCnOptions: () => ({
+        listUnderlyings: async () => [],
+        getOptionExpiries: async () => {
+          throw new Error('unused')
+        },
+        getOptionChain: async () => {
+          throw new Error('unused')
+        },
+        getImpliedVol: async () => {
+          throw new Error('unused')
+        },
+        getStrategy: async () => {
+          throw new Error('unused')
+        },
+        getArbitrageScan: async (query: Record<string, unknown>) => ({
+          underlying: '510050',
+          expiryMonth: query.expiryMonth as string,
+          source: 'iquant',
+          multiplier: 10000,
+          asOf: '2026-09-11T15:00:00+08:00',
+          assumptions: { rate: 0.02, thresholdPerShare: 0.005, feePerContract: query.feePerContract ?? 0, priceBasis: 'mid_last' },
+          opportunities: [],
+          disclaimer: 'x',
+        }),
+      }),
+    })
+    const { status, payload } = await dispatchBridgeRequest(
+      mkBridge(),
+      'GET',
+      '/options/arbitrage',
+      new URLSearchParams({ underlying: '510050', expiryMonth: '2609', fee: '0' }),
+    )
+    expect(status).toBe(200)
+    const scan = (payload as { scan: { assumptions: { feePerContract: number } } }).scan
+    expect(scan.assumptions.feePerContract).toBe(0)
+    await expect(dispatchBridgeRequest(
+      mkBridge(),
+      'GET',
+      '/options/arbitrage',
+      new URLSearchParams({ underlying: '510050', expiryMonth: '2609', threshold: 'abc' }),
+    )).rejects.toBeInstanceOf(BridgeProtocolError)
+    await expect(dispatchBridgeRequest(
+      mkBridge(),
+      'GET',
+      '/options/arbitrage',
+      new URLSearchParams({ underlying: '510050' }),
+    )).rejects.toBeInstanceOf(BridgeProtocolError)
+  })
+
   it('GET /options/expiries 透传四季月', async () => {
     const bridge = new TradingBridge({
       ...fakeHost({}),

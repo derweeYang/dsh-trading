@@ -61,9 +61,7 @@ def option_market_of(row: dict[str, Any]) -> str:
 def require_row(underlying: str) -> dict[str, Any]:
     row = find_underlying("iquant", underlying)
     if row is None:
-        raise OptionsError(
-            "BAD_REQUEST", f"unknown underlying {underlying!r}; see underlyings"
-        )
+        raise OptionsError("BAD_REQUEST", f"unknown underlying {underlying!r}; see underlyings")
     return row
 
 
@@ -74,7 +72,6 @@ def map_quote_error(code: str, message: str) -> OptionsError:
     if code in ("BAD_REQUEST", "NO_DATA", "NETWORK", "INTERNAL"):
         return OptionsError(code, message)
     return OptionsError("NO_DATA", f"iquant-quote cannot serve this: {code}: {message}")
-
 
 
 def _require_live_host_path(request: dict[str, Any], key: str) -> str:
@@ -100,7 +97,9 @@ def _live_quote_payload(body: dict[str, Any], request: dict[str, Any]) -> dict[s
     return payload
 
 
-def run_quote(subcommand: str, body: dict[str, Any], request: dict[str, Any] | None = None) -> dict[str, Any]:
+def run_quote(
+    subcommand: str, body: dict[str, Any], request: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """调用 iquant-quote;``iquantSource: live`` 时转发宿主路径,否则 ``source: synth``。"""
     request = request or {}
     if request.get("iquantSource") == "live":
@@ -143,7 +142,9 @@ def _http_quote(subcommand: str, body: dict[str, Any]) -> dict[str, Any]:
             raise OptionsError("INTERNAL", "iquant-quote result is not an object")
         return result
     error = response.get("error") or {}
-    raise QuoteReplyError(str(error.get("code") or "INTERNAL"), str(error.get("message") or "iquant-quote failed"))
+    raise QuoteReplyError(
+        str(error.get("code") or "INTERNAL"), str(error.get("message") or "iquant-quote failed")
+    )
 
 
 def call_quote(subcommand: str, body: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
@@ -151,7 +152,11 @@ def call_quote(subcommand: str, body: dict[str, Any], request: dict[str, Any]) -
     prefix = request.get("iquantArgvPrefix")
     if prefix is None:
         return _http_quote(subcommand, body)
-    if not isinstance(prefix, list) or not prefix or not all(isinstance(item, str) for item in prefix):
+    if (
+        not isinstance(prefix, list)
+        or not prefix
+        or not all(isinstance(item, str) for item in prefix)
+    ):
         raise OptionsError("BAD_REQUEST", "iquant source requires iquantArgvPrefix")
     try:
         proc = subprocess.run(
@@ -189,7 +194,11 @@ def call_quote(subcommand: str, body: dict[str, Any], request: dict[str, Any]) -
 
 
 def map_chain_quote(row: dict[str, Any]) -> dict[str, Any]:
-    """iquant option_chain 行 → options chain 列名(preClose → prevSettle)。"""
+    """iquant option_chain 行 → options chain 列名(preClose → prevSettle)。
+
+    bid/ask（全推快照买一/卖一，2026-09-13 套利链路）有则透传：
+    日 K 回落/无盘时上游不落键，此处同样缺省（下游 executable=false 近似）。
+    """
     quote = {
         "code": row["code"],
         "strike": float(row["strike"]),
@@ -199,6 +208,10 @@ def map_chain_quote(row: dict[str, Any]) -> dict[str, Any]:
     }
     if "changePct" in row:
         quote["changePct"] = float(row["changePct"])
+    if row.get("bid"):
+        quote["bid"] = float(row["bid"])
+    if row.get("ask"):
+        quote["ask"] = float(row["ask"])
     return quote
 
 
@@ -224,7 +237,11 @@ def history_window(request: dict[str, Any]) -> tuple[int, int, int]:
     """把可选 ISO start/end 收成 iquant-quote 的毫秒窗与 limit。"""
     start_raw = request.get("start")
     end_raw = request.get("end")
-    start_ms = _iso_to_ms(start_raw, end_of_day=False) if isinstance(start_raw, str) and start_raw else DEFAULT_BARS_START_MS
+    start_ms = (
+        _iso_to_ms(start_raw, end_of_day=False)
+        if isinstance(start_raw, str) and start_raw
+        else DEFAULT_BARS_START_MS
+    )
     if isinstance(end_raw, str) and end_raw:
         end_ms = _iso_to_ms(end_raw, end_of_day=True) + 1
     else:

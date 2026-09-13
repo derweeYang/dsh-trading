@@ -104,6 +104,10 @@ export interface OptionQuoteRow {
   readonly strike: number
   readonly last?: number
   readonly prevSettle?: number
+  /** 买一价（元）。iquant 全推快照可得；akshare/日 K 回落/合成链缺省 → 消费方近似估算。 */
+  readonly bid?: number
+  /** 卖一价（元）。来源同 bid。 */
+  readonly ask?: number
   readonly changePct?: number
   readonly volume?: number
   readonly impliedVol?: number
@@ -311,6 +315,105 @@ export interface OptionParityQuery extends CnOptionsQuery {
   readonly asOf?: string
 }
 
+/* ── 套利扫描（2026-09-13：connector-options 桥接 @dshtrading/strategies 纯函数内核）── */
+
+/** 套利机会一腿（镜像 strategies ArbitrageLeg；api 保持零包依赖，字段手工同步）。 */
+export interface OptionArbitrageLeg {
+  readonly code: string
+  readonly right: OptionRight
+  readonly action: 'buy' | 'sell'
+  readonly strike: number
+}
+
+export type OptionArbitrageKind = 'parity' | 'box'
+
+export type OptionArbitrageDirection =
+  | 'buy_synthetic_sell_spot'
+  | 'sell_synthetic_buy_spot'
+  | 'long_box'
+  | 'short_box'
+
+/**
+ * 无风险套利机会（平价 + 箱型），按 edgePerContract 降序。
+ * executable=false 表示无真实买卖盘、仅 last/prevSettle 近似（须以可成交价复核）。
+ */
+export interface OptionArbitrageOpportunity {
+  readonly kind: OptionArbitrageKind
+  readonly underlying: string
+  readonly expiryMonth: string
+  /** parity：配对的行权价。 */
+  readonly strike?: number
+  /** box：低/高行权价。 */
+  readonly lowStrike?: number
+  readonly highStrike?: number
+  /** 元/股（可执行边界或中间价幅度）。 */
+  readonly edgePerShare: number
+  /** 元/张 = edgePerShare × multiplier。 */
+  readonly edgePerContract: number
+  readonly direction: OptionArbitrageDirection
+  readonly legs: readonly OptionArbitrageLeg[]
+  readonly note: string
+  readonly executable: boolean
+}
+
+/** 垂直价差（镜像 strategies VerticalSpread；方向性策略，非无风险套利）。 */
+export interface OptionVerticalSpread {
+  readonly right: OptionRight
+  readonly direction: 'bull' | 'bear'
+  readonly lowStrike: number
+  readonly highStrike: number
+  /** 净借记（正=净支出，负=净收入）。 */
+  readonly netDebit: number
+  readonly maxProfitPerShare: number
+  readonly maxLossPerShare: number
+  /** 到期损益平衡价。 */
+  readonly breakeven: number
+  readonly legs: readonly OptionArbitrageLeg[]
+}
+
+/** 套利扫描查询：拉链一次 → strategies 内核（平价+箱型；垂直价差可选）。 */
+export interface OptionArbitrageScanQuery extends CnOptionsQuery {
+  /** 现货价（元）。缺省用链自带 spot；再缺省则平价扫描退化（仅箱型，box 不依赖 spot）。 */
+  readonly spot?: number
+  /** 偏差阈值（元/股），缺省 0.005（乘数 10000 → 50 元/张）。 */
+  readonly thresholdPerShare?: number
+  /** 单边交易费（元/张），扫描时从边里扣减后再过阈值；缺省 0（桥/工具层可注入模拟盘费率）。 */
+  readonly feePerContract?: number
+  /** 是否附带垂直价差全集（4 方向 × 行权价两两组合，量较大）；缺省 false。 */
+  readonly includeVerticals?: boolean
+}
+
+export interface OptionArbitrageScanResult {
+  readonly underlying: string
+  readonly expiryMonth: string
+  readonly expiryDate?: string
+  readonly snapshotAt?: string
+  readonly source: OptionSource | string
+  readonly spot?: number
+  /** 合约乘数（名册行；edgePerContract 换算依据）。 */
+  readonly multiplier: number
+  /** 评估时点 ISO（贴现因子 T 的分母；缺省链 snapshotAt，再缺省扫描时刻）。 */
+  readonly asOf: string
+  /** 扫描假设回显（结果复核与免责展示用）。 */
+  readonly assumptions: {
+    readonly rate: number
+    readonly thresholdPerShare: number
+    readonly feePerContract: number
+    /** 价格口径：bid_ask=全部腿真实买卖盘 / mid_last=全部近似 / mixed=混合。 */
+    readonly priceBasis: 'bid_ask' | 'mid_last' | 'mixed'
+  }
+  /** 平价 + 箱型机会，按 edgePerContract 降序。 */
+  readonly opportunities: readonly OptionArbitrageOpportunity[]
+  /** 垂直价差全集（仅 includeVerticals=true 时携带）。 */
+  readonly verticals?: readonly OptionVerticalSpread[]
+  /** 技术分析信号非投资建议；executable=false 须以可成交价复核。 */
+  readonly disclaimer: string
+}
+
+/** 套利扫描免责声明常量（connector 组装时回填 result.disclaimer）。 */
+export const OPTION_ARBITRAGE_DISCLAIMER =
+  '套利扫描为量化信号与技术分析，不构成投资建议；executable=false 的机会仅为 last/prevSettle 近似边界，下单前必须以真实买卖盘与可成交价复核。'
+
 /** 标准四季月一行（当月 / 次月 / +3 / +6），到期日 = 该月第四个周三。 */
 export interface OptionExpiryMonth {
   readonly expiryMonth: string
@@ -341,6 +444,11 @@ export interface CnOptionsService {
   getPrice(query: OptionPriceQuery): Promise<KernelReport>
   /** 阶段 3 内核上桥：Put-Call 平价检验（python parity_check）。 */
   getParityCheck(query: OptionParityQuery): Promise<KernelReport>
+  /**
+   * 套利扫描（2026-09-13）：拉链 → strategies 套利内核（平价 + 箱型，垂直价差可选）。
+   * 纯 TS 组装在本连接器内完成，不打网关新命令。
+   */
+  getArbitrageScan(query: OptionArbitrageScanQuery): Promise<OptionArbitrageScanResult>
 }
 
 /* ── CN ETF 期权交易契约（2026-09-08 阶段 3，双闸照 TradeService 范式）──────── */

@@ -6,6 +6,8 @@ import type {
   CnOptionsQuery,
   CnOptionsService,
   KernelReport,
+  OptionArbitrageScanQuery,
+  OptionArbitrageScanResult,
   OptionChain,
   OptionExpiryCalendar,
   OptionImpliedVolResult,
@@ -19,6 +21,7 @@ import type {
   OptionVolAnalyticsQuery,
   TradingErrorCode,
 } from '@dshtrading/api'
+import { scanOptionChainArbitrage } from './arbitrage.js'
 
 export class TradingServiceError extends Error {
   readonly code: TradingErrorCode
@@ -67,6 +70,15 @@ const STATIC_ROWS: Record<OptionSource, readonly OptionUnderlying[]> = {
 
 export function listStaticUnderlyings(source: OptionSource): readonly OptionUnderlying[] {
   return STATIC_ROWS[source]
+}
+
+/** 名册行乘数（套利扫描 edgePerContract 换算；不写死合约参数）。 */
+export function multiplierOf(source: OptionSource | string, underlying: string): number {
+  if (source === 'synth' || source === 'akshare' || source === 'iquant') {
+    const row = listStaticUnderlyings(source).find((r) => r.underlying === underlying)
+    if (row !== undefined) return row.multiplier
+  }
+  return 10000
 }
 
 const SEASONAL_STEPS = [0, 1, 3, 6] as const
@@ -188,6 +200,17 @@ export class OptionsRestClient implements CnOptionsService {
       underlying,
       expiryMonth: expiryMonth.trim(),
     })
+  }
+
+  async getArbitrageScan(query: OptionArbitrageScanQuery): Promise<OptionArbitrageScanResult> {
+    const underlying = normalizeCnUnderlying(query.underlying)
+    const source = query.source ?? this.source
+    const expiryMonth = query.expiryMonth
+    if (expiryMonth === undefined || expiryMonth.trim() === '') {
+      throw new TradingServiceError('TRADING_UNSUPPORTED_SYMBOL', 'options: expiryMonth is required')
+    }
+    const chain = await this.getOptionChain({ underlying, expiryMonth, source })
+    return scanOptionChainArbitrage(chain, query, { multiplier: multiplierOf(source, underlying) })
   }
 
   async getImpliedVol(query: CnOptionsQuery & { readonly rate: number }): Promise<OptionImpliedVolResult> {
