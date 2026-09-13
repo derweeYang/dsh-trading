@@ -1137,6 +1137,53 @@ export interface OptionPaperFillsWire {
   readonly fills: readonly PaperFill[]
 }
 
+/** 纸账户工作台：打分分布四象（与盘后复盘 md 同口径：latestByKey(cycles, id) 去重）。 */
+export interface OptionPaperDeskVerdicts {
+  readonly hit: number
+  readonly partial: number
+  readonly miss: number
+  readonly skipped: number
+}
+
+/** 单日执行链路统计：candidates/filled/gapBuckets 三态划分 + 两层跳过分布 + 打分分布。 */
+export interface OptionPaperDeskDay {
+  /** 上海日历日（账本文件名日期；bucketStart 跨 UTC 日不改归属）。 */
+  readonly date: string
+  /** latestByKey(recommendations, bucketStart) 去重后有效候选（!noTrade 且无 skipReason）。 */
+  readonly candidates: number
+  /** 当日真实开仓数（fills 中 offset=open 且 reason=signal 且 qty>0；close 行复用开仓桶不计）。 */
+  readonly filled: number
+  /** 候选桶在当日 fills 无任何 open 行（含 skip 桩）——执行链路记录缺口。 */
+  readonly gapBuckets: number
+  /** 去重推荐行的 skipReason 计数。 */
+  readonly skipReasons: Readonly<Record<string, number>>
+  /** fills 桩 skip 字段计数（键域 = PaperFillSkip 六值闭集）。 */
+  readonly paperSkips: Readonly<Record<string, number>>
+  readonly verdicts: OptionPaperDeskVerdicts
+  /** verdict !== 'skipped' 的有效打分数（复盘 md「有效打分」同源）。 */
+  readonly scored: number
+}
+
+/** 纸账户工作台快照：账户 + 近 N 日执行链路统计 + 跨日流水。 */
+export interface OptionPaperDesk {
+  readonly account: PaperAccount
+  /** cash + Σmargin + Σ腿盯市（无链回落开仓价；与 GET /options/paper/account 同式）。 */
+  readonly equity: number
+  readonly positions: readonly PaperPosition[]
+  /** 近 N 日，新→旧；三账本全空的日期不出行。 */
+  readonly days: readonly OptionPaperDeskDay[]
+  /** 实际覆盖日数（<= 请求上限）。 */
+  readonly dayCount: number
+  /** 跨日近期流水（asOf 新→旧，缺省 50 条）。 */
+  readonly recentFills: readonly PaperFill[]
+  readonly asOf: string
+}
+
+export interface OptionPaperDeskWire {
+  readonly ok: true
+  readonly desk: OptionPaperDesk
+}
+
 /** 股票市场标的基本面与财务估值快照（CN）。 */
 export interface StockFundamentals {
   /** 标的规范符号（如 600519.SH）。 */

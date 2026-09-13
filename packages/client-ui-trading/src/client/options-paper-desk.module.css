@@ -1,0 +1,128 @@
+/* OptionsPaperDesk —— 纸账户执行台（2026-09-13）。
+   token 与 options-overview / options-cycle-loop 同族（--dsw-futu-*）。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+  flex: 0 0 auto;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.noticeDetail {
+  font-size: 11px;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+/* 账户条：六项指标横排，窄屏自动换行 */
+.accountStrip {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  border-radius: var(--dsw-futu-radius-s, 4px);
+}
+
+.accountMetric {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 64px;
+}
+
+.metricLabel {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.metricValue {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 日级表：数字列右对齐 + tabular-nums，记录缺口行给警示底色 */
+.daysTable,
+.fillsTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.daysTable th,
+.daysTable td,
+.fillsTable th,
+.fillsTable td {
+  padding: 3px 8px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+}
+
+.daysTable th,
+.fillsTable th {
+  position: sticky;
+  top: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  background: var(--dsw-futu-bg-page, #fff);
+}
+
+.daysTable td,
+.fillsTable td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 分布短语列（推荐跳过 / 纸账跳过）允许换行，不撑破表格 */
+.daysTable td:nth-child(5),
+.daysTable td:nth-child(6) {
+  white-space: normal;
+  min-width: 120px;
+}
+
+.gapRow {
+  background: var(--dsw-futu-up-bg, rgba(230, 69, 69, 0.06));
+}
+
+.fillsHead {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  padding-top: 2px;
+}
+
+.disclaimer {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}

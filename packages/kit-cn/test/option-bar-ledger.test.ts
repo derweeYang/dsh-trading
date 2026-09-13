@@ -2,24 +2,27 @@ import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { OptionCycle, OptionIntradayBoxRow } from '@dshtrading/api'
+import type { OptionBarRecommendation, OptionCycle, OptionIntradayBoxRow, PaperFill, PaperFillReason } from '@dshtrading/api'
 import { OptionCycleBook } from '../src/option-cycles.ts'
 import {
   appendJsonlLine,
   attachOverviewStrategies,
   OPTION_BAR_AGENT_PROMPT,
   buildBarContextPacket,
+  cyclesPath,
   decideBarAgent,
   latestRecommendation,
   loadLatestRecommendation,
   foldDailyReview,
   foldOptionBarSessions,
+  foldPaperDeskDay,
   latestByKey,
   latestPacketForBucket,
   atmIvPercentile,
   foldIvDaily,
   backfillIvDailyFromPackets,
   applyReplayIvDaily,
+  loadPaperDesk,
   makeSkipRecommendation,
   normalizeRecommendation,
   opportunityAllowed,
@@ -29,7 +32,9 @@ import {
   loadOverviewSnapshot,
   writeOverviewSnapshot,
   packetsPath,
+  paperFillsPath,
   readJsonl,
+  recommendationsPath,
   tagIvRegime,
   replayCyclesIntoBook,
   sessionAt,
@@ -479,6 +484,129 @@ describe('shouldWriteDailyReview / foldDailyReview', () => {
       ],
     })
     expect(md).toContain('paper no_quote: 2')
+  })
+})
+
+describe('foldPaperDeskDay / loadPaperDesk', () => {
+  function fill(partial: {
+    bucketStart: string
+    offset: PaperFill['offset']
+    reason: PaperFillReason
+  } & Partial<PaperFill>): PaperFill {
+    return {
+      id: `fill-${partial.bucketStart}-${partial.offset}-${partial.reason}`,
+      asOf: partial.asOf ?? partial.bucketStart,
+      underlying: '510050',
+      template: 'vertical',
+      qty: 0,
+      legs: [],
+      premiumCny: 0,
+      marginCny: 0,
+      cashAfter: 100000,
+      ...partial,
+    }
+  }
+
+  function candidate(bucketStart: string): OptionBarRecommendation {
+    return {
+      bucketStart,
+      asOf: bucketStart,
+      session: 'regular',
+      opportunity: 'direction_delta',
+      edge: 'e',
+      logic: 'l',
+      playbook: 'p',
+      invalidIf: 'i',
+      picks: [{ underlying: '510050', regime: 'breakout', template: 'vertical', cycleId: '510050:1' }],
+      noTrade: false,
+    }
+  }
+
+  it('候选桶三态划分：signal 成交 / skip 桩 / 无 fill = 记录缺口；close 行与重复推荐不复计', () => {
+    const cycle = (id: string, verdict: 'hit' | 'miss' | 'skipped'): OptionCycle => ({
+      id,
+      underlying: '510050',
+      bucketStart: '2026-09-11T02:30:00.000Z',
+      asOf: '2026-09-11T02:30:01.000Z',
+      forecast: forecast(),
+      score: { verdict, barCount: 5 },
+      calibration: 'none',
+    })
+    const day = foldPaperDeskDay({
+      date: '2026-09-11',
+      cycles: [
+        cycle('510050:1', 'hit'),
+        cycle('510050:1', 'miss'), // 同 id 重复：last-wins 应取 miss
+        cycle('510050:2', 'skipped'),
+      ],
+      recommendations: [
+        candidate('2026-09-11T02:30:00.000Z'), // A：成交
+        candidate('2026-09-11T02:50:00.000Z'), // B：no_quote skip 桩
+        candidate('2026-09-11T03:10:00.000Z'), // C：无 fill → 记录缺口
+        candidate('2026-09-11T02:30:00.000Z'), // A 重复：bucketStart 去重
+        makeSkipRecommendation({ bucketStart: '2026-09-11T03:20:00.000Z', asOf: 't', session: 'regular', skipReason: 'overlap' }),
+      ],
+      fills: [
+        fill({ bucketStart: '2026-09-11T02:30:00.000Z', offset: 'open', reason: 'signal', qty: 1 }),
+        fill({ bucketStart: '2026-09-11T02:50:00.000Z', offset: 'open', reason: 'skipped', skip: 'no_quote' }),
+        fill({ bucketStart: '2026-09-11T02:30:00.000Z', offset: 'close', reason: 'close5' }), // close 复用开仓桶，不得双计
+      ],
+    })
+    expect(day.candidates).toBe(3)
+    expect(day.filled).toBe(1)
+    expect(day.gapBuckets).toBe(1)
+    expect(day.paperSkips).toEqual({ no_quote: 1 })
+    expect(day.skipReasons).toEqual({ overlap: 1 })
+    expect(day.verdicts).toEqual({ hit: 0, partial: 0, miss: 1, skipped: 1 })
+    expect(day.scored).toBe(1)
+  })
+
+  it('loadPaperDesk：日期并集新→旧、空日剔除、recentFills 跨日按 asOf 降序、目录全缺不抛', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'paper-desk-'))
+    await mkdir(path.join(root, 'recommendations'), { recursive: true })
+    await mkdir(path.join(root, 'paper', 'fills'), { recursive: true })
+    // 09-09：只有空 fills 文件 → 三账本全空，不出行
+    await writeFile(paperFillsPath(root, '2026-09-09'), '', 'utf8')
+    // 09-10：候选无 fill（记录缺口形状，同 2026-09-10 真实事故）
+    await appendJsonlLine(recommendationsPath(root, '2026-09-10'), candidate('2026-09-10T05:40:00.000Z'))
+    await writeFile(paperFillsPath(root, '2026-09-10'), '', 'utf8')
+    // 09-11：候选 + 两条 skip 桩（asOf 乱序写入，验证排序）
+    await appendJsonlLine(recommendationsPath(root, '2026-09-11'), candidate('2026-09-11T02:30:00.000Z'))
+    await appendJsonlLine(paperFillsPath(root, '2026-09-11'), fill({
+      bucketStart: '2026-09-11T02:30:00.000Z', offset: 'open', reason: 'skipped', skip: 'no_quote',
+      asOf: '2026-09-11T02:37:39.000Z',
+    }))
+    await appendJsonlLine(paperFillsPath(root, '2026-09-11'), fill({
+      bucketStart: '2026-09-11T05:35:00.000Z', offset: 'open', reason: 'skipped', skip: 'no_quote',
+      asOf: '2026-09-11T05:41:30.000Z',
+    }))
+
+    const desk = await loadPaperDesk(root)
+    expect(desk.days.map((row) => row.date)).toEqual(['2026-09-11', '2026-09-10'])
+    expect(desk.dayCount).toBe(2)
+    expect(desk.days[0]?.paperSkips).toEqual({ no_quote: 2 })
+    expect(desk.days[1]?.gapBuckets).toBe(1)
+    expect(desk.days[1]?.candidates).toBe(1)
+    expect(desk.recentFills.map((row) => row.asOf)).toEqual([
+      '2026-09-11T05:41:30.000Z',
+      '2026-09-11T02:37:39.000Z',
+    ])
+
+    const empty = await loadPaperDesk(await mkdtemp(path.join(os.tmpdir(), 'paper-desk-')))
+    expect(empty.days).toHaveLength(0)
+    expect(empty.recentFills).toHaveLength(0)
+    expect(empty.dayCount).toBe(0)
+  })
+
+  it('loadPaperDesk：坏 JSON 行的日子跳过、不炸整端点', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'paper-desk-'))
+    await mkdir(path.join(root, 'recommendations'), { recursive: true })
+    await appendJsonlLine(recommendationsPath(root, '2026-09-12'), candidate('2026-09-12T05:40:00.000Z'))
+    // readJsonl 对坏行抛错（jsonl 逐行 JSON.parse）→ 该日整体跳过
+    await mkdir(path.join(root, 'paper', 'fills'), { recursive: true })
+    await writeFile(paperFillsPath(root, '2026-09-12'), '{ not json\n', 'utf8')
+    const desk = await loadPaperDesk(root)
+    expect(desk.days).toHaveLength(0)
   })
 })
 

@@ -23,6 +23,8 @@ import type {
   OptionIntradaySession,
   OptionIvRegime,
   OptionOverviewStrategy,
+  OptionPaperDeskDay,
+  PaperFill,
 } from '@dshtrading/api'
 import { OptionCycleBook } from './option-cycles.js'
 import { sessionFlag } from './intraday-box.js'
@@ -609,6 +611,54 @@ export function shouldWriteDailyReview(input: {
   return !input.exists && input.session === 'closed'
 }
 
+/** 日级账本口径核心：foldDailyReview（盘后 md）与纸账户工作台（页面统计）共用，
+ * 保证两侧数字同源。去重一律 last-wins：cycles 按 id、recommendations 按 bucketStart。 */
+export interface DailyLedgerCore {
+  readonly latestCycles: readonly OptionCycle[]
+  readonly verdictsByUnderlying: ReadonlyMap<string, { hit: number; miss: number; partial: number; skipped: number }>
+  /** 去重后有效候选（无 skipReason 且非 noTrade）——md「有效推荐」同集。 */
+  readonly candidates: readonly OptionBarRecommendation[]
+  /** 去重推荐行的 skipReason 计数。 */
+  readonly skipReasons: ReadonlyMap<string, number>
+  /** fills 中 reason=skipped 行的 skip 字段计数。 */
+  readonly paperSkips: ReadonlyMap<string, number>
+  /** verdict !== 'skipped' 的有效打分数。 */
+  readonly scored: number
+}
+
+export function dailyLedgerCore(input: {
+  cycles: readonly OptionCycle[]
+  recommendations: readonly OptionBarRecommendation[]
+  /** paper fills（含 skip 行）；缺省 = 不统计执行层跳过。 */
+  fills?: readonly { reason?: unknown; skip?: unknown }[]
+}): DailyLedgerCore {
+  const latestCycles = latestByKey(input.cycles, (cycle) => cycle.id)
+  const verdictsByUnderlying = new Map<string, { hit: number; miss: number; partial: number; skipped: number }>()
+  for (const cycle of latestCycles) {
+    const row = verdictsByUnderlying.get(cycle.underlying) ?? { hit: 0, miss: 0, partial: 0, skipped: 0 }
+    const verdict = cycle.score?.verdict
+    if (verdict === 'hit') row.hit += 1
+    else if (verdict === 'miss') row.miss += 1
+    else if (verdict === 'partial') row.partial += 1
+    else if (verdict === 'skipped') row.skipped += 1
+    verdictsByUnderlying.set(cycle.underlying, row)
+  }
+  const recs = latestByKey(input.recommendations, (row) => row.bucketStart)
+  const candidates = recs.filter((row) => row.skipReason === undefined && !row.noTrade)
+  const skipReasons = new Map<string, number>()
+  for (const row of recs) {
+    if (row.skipReason === undefined) continue
+    skipReasons.set(row.skipReason, (skipReasons.get(row.skipReason) ?? 0) + 1)
+  }
+  const paperSkips = new Map<string, number>()
+  for (const fill of input.fills ?? []) {
+    if (fill.reason !== 'skipped' || typeof fill.skip !== 'string') continue
+    paperSkips.set(fill.skip, (paperSkips.get(fill.skip) ?? 0) + 1)
+  }
+  const scored = latestCycles.filter((cycle) => cycle.score !== undefined && cycle.score.verdict !== 'skipped').length
+  return { latestCycles, verdictsByUnderlying, candidates, skipReasons, paperSkips, scored }
+}
+
 export function foldDailyReview(input: {
   date: string
   cycles: readonly OptionCycle[]
@@ -616,27 +666,9 @@ export function foldDailyReview(input: {
   /** paper fills（含 skip 行）；缺省 = 不统计执行层跳过。 */
   fills?: readonly { reason?: unknown; skip?: unknown }[]
 }): string {
-  const latestCycles = latestByKey(input.cycles, (cycle) => cycle.id)
-  const stats = new Map<string, { hit: number; miss: number; partial: number; skipped: number }>()
-  for (const cycle of latestCycles) {
-    const row = stats.get(cycle.underlying) ?? { hit: 0, miss: 0, partial: 0, skipped: 0 }
-    const verdict = cycle.score?.verdict
-    if (verdict === 'hit') row.hit += 1
-    else if (verdict === 'miss') row.miss += 1
-    else if (verdict === 'partial') row.partial += 1
-    else if (verdict === 'skipped') row.skipped += 1
-    stats.set(cycle.underlying, row)
-  }
-  const recs = latestByKey(input.recommendations, (row) => row.bucketStart)
-  const valid = recs.filter((row) => row.skipReason === undefined && !row.noTrade)
-  const overlaps = recs.filter((row) => row.skipReason === 'overlap').length
-  const failed = recs.filter((row) => row.skipReason === 'launch_failed').length
-  const paperSkips = new Map<string, number>()
-  for (const fill of input.fills ?? []) {
-    if (fill.reason !== 'skipped' || typeof fill.skip !== 'string') continue
-    paperSkips.set(fill.skip, (paperSkips.get(fill.skip) ?? 0) + 1)
-  }
-  const scored = latestCycles.filter((cycle) => cycle.score !== undefined && cycle.score.verdict !== 'skipped').length
+  const core = dailyLedgerCore(input)
+  const overlaps = core.skipReasons.get('overlap') ?? 0
+  const failed = core.skipReasons.get('launch_failed') ?? 0
   const lines = [
     `# 复盘 · ${input.date} ETF 期权 5 分钟 K`,
     '',
@@ -647,14 +679,14 @@ export function foldDailyReview(input: {
     '| 标的 | hit | partial | miss | skipped |',
     '|---|---:|---:|---:|---:|',
   ]
-  for (const [underlying, row] of [...stats.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  for (const [underlying, row] of [...core.verdictsByUnderlying.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     lines.push(`| ${underlying} | ${row.hit} | ${row.partial} | ${row.miss} | ${row.skipped} |`)
   }
-  if (stats.size === 0) lines.push('| （无） | 0 | 0 | 0 | 0 |')
+  if (core.verdictsByUnderlying.size === 0) lines.push('| （无） | 0 | 0 | 0 | 0 |')
   lines.push('', '## 2. 推荐 vs 下一桶', '')
-  if (valid.length === 0) lines.push('- 无有效推荐')
-  for (const rec of valid) {
-    const next = latestCycles.find((cycle) => Date.parse(cycle.bucketStart) > Date.parse(rec.bucketStart))
+  if (core.candidates.length === 0) lines.push('- 无有效推荐')
+  for (const rec of core.candidates) {
+    const next = core.latestCycles.find((cycle) => Date.parse(cycle.bucketStart) > Date.parse(rec.bucketStart))
     const verdict = next?.score?.verdict ?? '（尚无下一桶）'
     lines.push(`- ${rec.bucketStart} ${rec.opportunity} → ${verdict}`)
   }
@@ -663,11 +695,11 @@ export function foldDailyReview(input: {
   lines.push('', '## 4. 跳过', '')
   lines.push(`- overlap: ${overlaps}`)
   lines.push(`- launch_failed: ${failed}`)
-  for (const [skip, count] of [...paperSkips.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  for (const [skip, count] of [...core.paperSkips.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     lines.push(`- paper ${skip}: ${count}`)
   }
   lines.push('', '## 5. 明日剧本', '')
-  lines.push(scored < 10 ? '- 样本不足（有效打分 < 10），只记不改 skill。' : '- 对照 miss 集中的 regime，至多改一条选场/否决。')
+  lines.push(core.scored < 10 ? '- 样本不足（有效打分 < 10），只记不改 skill。' : '- 对照 miss 集中的 regime，至多改一条选场/否决。')
   lines.push('', '## 6. 免责', '')
   lines.push('技术研究预填，不构成投资建议。')
   lines.push('')
@@ -676,6 +708,117 @@ export function foldDailyReview(input: {
 
 export function sessionAt(nowMs: number): OptionIntradaySession {
   return sessionFlag(nowMs)
+}
+
+/** 纸账户工作台：默认覆盖近 10 日账本（cycles/recommendations/paper fills 三目录日期并集）。 */
+export const PAPER_DESK_DEFAULT_DAYS = 10
+export const PAPER_DESK_MAX_DAYS = 30
+export const PAPER_DESK_RECENT_FILL_LIMIT = 50
+
+/** 单日执行链路统计：候选桶三态划分（成交 / 纸账跳过 / 记录缺口）+ 打分分布。 */
+export function foldPaperDeskDay(input: {
+  date: string
+  cycles: readonly OptionCycle[]
+  recommendations: readonly OptionBarRecommendation[]
+  fills: readonly PaperFill[]
+}): OptionPaperDeskDay {
+  const core = dailyLedgerCore({ cycles: input.cycles, recommendations: input.recommendations, fills: input.fills })
+  let filled = 0
+  let gapBuckets = 0
+  for (const rec of core.candidates) {
+    // close fill 复用开仓桶 bucketStart，只看 offset=open 行
+    const open = input.fills.find((fill) => fill.offset === 'open' && fill.bucketStart === rec.bucketStart)
+    if (open === undefined) gapBuckets += 1
+    else if (open.reason === 'signal' && open.qty > 0) filled += 1
+    // open.reason === 'skipped' → 已计入 paperSkips，不重复计
+  }
+  let hit = 0
+  let partial = 0
+  let miss = 0
+  let skipped = 0
+  for (const row of core.verdictsByUnderlying.values()) {
+    hit += row.hit
+    partial += row.partial
+    miss += row.miss
+    skipped += row.skipped
+  }
+  return {
+    date: input.date,
+    candidates: core.candidates.length,
+    filled,
+    gapBuckets,
+    skipReasons: mapToRecord(core.skipReasons),
+    paperSkips: mapToRecord(core.paperSkips),
+    verdicts: { hit, partial, miss, skipped },
+    scored: core.scored,
+  }
+}
+
+function mapToRecord(map: ReadonlyMap<string, number>): Record<string, number> {
+  return Object.fromEntries([...map.entries()].sort(([a], [b]) => a.localeCompare(b)))
+}
+
+const LEDGER_DATE_RE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/
+
+/** 三账本目录日期并集，新→旧；目录缺失/坏名跳过。 */
+async function ledgerDates(root: string): Promise<string[]> {
+  const dates = new Set<string>()
+  for (const dir of ['cycles', 'recommendations', path.join('paper', 'fills')]) {
+    let names: readonly string[]
+    try {
+      names = await readdir(path.join(root, dir))
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      const match = LEDGER_DATE_RE.exec(name)
+      if (match !== null) dates.add(match[1]!)
+    }
+  }
+  return [...dates].sort((a, b) => b.localeCompare(a))
+}
+
+export interface PaperDeskLedger {
+  /** 近 N 日，新→旧；三账本全空的日期不出行。 */
+  readonly days: readonly OptionPaperDeskDay[]
+  /** 跨日近期流水（asOf 新→旧，非法时间戳沉底），截 PAPER_DESK_RECENT_FILL_LIMIT。 */
+  readonly recentFills: readonly PaperFill[]
+  readonly dayCount: number
+}
+
+/** 读近 N 日三账本并折叠成工作台快照；单日坏数据跳过，目录全缺返回空结果不抛。 */
+export async function loadPaperDesk(
+  root: string,
+  days: number = PAPER_DESK_DEFAULT_DAYS,
+): Promise<PaperDeskLedger> {
+  const limit = Math.max(1, Math.min(Math.trunc(days) || PAPER_DESK_DEFAULT_DAYS, PAPER_DESK_MAX_DAYS))
+  const dates = (await ledgerDates(root)).slice(0, limit)
+  const perDay = await Promise.all(dates.map(async (date) => {
+    try {
+      const [cycles, recommendations, fills] = await Promise.all([
+        readJsonl<OptionCycle>(cyclesPath(root, date)),
+        readJsonl<OptionBarRecommendation>(recommendationsPath(root, date)),
+        readJsonl<PaperFill>(paperFillsPath(root, date)),
+      ])
+      if (cycles.length === 0 && recommendations.length === 0 && fills.length === 0) return undefined
+      return { day: foldPaperDeskDay({ date, cycles, recommendations, fills }), fills }
+    } catch {
+      // 账本是 append-only agent 写入，坏日跳过不炸整个端点
+      return undefined
+    }
+  }))
+  const ok = perDay.filter((entry) => entry !== undefined) as { day: OptionPaperDeskDay; fills: PaperFill[] }[]
+  const recentFills = ok
+    .flatMap((entry) => entry.fills)
+    .sort((a, b) => {
+      const at = Date.parse(a.asOf)
+      const bt = Date.parse(b.asOf)
+      const as = Number.isFinite(at) ? at : Number.NEGATIVE_INFINITY
+      const bs = Number.isFinite(bt) ? bt : Number.NEGATIVE_INFINITY
+      return bs - as
+    })
+    .slice(0, PAPER_DESK_RECENT_FILL_LIMIT)
+  return { days: ok.map((entry) => entry.day), recentFills, dayCount: ok.length }
 }
 
 export function latestPacket(

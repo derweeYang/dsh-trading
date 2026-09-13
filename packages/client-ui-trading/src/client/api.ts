@@ -7,7 +7,7 @@ import type { AccountBalance, Kline, MarketId, MarketInfo, Order, Orderbook, Pos
 import type {
   FundamentalsPackage, KernelReport, OptionBarContextPacket, OptionChain, OptionCycle, OptionCycleLoop,
   OptionExpiryCalendar, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewSort,
-  OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying,
+  OptionPaperDesk, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying,
   OptionPrediction, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft,
   OptionPredictionSettle, PredictionKnowledgeItem,
 } from '@dshtrading/api'
@@ -262,6 +262,24 @@ export async function fetchOptionsBarPacket(): Promise<OptionsOutcome<OptionBarC
       '/dshtrading/api/options/bar-packet',
     )
     return { ok: true, data: wire.packet ?? null }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/**
+ * 纸账户执行台快照（近 N 日候选→成交→打分执行链路统计 + 账户 + 跨日流水）。
+ * 空账本（零成交、全 skip）是有效诊断载荷：桥返回空 days/全 0 行而非错误，
+ * 页面照常渲染——与 detected opportunities 的「无数据即隐藏」语义相反。
+ * 30s 轮询与闭环同频即可（账本只在 5 分钟桶推进时变化）。
+ */
+export async function fetchOptionsPaperDesk(): Promise<OptionsOutcome<OptionPaperDesk>> {
+  try {
+    const wire = await getJson<{ ok: boolean; desk: OptionPaperDesk }>(
+      '/dshtrading/api/options/paper/desk',
+    )
+    if (wire.desk === undefined) return optionsFailure(new Error('desk missing in wire'))
+    return { ok: true, data: wire.desk }
   } catch (err) {
     return optionsFailure(err)
   }

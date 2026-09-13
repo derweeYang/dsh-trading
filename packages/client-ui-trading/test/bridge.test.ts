@@ -728,6 +728,85 @@ describe('TradingBridge option paper account', () => {
 })
 
 
+describe('TradingBridge option paper desk', () => {
+  it('GET /options/paper/desk 聚合近 N 日三态划分与盯市；days 越界 400', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-desk-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const today = shanghaiCalendarDate(Date.now())
+    const yesterday = shanghaiCalendarDate(Date.now() - 24 * 60 * 60 * 1000)
+    await mkdir(path.join(dir, 'recommendations'), { recursive: true })
+    await mkdir(path.join(dir, 'paper', 'fills'), { recursive: true })
+    const candidate = (bucketStart: string) => JSON.stringify({
+      bucketStart,
+      asOf: bucketStart,
+      session: 'regular',
+      opportunity: 'direction_delta',
+      edge: 'e',
+      logic: 'l',
+      playbook: 'p',
+      invalidIf: 'i',
+      picks: [{ underlying: '510050', regime: 'breakout', template: 'vertical', cycleId: '510050:1' }],
+      noTrade: false,
+    })
+    const skipFill = (bucketStart: string) => JSON.stringify({
+      id: `${bucketStart}:skip:no_quote`,
+      bucketStart,
+      asOf: bucketStart,
+      underlying: '510050',
+      template: 'vertical',
+      offset: 'open',
+      qty: 0,
+      legs: [],
+      premiumCny: 0,
+      marginCny: 0,
+      cashAfter: 100000,
+      reason: 'skipped',
+      skip: 'no_quote',
+    })
+    // 昨日：候选无 fill → 记录缺口（2026-09-10 事故形状）
+    await writeFile(path.join(dir, 'recommendations', `${yesterday}.jsonl`), `${candidate(`${yesterday}T05:40:00.000Z`)}\n`, 'utf8')
+    // 今日：候选 ×2 → 一条 no_quote skip 桩 + 一条缺口
+    await writeFile(path.join(dir, 'recommendations', `${today}.jsonl`), [
+      candidate(`${today}T02:30:00.000Z`),
+      candidate(`${today}T05:35:00.000Z`),
+    ].map((row) => `${row}\n`).join(''), 'utf8')
+    await writeFile(path.join(dir, 'paper', 'fills', `${today}.jsonl`), `${skipFill(`${today}T02:30:00.000Z`)}\n`, 'utf8')
+
+    const bridge = new TradingBridge(fakeHost({}))
+    try {
+      const desk = await dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/desk', new URLSearchParams(),
+      )
+      expect(desk.payload).toMatchObject({
+        ok: true,
+        desk: {
+          equity: 100000,
+          account: { initialCash: 100000, cash: 100000 },
+          positions: [],
+          dayCount: 2,
+        },
+      })
+      const payload = desk.payload as { desk: { days: { date: string; candidates: number; filled: number; gapBuckets: number; paperSkips: Record<string, number> }[]; recentFills: { skip?: string }[] } }
+      const [todayRow, yesterdayRow] = payload.desk.days
+      expect(todayRow?.date).toBe(today)
+      expect(todayRow).toMatchObject({ candidates: 2, filled: 0, gapBuckets: 1, paperSkips: { no_quote: 1 } })
+      expect(yesterdayRow).toMatchObject({ date: yesterday, candidates: 1, filled: 0, gapBuckets: 1 })
+
+      await expect(dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/desk', new URLSearchParams({ days: '0' }),
+      )).rejects.toMatchObject({ status: 400 })
+      await expect(dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/desk', new URLSearchParams({ days: '31' }),
+      )).rejects.toMatchObject({ status: 400 })
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
+  })
+})
+
+
 describe('TradingBridge CN ETF options', () => {
   it('未挂 tradingCnOptions → TRADING_NOT_IMPLEMENTED', async () => {
     const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: fakeService() }))
