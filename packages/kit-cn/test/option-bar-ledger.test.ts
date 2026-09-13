@@ -561,22 +561,25 @@ describe('foldPaperDeskDay / loadPaperDesk', () => {
     expect(day.scored).toBe(1)
   })
 
-  it('loadPaperDesk：日期并集新→旧、空日剔除、recentFills 跨日按 asOf 降序、目录全缺不抛', async () => {
+  it('loadPaperDesk：日期并集新→旧、空日剔除、recentFills 跨日按 asOf 降序、新旧 fills 布局并读', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'paper-desk-'))
     await mkdir(path.join(root, 'recommendations'), { recursive: true })
+    // 多账本（feat/option-paper-books）后的真实世界：新布局 paper/strategy/fills 与
+    // 懒迁移前旧布局 paper/fills 可能并存，desk 双读兼容。
     await mkdir(path.join(root, 'paper', 'fills'), { recursive: true })
-    // 09-09：只有空 fills 文件 → 三账本全空，不出行
-    await writeFile(paperFillsPath(root, '2026-09-09'), '', 'utf8')
-    // 09-10：候选无 fill（记录缺口形状，同 2026-09-10 真实事故）
+    await mkdir(path.join(root, 'paper', 'strategy', 'fills'), { recursive: true })
+    // 09-09（旧布局）：只有空 fills 文件 → 三账本全空，不出行
+    await writeFile(path.join(root, 'paper', 'fills', '2026-09-09.jsonl'), '', 'utf8')
+    // 09-10（新布局）：候选无 fill（记录缺口形状，同 2026-09-10 真实事故）
     await appendJsonlLine(recommendationsPath(root, '2026-09-10'), candidate('2026-09-10T05:40:00.000Z'))
-    await writeFile(paperFillsPath(root, '2026-09-10'), '', 'utf8')
-    // 09-11：候选 + 两条 skip 桩（asOf 乱序写入，验证排序）
+    await writeFile(paperFillsPath(root, 'strategy', '2026-09-10'), '', 'utf8')
+    // 09-11（旧布局）：候选 + 两条 skip 桩（asOf 乱序写入，验证排序）
     await appendJsonlLine(recommendationsPath(root, '2026-09-11'), candidate('2026-09-11T02:30:00.000Z'))
-    await appendJsonlLine(paperFillsPath(root, '2026-09-11'), fill({
+    await appendJsonlLine(path.join(root, 'paper', 'fills', '2026-09-11.jsonl'), fill({
       bucketStart: '2026-09-11T02:30:00.000Z', offset: 'open', reason: 'skipped', skip: 'no_quote',
       asOf: '2026-09-11T02:37:39.000Z',
     }))
-    await appendJsonlLine(paperFillsPath(root, '2026-09-11'), fill({
+    await appendJsonlLine(path.join(root, 'paper', 'fills', '2026-09-11.jsonl'), fill({
       bucketStart: '2026-09-11T05:35:00.000Z', offset: 'open', reason: 'skipped', skip: 'no_quote',
       asOf: '2026-09-11T05:41:30.000Z',
     }))
@@ -602,9 +605,9 @@ describe('foldPaperDeskDay / loadPaperDesk', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'paper-desk-'))
     await mkdir(path.join(root, 'recommendations'), { recursive: true })
     await appendJsonlLine(recommendationsPath(root, '2026-09-12'), candidate('2026-09-12T05:40:00.000Z'))
-    // readJsonl 对坏行抛错（jsonl 逐行 JSON.parse）→ 该日整体跳过
-    await mkdir(path.join(root, 'paper', 'fills'), { recursive: true })
-    await writeFile(paperFillsPath(root, '2026-09-12'), '{ not json\n', 'utf8')
+    // readJsonl 对坏行抛错（jsonl 逐行 JSON.parse）→ 该日整体跳过（新布局 strategy 账本）
+    await mkdir(path.join(root, 'paper', 'strategy', 'fills'), { recursive: true })
+    await writeFile(paperFillsPath(root, 'strategy', '2026-09-12'), '{ not json\n', 'utf8')
     const desk = await loadPaperDesk(root)
     expect(desk.days).toHaveLength(0)
   })

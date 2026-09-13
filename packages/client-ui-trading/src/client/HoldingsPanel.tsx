@@ -24,6 +24,9 @@
  * - 委托/成交/余额 tab：paper 模式读本地模拟账本；live 模式四市场逐个拉取
  *   （失败静默跳过，行打市场标签）——原抽屉按激活市场取数，侧栏化后面板
  *   是全局面，改为跨市场聚合。
+ * - 「期权账户」tab（2026-09-13 WB-15）：期权纸账户双账本（strategy 策略 /
+ *   arbitrage 套利）只读展示，数据面走桥 `/options/paper/*`，与上面股票三源
+ *   互不相干，故不受 tradeMode 影响；实现见 OptionPaperBooks.tsx。
  */
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { fetchTradeOpenOrders, fetchTradeFills, fetchTradeBalances } from './api.ts'
@@ -49,6 +52,7 @@ import {
   reloadHoldingsBook, setHoldingsBaseCurrency, stagedHoldings, subscribeTradingEventsHoldings,
 } from './holdings-store.ts'
 import { tradeModeStore, writeTradeMode } from './trade-mode-store.ts'
+import { OptionPaperBooks } from './OptionPaperBooks.tsx'
 import type { SendImageInput } from './fill-composer.ts'
 import css from './holdings-panel.module.css'
 
@@ -62,7 +66,7 @@ export interface HoldingsPanelProps {
   fillComposer?: ((text: string, image?: SendImageInput) => Promise<void>) | undefined
 }
 
-type PanelTab = 'positions' | 'summary' | 'orders' | 'fills' | 'balances'
+type PanelTab = 'positions' | 'summary' | 'orders' | 'fills' | 'balances' | 'optPaper'
 type OriginFilter = 'all' | PositionOrigin
 
 type HoldingsAggregationView = ReturnType<typeof aggregateHoldings>
@@ -85,6 +89,7 @@ const TAB_LABEL_KEY: Record<PanelTab, MarketLocaleKey> = {
   orders: 'trade.tab.orders',
   fills: 'trade.tab.fills',
   balances: 'trade.tab.balances',
+  optPaper: 'trade.tab.optPaper',
 }
 
 /** live 模式跨市场行（原抽屉按激活市场取数，侧栏化后打市场标签聚合）。 */
@@ -1119,6 +1124,11 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
             ))
           )
         )}
+
+        {/* 期权虚拟账户（2026-09-13 WB-15）：双账本只读展示 + 单账本重置。
+            数据面独立于股票三源（桥 /options/paper/*），因此不受 tradeMode
+            影响——paper/live 开关切的是股票面，期权账本是它自己的模拟账本。 */}
+        {activeTab === 'optPaper' && <OptionPaperBooks t={t} />}
       </div>
 
       {/* 对话框层（遮罩全局；打开后面板保持原位；关闭播完退场动画再卸载） */}

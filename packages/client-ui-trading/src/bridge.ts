@@ -14,7 +14,7 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionArbitrageScanResult, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperDeskWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink, OptionPrediction, OptionPredictionAutoSettleResult, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft, OptionPredictionSettle, PredictionKnowledgeItem, MarketExpectation, VolExpectation, PredictionBias } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionArbitrageScanResult, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperAccountsWire, OptionPaperBookId, OptionPaperBookWire, OptionPaperDeskWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink, OptionPrediction, OptionPredictionAutoSettleResult, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft, OptionPredictionSettle, PredictionKnowledgeItem, MarketExpectation, VolExpectation, PredictionBias } from '@dshtrading/api'
 import { OPTION_PAPER_FEE_PER_CONTRACT } from '@dshtrading/api'
 import {
   OVERVIEW_KLINE_LIMIT,
@@ -51,10 +51,11 @@ import {
   writeOverviewSnapshot,
   loadPaperState,
   loadPaperDesk,
+  markLegValueCny,
   PAPER_DESK_DEFAULT_DAYS,
   PAPER_DESK_MAX_DAYS,
   OptionCycleBook,
-  OPTION_MULTIPLIER,
+  OPTION_ARB_CHAIN_TTL_MS,
   readJsonl,
   resetPaperState,
   sessionFlag,
@@ -68,6 +69,7 @@ import {
   selectBoxTargets,
   shanghaiCalendarDate,
   shanghaiBucketStartMs,
+  tryArbPaperCycle,
   tryPaperManage,
 } from '@dshtrading/kit-cn'
 import type { ChartActivationStore, CustomIndicatorRecord, CustomIndicatorStore, IndicatorInstance } from '@dshtrading/indicators'
@@ -705,6 +707,10 @@ export class TradingBridge {
   onCycleWrite?: (cycle: OptionCycle) => Promise<void>
   /** T+1 预测模块持久化（前端可运行的数据缝；不依赖期权网关）。 */
   readonly #predictions = new PredictionStore()
+  /** 套利引擎链缓存（key `u:m`；TTL 60s、失败不缓存、refresh 强制新拉）。 */
+  readonly #arbChainCache = new Map<string, { at: number; promise: Promise<OptionChain | undefined> }>()
+  /** 套利周期 in-flight 闸：记 tick asOf，非 0 = 在跑；上轮超 5min 视为僵死强制放行。 */
+  #arbCycleInFlightSince = 0
 
   constructor(private readonly host: BridgeHost) {}
 
@@ -1669,24 +1675,36 @@ export class TradingBridge {
     }
   }
 
-  async optionPaperAccount(): Promise<OptionPaperAccountWire> {
+  /** 纸账户账本 id 解析：缺省 strategy（旧行为），非法值 400。 */
+  #parsePaperBook(bookRaw: string | undefined): OptionPaperBookId {
+    if (bookRaw === undefined || bookRaw.trim() === '') return 'strategy'
+    const trimmed = bookRaw.trim()
+    if (trimmed !== 'strategy' && trimmed !== 'arbitrage') {
+      throw new BridgeProtocolError(400, 'options paper: book must be strategy|arbitrage')
+    }
+    return trimmed
+  }
+
+  /** 单账本视图：账户 + 持仓 + 盯市权益（期权腿链价回落 fillPrice，现货腿现价回落）。 */
+  async #optionPaperBook(book: OptionPaperBookId): Promise<OptionPaperBookWire> {
     const nowMs = Date.now()
     const nowIso = new Date(nowMs).toISOString()
-    const state = await loadPaperState(optionsDataRoot(), shanghaiCalendarDate(nowMs), nowIso)
+    const state = await loadPaperState(optionsDataRoot(), shanghaiCalendarDate(nowMs), nowIso, book)
     const getMark = this.#paperMarkLookup()
     const marketValueRows = await Promise.all(state.positions.flatMap((position) => (
       position.legs.map(async (leg) => {
+        if (leg.asset === 'spot') {
+          const spot = await this.#spotPriceOf(leg.code)
+          return markLegValueCny(leg, spot ?? leg.fillPrice)
+        }
         const mark = await getMark(leg.code, leg.side)
-        const price = mark?.price ?? leg.fillPrice
-        return (leg.side === 'buy' ? 1 : -1)
-          * price
-          * leg.qty
-          * OPTION_MULTIPLIER
+        return markLegValueCny(leg, mark?.price ?? leg.fillPrice)
       })
     )))
     const marginCny = state.positions.reduce((total, position) => total + position.marginCny, 0)
     return {
       ok: true,
+      book,
       account: state.account,
       equity: state.account.cash
         + marginCny
@@ -1695,7 +1713,19 @@ export class TradingBridge {
     }
   }
 
-  async optionPaperFills(limitRaw?: string): Promise<OptionPaperFillsWire> {
+  async optionPaperAccount(bookRaw?: string): Promise<OptionPaperBookWire> {
+    return await this.#optionPaperBook(this.#parsePaperBook(bookRaw))
+  }
+
+  /** 全部纸账户账本（资产面板两卡一次拉全）。 */
+  async optionPaperAccounts(): Promise<OptionPaperAccountsWire> {
+    const books = await Promise.all((
+      ['arbitrage', 'strategy'] as const
+    ).map((book) => this.#optionPaperBook(book)))
+    return { ok: true, books }
+  }
+
+  async optionPaperFills(limitRaw?: string, bookRaw?: string): Promise<OptionPaperFillsWire> {
     const limit = limitRaw === undefined || limitRaw.trim() === '' ? 48 : Number(limitRaw)
     if (!Number.isInteger(limit) || limit <= 0) {
       throw new BridgeProtocolError(400, 'options paper fills: limit must be a positive integer')
@@ -1705,15 +1735,17 @@ export class TradingBridge {
       optionsDataRoot(),
       shanghaiCalendarDate(nowMs),
       new Date(nowMs).toISOString(),
+      this.#parsePaperBook(bookRaw),
     )
     return { ok: true, fills: state.fills.slice(-limit).reverse() }
   }
 
-  async resetOptionPaper(): Promise<OptionPaperAccountWire> {
+  async resetOptionPaper(bookRaw?: string): Promise<OptionPaperBookWire> {
+    const book = this.#parsePaperBook(bookRaw)
     const nowMs = Date.now()
     const nowIso = new Date(nowMs).toISOString()
-    await resetPaperState(optionsDataRoot(), nowIso)
-    return await this.optionPaperAccount()
+    await resetPaperState(optionsDataRoot(), nowIso, book)
+    return await this.#optionPaperBook(book)
   }
 
   /** 纸账户工作台：近 N 日执行链路统计 + 账户快照 + 跨日流水（诊断"有候选无成交"缺口）。 */
@@ -1759,6 +1791,22 @@ export class TradingBridge {
         .find((candidate) => candidate.code.toUpperCase() === code.toUpperCase())
       return row === undefined ? undefined : quoteFillPriceWithSource(row)
     }
+  }
+
+  /** 套利引擎拉链：60s TTL 进程内缓存（失败不缓存，下轮重试），refresh 强制新拉覆盖。 */
+  async #arbChain(underlying: string, expiryMonth: string, opts?: { refresh?: boolean }): Promise<OptionChain | undefined> {
+    const key = `${underlying}:${expiryMonth}`
+    const cached = this.#arbChainCache.get(key)
+    if (opts?.refresh !== true && cached !== undefined && Date.now() - cached.at < OPTION_ARB_CHAIN_TTL_MS) {
+      return await cached.promise
+    }
+    const promise = this.requireCnOptions().getOptionChain({ underlying, expiryMonth })
+      .then((chain) => this.#withSpot(chain))
+      .catch(() => undefined)
+    this.#arbChainCache.set(key, { at: Date.now(), promise })
+    const chain = await promise
+    if (chain === undefined) this.#arbChainCache.delete(key)
+    return chain
   }
 
   /**
@@ -1846,6 +1894,56 @@ export class TradingBridge {
     }).catch((error) => {
       console.error('[dsh-trading/options-paper] manage failed:', error)
     })
+    // 套利纸面周期（30s 心跳驱动；上轮未完跳过，超 5min 视为僵死放行重试）。
+    if (this.#arbCycleInFlightSince === 0 || nowMs - this.#arbCycleInFlightSince >= 5 * 60_000) {
+      this.#arbCycleInFlightSince = nowMs
+      const exchangeByUnderlying = new Map(roster.map((row) => [row.underlying, row.exchange]))
+      void tryArbPaperCycle({
+        root: optionsDataRoot(),
+        date,
+        nowMs,
+        nowIso: new Date(nowMs).toISOString(),
+        session: sessionFlag(nowMs),
+        underlyings: roster.map((row) => row.underlying),
+        // 近/次两月：过期月滤除后按到期日升序取前二。
+        expiryMonthsFor: async (underlying) => {
+          try {
+            const calendar = await this.requireCnOptions().getOptionExpiries({ underlying })
+            return [...calendar.months]
+              .filter((row) => row.expiryDate >= date)
+              .sort((left, right) => left.expiryDate.localeCompare(right.expiryDate))
+              .slice(0, 2)
+              .map((row) => row.expiryMonth)
+          } catch {
+            return []
+          }
+        },
+        getChain: async (underlying, month, opts) => await this.#arbChain(underlying, month, opts),
+        getSpot: async (underlying) => await this.#spotPriceOf(underlying),
+        // 每张口径保证金（option-bar-agent getMargin 同款：getStrategy totalInitial）。
+        getOptionLegMarginPerContract: async (underlying, legs) => {
+          try {
+            const result = await this.requireCnOptions().getStrategy({
+              underlying,
+              legs: legs.map((leg) => ({ kind: 'option' as const, code: leg.code, side: leg.action, qty: 1 })),
+            })
+            return result.margin?.totalInitial
+          } catch {
+            return undefined
+          }
+        },
+        spotSymbolFor: (underlying) => {
+          const exchange = exchangeByUnderlying.get(underlying)
+          return exchange === 'SSE' ? `${underlying}.SH`
+            : exchange === 'SZSE' ? `${underlying}.SZ`
+            : undefined
+        },
+      }).catch((error) => {
+        console.error('[dsh-trading/options-paper-arb] cycle failed:', error)
+      }).finally(() => {
+        this.#arbCycleInFlightSince = 0
+      })
+    }
     return {
       ok: true,
       ticked,
@@ -2831,10 +2929,19 @@ export async function dispatchBridgeRequest(
         return { status: 200, payload: await bridge.optionPositions() }
       }
       case '/options/paper/account': {
-        return { status: 200, payload: await bridge.optionPaperAccount() }
+        return { status: 200, payload: await bridge.optionPaperAccount(search.get('book') ?? undefined) }
+      }
+      case '/options/paper/accounts': {
+        return { status: 200, payload: await bridge.optionPaperAccounts() }
       }
       case '/options/paper/fills': {
-        return { status: 200, payload: await bridge.optionPaperFills(search.get('limit') ?? undefined) }
+        return {
+          status: 200,
+          payload: await bridge.optionPaperFills(
+            search.get('limit') ?? undefined,
+            search.get('book') ?? undefined,
+          ),
+        }
       }
       case '/options/paper/desk': {
         return { status: 200, payload: await bridge.optionPaperDesk(search.get('days') ?? undefined) }
@@ -3074,7 +3181,11 @@ export async function dispatchBridgeRequest(
       return { status: 200, payload: await bridge.optionCycleTick(asOf) }
     }
     if (pathname === '/options/paper/reset') {
-      return { status: 200, payload: await bridge.resetOptionPaper() }
+      const fromBody = typeof body === 'object' && body !== null
+        && typeof (body as { book?: unknown }).book === 'string'
+        ? (body as { book: string }).book
+        : undefined
+      return { status: 200, payload: await bridge.resetOptionPaper(search.get('book') ?? fromBody) }
     }
     if (pathname === '/options/strategy') {
       return { status: 200, payload: await bridge.optionStrategy(body) }

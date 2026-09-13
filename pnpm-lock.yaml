@@ -859,6 +859,9 @@ importers:
       '@dshtrading/knowledge':
         specifier: workspace:*
         version: link:../knowledge
+      '@dshtrading/strategies':
+        specifier: workspace:*
+        version: link:../strategies
     devDependencies:
       tsdown:
         specifier: ^0.22.0

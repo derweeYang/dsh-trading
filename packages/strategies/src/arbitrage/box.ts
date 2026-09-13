@@ -7,7 +7,7 @@
  *   - 空箱收入 = (C₁_bid − C₂_ask) + (P₂_bid − P₁_ask)；收入 > 公平值 → short_box 偏贵
  * 本质是无风险借贷：多箱≈以锁定利率贷出 K₂−K₁，空箱≈借入。
  */
-import type { ArbitrageChain, ArbitrageLeg, ArbitrageOpportunity, ArbitrageQuoteRow } from './types.ts'
+import type { ArbitrageChain, ArbitrageDirection, ArbitrageLeg, ArbitrageOpportunity, ArbitrageQuoteRow } from './types.ts'
 import { yearsToExpiry, discountFactor } from './time.ts'
 import { execPrices } from './prices.ts'
 
@@ -22,6 +22,40 @@ export interface BoxOptions {
   multiplier?: number
   /** 评估时点 YYYY-MM-DD，默认 chain.asOf 或 now */
   asOf?: string
+}
+
+/**
+ * 持仓监控用的同向签名边：按 direction 计算当前残余 edge（元/股，可正可负）。
+ * 与 scanBoxArbitrage 同口径同号——long_box = fair − 多箱成本，short_box = 空箱收入 − fair；
+ * 无盘口时 execPrices 回退中间价（bid=ask=mid），short 边恰为 long 边相反数。
+ * 腿价缺失/无到期 → undefined（调用方应 hold 等下轮）。
+ */
+export function boxSignedEdge(
+  chain: ArbitrageChain,
+  lowStrike: number,
+  highStrike: number,
+  direction: Extract<ArbitrageDirection, 'long_box' | 'short_box'>,
+  options: BoxOptions = {},
+): { edgePerShare: number; executable: boolean } | undefined {
+  const rate = options.rate ?? 0.02
+  const asOf = options.asOf ?? chain.asOf
+  const T = yearsToExpiry(chain.expiryDate, asOf)
+  if (T === undefined) return undefined
+  const c1 = chain.calls.find((row) => row.strike === lowStrike)
+  const c2 = chain.calls.find((row) => row.strike === highStrike)
+  const p1 = chain.puts.find((row) => row.strike === lowStrike)
+  const p2 = chain.puts.find((row) => row.strike === highStrike)
+  if (c1 === undefined || c2 === undefined || p1 === undefined || p2 === undefined) return undefined
+
+  const c1e = execPrices(c1)
+  const c2e = execPrices(c2)
+  const p1e = execPrices(p1)
+  const p2e = execPrices(p2)
+  const costLong = (c1e.ask - c2e.bid) + (p2e.ask - p1e.bid)
+  const proceedsShort = (c1e.bid - c2e.ask) + (p2e.bid - p1e.ask)
+  const fair = (highStrike - lowStrike) * discountFactor(rate, T)
+  const edgePerShare = direction === 'short_box' ? proceedsShort - fair : fair - costLong
+  return { edgePerShare, executable: c1e.executable && c2e.executable && p1e.executable && p2e.executable }
 }
 
 export function scanBoxArbitrage(chain: ArbitrageChain, options: BoxOptions = {}): ArbitrageOpportunity[] {

@@ -180,7 +180,7 @@ export class OptionBarAgentHost {
     const exists = await fileExists(reviewFile)
     if (!shouldWriteDailyReview({ session, exists, hasClosedBuckets })) return
     const recommendations = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
-    const fills = await readJsonl<{ reason?: unknown; skip?: unknown }>(paperFillsPath(root, date))
+    const fills = await readJsonl<{ reason?: unknown; skip?: unknown }>(paperFillsPath(root, 'strategy', date))
     const md = foldDailyReview({ date, cycles, recommendations, fills })
     await mkdir(path.dirname(reviewFile), { recursive: true })
     await writeFile(reviewFile, md, 'utf8')

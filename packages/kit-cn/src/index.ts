@@ -52,6 +52,7 @@ export * from './intraday-box.js'
 export * from './option-cycles.js'
 export * from './option-bar-ledger.js'
 export * from './option-paper.js'
+export * from './option-arb-paper.js'
 export * from './option-predictions.js'
 export * from './trader-director.js'
 

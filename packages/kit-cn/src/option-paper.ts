@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   OPTION_MULTIPLIER,
@@ -8,6 +8,7 @@ import {
   type OptionChain,
   type OptionIntradayBoxRow,
   type OptionIntradaySession,
+  type OptionPaperBookId,
   type OptionPaperPriceSource,
   type OptionQuoteRow,
   type PaperAccount,
@@ -24,6 +25,9 @@ import {
 
 export { OPTION_MULTIPLIER, OPTION_PAPER_FEE_PER_CONTRACT, OPTION_PAPER_INITIAL_CASH }
 
+/** 套利账本现货腿佣金率（万 1，无最低，简化假设；显式导出供覆盖与审计）。 */
+export const OPTION_PAPER_SPOT_FEE_RATE = 0.0001
+
 export interface PaperState {
   account: PaperAccount
   positions: PaperPosition[]
@@ -34,7 +38,8 @@ type PaperLegs = PaperFill['legs']
 type SkipReason = NonNullable<PaperFill['skip']>
 const paperStateLocks = new Map<string, Promise<void>>()
 
-async function withPaperStateLock<T>(root: string, task: () => Promise<T>): Promise<T> {
+/** 同 root 账本操作串行化（按 root 排队、不可重入；套利引擎与策略账本共用）。 */
+export async function withPaperStateLock<T>(root: string, task: () => Promise<T>): Promise<T> {
   const previous = paperStateLocks.get(root) ?? Promise.resolve()
   let release!: () => void
   const current = new Promise<void>((resolve) => {
@@ -51,13 +56,14 @@ async function withPaperStateLock<T>(root: string, task: () => Promise<T>): Prom
   }
 }
 
-export function emptyPaperAccount(nowIso: string): PaperAccount {
+export function emptyPaperAccount(nowIso: string, book?: OptionPaperBookId): PaperAccount {
   return {
     currency: 'CNY',
     initialCash: OPTION_PAPER_INITIAL_CASH,
     cash: OPTION_PAPER_INITIAL_CASH,
     realizedPnl: 0,
     updatedAt: nowIso,
+    ...(book === undefined ? {} : { id: book }),
   }
 }
 
@@ -87,9 +93,20 @@ export function quoteFillPrice(
   return quoteFillPriceWithSource(row)?.price
 }
 
-/** 手续费：每张 × 每腿张数合计（skip 桩 legs=[] 自然为 0）。 */
-export function fillFeeCny(legs: PaperLegs, feePerContract: number): number {
-  return feePerContract * legs.reduce((total, leg) => total + leg.qty, 0)
+/**
+ * 手续费：期权腿每张费率 × 张数合计；现货腿按名义额 × 现货佣金率
+ * （skip 桩 legs=[] 自然为 0）。旧行无 asset 键 → 全按期权腿。
+ */
+export function fillFeeCny(
+  legs: PaperLegs,
+  feePerContract: number,
+  spotFeeRate: number = OPTION_PAPER_SPOT_FEE_RATE,
+): number {
+  return legs.reduce((total, leg) => (
+    leg.asset === 'spot'
+      ? total + Math.abs(leg.fillPrice * leg.qty) * spotFeeRate
+      : total + feePerContract * leg.qty
+  ), 0)
 }
 
 function nearestIndex(rows: readonly OptionQuoteRow[], spot: number | undefined): number {
@@ -141,10 +158,21 @@ export function completeVerticalLegs(
   }
 }
 
+/** 单腿现金流（元）：sell 正 buy 负；期权腿 ×multiplier，现货腿 qty 已是份数不再乘。 */
+export function legCashCny(leg: PaperLegs[number]): number {
+  return (leg.side === 'sell' ? 1 : -1) * leg.fillPrice * leg.qty
+    * (leg.asset === 'spot' ? 1 : OPTION_MULTIPLIER)
+}
+
+/** 组合现金流（元）：Σ legCashCny。纯期权腿与旧实现逐位等价。 */
 export function premiumCny(legs: PaperLegs): number {
-  return legs.reduce((total, leg) => (
-    total + (leg.side === 'sell' ? 1 : -1) * leg.fillPrice * leg.qty * OPTION_MULTIPLIER
-  ), 0)
+  return legs.reduce((total, leg) => total + legCashCny(leg), 0)
+}
+
+/** 盯市腿值（元）：多头为正；期权腿 ×multiplier，现货腿按份（equity 口径与 bridge 一致）。 */
+export function markLegValueCny(leg: PaperLegs[number], markPrice: number): number {
+  return (leg.side === 'buy' ? 1 : -1) * markPrice * leg.qty
+    * (leg.asset === 'spot' ? 1 : OPTION_MULTIPLIER)
 }
 
 export function sizeQty(
@@ -179,12 +207,20 @@ export function applyOpen(
     invalidIf?: string
     boxLow?: number
     boxHigh?: number
+    /** 持仓 id 覆盖（套利同标的同桶多机会需要显式区分）。 */
+    positionId?: string
+    /** 套利持仓新维度（透传进 position；fill 自身字段经 ...fillRow 落账）。 */
+    expiryMonth?: string
+    expiryDate?: string
+    direction?: PaperPosition['direction']
+    strikes?: readonly number[]
+    openEdgePerShare?: number
   },
 ): PaperState {
   const fee = fill.feeCny ?? 0
   const cash = state.account.cash + fill.premiumCny - fill.marginCny - fee
   const id = fill.id ?? `${fill.underlying ?? 'unknown'}:${fill.bucketStart}`
-  const { invalidIf = '', boxLow, boxHigh, ...fillRow } = fill
+  const { invalidIf = '', boxLow, boxHigh, positionId, expiryMonth, direction, strikes, ...fillRow } = fill
   const recorded: PaperFill = { ...fillRow, id, cashAfter: cash }
   const position: PaperPosition | undefined = (
     fill.reason !== 'skipped'
@@ -192,7 +228,7 @@ export function applyOpen(
     && fill.underlying !== undefined
     && fill.template !== undefined
   ) ? {
-      id: `${fill.underlying}:${fill.bucketStart}`,
+      id: positionId ?? `${fill.underlying}:${fill.bucketStart}`,
       underlying: fill.underlying,
       template: fill.template,
       openedBucketStart: fill.bucketStart,
@@ -203,6 +239,12 @@ export function applyOpen(
       ...(boxHigh === undefined ? {} : { boxHigh }),
       legs: fill.legs,
       ...(fee === 0 ? {} : { openFeeCny: fee }),
+      ...(fillRow.book === undefined ? {} : { book: fillRow.book }),
+      ...(expiryMonth === undefined ? {} : { expiryMonth }),
+      ...(fillRow.expiryDate === undefined ? {} : { expiryDate: fillRow.expiryDate }),
+      ...(direction === undefined ? {} : { direction }),
+      ...(strikes === undefined ? {} : { strikes }),
+      ...(fillRow.openEdgePerShare === undefined ? {} : { openEdgePerShare: fillRow.openEdgePerShare }),
     } : undefined
 
   return {
@@ -216,7 +258,7 @@ export function applyClose(
   state: PaperState,
   positionId: string,
   legs: PaperLegs,
-  reason: 'invalidIf' | 'close5' | 'session',
+  reason: 'invalidIf' | 'close5' | 'session' | 'arb_converge' | 'arb_reverse' | 'arb_expiry',
   asOf: string,
   feePerContract = OPTION_PAPER_FEE_PER_CONTRACT,
 ): PaperState {
@@ -471,17 +513,71 @@ async function readJsonFile<T>(file: string, fallback: T): Promise<T> {
   }
 }
 
+const paperBooksMigrated = new Set<string>()
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await stat(target)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+/** rename 平移；目标已存在跳过（宁可弃旧不毁新），源缺失容忍。 */
+async function moveIfAbsent(from: string, to: string): Promise<void> {
+  if (await pathExists(to)) return
+  try {
+    await rename(from, to)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+}
+
+/**
+ * 单账本 → paper/<book>/ 多账本布局的惰性迁移（旧 paper/{account.json,positions.json,fills/}
+ * → paper/strategy/）。无锁幂等（rename 原子、目标存在即跳过、残缺旧布局只移存在的项），
+ * load/reset 入口都会路过；旧目录留空壳不删（Windows 受保护树纪律：只移动不删除）。
+ */
+export async function ensurePaperBooksLayout(root: string): Promise<void> {
+  if (paperBooksMigrated.has(root)) return
+  try {
+    const legacyPaper = path.join(root, 'paper')
+    const legacyAccount = path.join(legacyPaper, 'account.json')
+    const legacyPositions = path.join(legacyPaper, 'positions.json')
+    const legacyFills = path.join(legacyPaper, 'fills')
+    const residue = (await pathExists(legacyAccount))
+      || (await pathExists(legacyPositions))
+      || (await pathExists(legacyFills))
+    const strategyReady = await pathExists(paperAccountPath(root, 'strategy'))
+    if (residue) {
+      await mkdir(path.dirname(paperAccountPath(root, 'strategy')), { recursive: true })
+      await moveIfAbsent(legacyAccount, paperAccountPath(root, 'strategy'))
+      await moveIfAbsent(legacyPositions, paperPositionsPath(root, 'strategy'))
+      await moveIfAbsent(legacyFills, path.join(root, 'paper', 'strategy', 'fills'))
+    }
+    if (residue || strategyReady) paperBooksMigrated.add(root)
+  } catch {
+    // 迁移失败下轮 load 重试；不阻断账本读写。
+  }
+}
+
 export async function loadPaperState(
   root: string,
   date: string,
   nowIso: string,
+  book: OptionPaperBookId = 'strategy',
 ): Promise<PaperState> {
+  await ensurePaperBooksLayout(root)
   const [account, positions, fills] = await Promise.all([
-    readJsonFile(paperAccountPath(root), emptyPaperAccount(nowIso)),
-    readJsonFile<PaperPosition[]>(paperPositionsPath(root), []),
-    readJsonl<PaperFill>(paperFillsPath(root, date)),
+    readJsonFile(paperAccountPath(root, book), emptyPaperAccount(nowIso, book)),
+    readJsonFile<PaperPosition[]>(paperPositionsPath(root, book), []),
+    readJsonl<PaperFill>(paperFillsPath(root, book, date)),
   ])
-  return { account, positions, fills }
+  // 旧账本文件无 id → 内存回填（下次 save 自然落盘）。
+  const normalized: PaperAccount = account.id === undefined ? { ...account, id: book } : account
+  return { account: normalized, positions, fills }
 }
 
 function fillCalendarDate(fill: PaperFill): string | undefined {
@@ -493,10 +589,11 @@ export async function savePaperState(
   root: string,
   date: string,
   state: PaperState,
+  book: OptionPaperBookId = 'strategy',
 ): Promise<void> {
-  const accountFile = paperAccountPath(root)
-  const positionsFile = paperPositionsPath(root)
-  const fillsFile = paperFillsPath(root, date)
+  const accountFile = paperAccountPath(root, book)
+  const positionsFile = paperPositionsPath(root, book)
+  const fillsFile = paperFillsPath(root, book, date)
   await Promise.all([
     mkdir(path.dirname(accountFile), { recursive: true }),
     mkdir(path.dirname(fillsFile), { recursive: true }),
@@ -513,18 +610,23 @@ export async function savePaperState(
   ])
 }
 
-export async function resetPaperState(root: string, nowIso: string): Promise<PaperState> {
+export async function resetPaperState(
+  root: string,
+  nowIso: string,
+  book: OptionPaperBookId = 'strategy',
+): Promise<PaperState> {
   return await withPaperStateLock(root, async () => {
+    await ensurePaperBooksLayout(root)
     const state: PaperState = {
-      account: emptyPaperAccount(nowIso),
+      account: emptyPaperAccount(nowIso, book),
       positions: [],
       fills: [],
     }
-    const accountFile = paperAccountPath(root)
+    const accountFile = paperAccountPath(root, book)
     await mkdir(path.dirname(accountFile), { recursive: true })
     await Promise.all([
       writeFile(accountFile, `${JSON.stringify(state.account)}\n`, 'utf8'),
-      writeFile(paperPositionsPath(root), '[]\n', 'utf8'),
+      writeFile(paperPositionsPath(root, book), '[]\n', 'utf8'),
     ])
     return state
   })

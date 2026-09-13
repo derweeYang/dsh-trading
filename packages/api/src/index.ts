@@ -1063,6 +1063,9 @@ export const OPTION_MULTIPLIER = 10_000
 /** 模拟盘手续费（元/张，按每腿张数合计双边计）；可经工具/账本注入覆盖。 */
 export const OPTION_PAPER_FEE_PER_CONTRACT = 1.7
 
+/** 纸账户账本 id：strategy=5 分钟桶策略推荐驱动；arbitrage=平价/箱型套利扫描驱动。 */
+export type OptionPaperBookId = 'strategy' | 'arbitrage'
+
 export type PaperFillSkip =
   | 'duplicate_bucket'
   | 'no_quote'
@@ -1071,10 +1074,28 @@ export type PaperFillSkip =
   | 'bad_template'
   | 'one_fill'
 
-export type PaperFillReason = 'signal' | 'invalidIf' | 'close5' | 'session' | 'skipped'
+export type PaperFillReason =
+  | 'signal'
+  | 'invalidIf'
+  | 'close5'
+  | 'session'
+  | 'skipped'
+  | 'arb_open'
+  | 'arb_converge'
+  | 'arb_reverse'
+  | 'arb_expiry'
 
-/** 成交价来源：工具侧链行情（last 回退 prevSettle）或模型 pick.legs 自报价。旧行缺省。 */
-export type OptionPaperPriceSource = 'last' | 'prev_settle' | 'pick'
+/**
+ * 成交价来源：工具侧链行情（last 回退 prevSettle）或模型 pick.legs 自报价；
+ * 套利账本追加对手价（buy 吃 ask / sell 吃 bid）与现货腿现价。旧行缺省。
+ */
+export type OptionPaperPriceSource =
+  | 'last'
+  | 'prev_settle'
+  | 'pick'
+  | 'bid'
+  | 'ask'
+  | 'spot'
 
 export interface PaperLegFill {
   readonly code: string
@@ -1082,6 +1103,13 @@ export interface PaperLegFill {
   readonly qty: number
   readonly fillPrice: number
   readonly priceSource?: OptionPaperPriceSource
+  /**
+   * 腿资产：缺省（旧行）= 'option'（qty 单位张）；'spot' = ETF 现货腿
+   * （qty 单位份，1 张 = multiplier 份，code 存 6 位 underlying）。
+   */
+  readonly asset?: 'option' | 'spot'
+  /** asset='spot' 时现货全符号（如 510050.SH）。 */
+  readonly spotSymbol?: string
 }
 
 export interface PaperFill {
@@ -1098,8 +1126,13 @@ export interface PaperFill {
   readonly cashAfter: number
   readonly reason: PaperFillReason
   readonly skip?: PaperFillSkip
-  /** 手续费 = OPTION_PAPER_FEE_PER_CONTRACT × Σ(leg.qty)，开平双边；旧行缺省视为 0。 */
+  /** 手续费 = OPTION_PAPER_FEE_PER_CONTRACT × Σ(option leg.qty) + 现货腿佣金；开平双边；旧行缺省视为 0。 */
   readonly feeCny?: number
+  readonly book?: OptionPaperBookId
+  /** 套利：到期日 YYYY-MM-DD（到期强平判定）。 */
+  readonly expiryDate?: string
+  /** 套利开仓边（元/股，收敛/反转平仓基准）。 */
+  readonly openEdgePerShare?: number
 }
 
 export interface PaperPosition {
@@ -1115,6 +1148,14 @@ export interface PaperPosition {
   readonly legs: readonly PaperLegFill[]
   /** 开仓费用（平仓时并入该笔 realizedPnl）；旧持仓缺省视为 0。 */
   readonly openFeeCny?: number
+  readonly book?: OptionPaperBookId
+  /** 套利持仓：template 同步填 'parity' | 'box'，以下为新维度。 */
+  readonly expiryMonth?: string
+  readonly expiryDate?: string
+  readonly direction?: OptionArbitrageDirection
+  /** parity=[K]；box=[K1,K2]（升序）。 */
+  readonly strikes?: readonly number[]
+  readonly openEdgePerShare?: number
 }
 
 export interface PaperAccount {
@@ -1123,6 +1164,8 @@ export interface PaperAccount {
   readonly cash: number
   readonly realizedPnl: number
   readonly updatedAt: string
+  /** 账本 id（旧文件缺省，load 时内存回填）。 */
+  readonly id?: OptionPaperBookId
 }
 
 export interface OptionPaperAccountWire {
@@ -1130,6 +1173,21 @@ export interface OptionPaperAccountWire {
   readonly account: PaperAccount
   readonly equity: number
   readonly positions: readonly PaperPosition[]
+}
+
+/** 单账本视图（book 显式标注，资产面板两卡共用形状）。 */
+export interface OptionPaperBookWire {
+  readonly ok: true
+  readonly book: OptionPaperBookId
+  readonly account: PaperAccount
+  readonly equity: number
+  readonly positions: readonly PaperPosition[]
+}
+
+/** 全部纸账户账本（资产面板一次拉全）。 */
+export interface OptionPaperAccountsWire {
+  readonly ok: true
+  readonly books: readonly OptionPaperBookWire[]
 }
 
 export interface OptionPaperFillsWire {

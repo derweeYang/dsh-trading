@@ -25,7 +25,8 @@
     "@dshtrading/api": "workspace:*",
     "@dshtrading/connector-hithink": "workspace:*",
     "@dshtrading/indicators": "workspace:*",
-    "@dshtrading/knowledge": "workspace:*"
+    "@dshtrading/knowledge": "workspace:*",
+    "@dshtrading/strategies": "workspace:*"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.0",

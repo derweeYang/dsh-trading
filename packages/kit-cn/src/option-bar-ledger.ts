@@ -23,6 +23,7 @@ import type {
   OptionIntradaySession,
   OptionIvRegime,
   OptionOverviewStrategy,
+  OptionPaperBookId,
   OptionPaperDeskDay,
   PaperFill,
 } from '@dshtrading/api'
@@ -106,16 +107,17 @@ export function cyclesPath(root: string, date: string): string {
   return path.join(root, 'cycles', `${date}.jsonl`)
 }
 
-export function paperAccountPath(root: string): string {
-  return path.join(root, 'paper', 'account.json')
+/** 纸账户多账本：paper/<book>/{account.json, positions.json, fills/<date>.jsonl}。 */
+export function paperAccountPath(root: string, book: OptionPaperBookId = 'strategy'): string {
+  return path.join(root, 'paper', book, 'account.json')
 }
 
-export function paperPositionsPath(root: string): string {
-  return path.join(root, 'paper', 'positions.json')
+export function paperPositionsPath(root: string, book: OptionPaperBookId = 'strategy'): string {
+  return path.join(root, 'paper', book, 'positions.json')
 }
 
-export function paperFillsPath(root: string, date: string): string {
-  return path.join(root, 'paper', 'fills', `${date}.jsonl`)
+export function paperFillsPath(root: string, book: OptionPaperBookId, date: string): string {
+  return path.join(root, 'paper', book, 'fills', `${date}.jsonl`)
 }
 
 export function recommendationsPath(root: string, date: string): string {
@@ -760,10 +762,11 @@ function mapToRecord(map: ReadonlyMap<string, number>): Record<string, number> {
 
 const LEDGER_DATE_RE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/
 
-/** 三账本目录日期并集，新→旧；目录缺失/坏名跳过。 */
+/** 三账本目录日期并集，新→旧；目录缺失/坏名跳过。fills 读 strategy 账本
+ *  （与 recommendations/cycles 同链路；arb 账本归资产面板），并兼容懒迁移前的旧布局。 */
 async function ledgerDates(root: string): Promise<string[]> {
   const dates = new Set<string>()
-  for (const dir of ['cycles', 'recommendations', path.join('paper', 'fills')]) {
+  for (const dir of ['cycles', 'recommendations', path.join('paper', 'strategy', 'fills'), path.join('paper', 'fills')]) {
     let names: readonly string[]
     try {
       names = await readdir(path.join(root, dir))
@@ -795,11 +798,15 @@ export async function loadPaperDesk(
   const dates = (await ledgerDates(root)).slice(0, limit)
   const perDay = await Promise.all(dates.map(async (date) => {
     try {
-      const [cycles, recommendations, fills] = await Promise.all([
+      const [cycles, recommendations, strategyFills, legacyFills] = await Promise.all([
         readJsonl<OptionCycle>(cyclesPath(root, date)),
         readJsonl<OptionBarRecommendation>(recommendationsPath(root, date)),
-        readJsonl<PaperFill>(paperFillsPath(root, date)),
+        // 多账本（feat/option-paper-books）：desk 读 strategy 账本（与候选/打分同链路）；
+        // readJsonl 对 ENOENT 返回 []，并读旧布局目录兼容懒迁移前数据，纯读不触发迁移。
+        readJsonl<PaperFill>(paperFillsPath(root, 'strategy', date)),
+        readJsonl<PaperFill>(path.join(root, 'paper', 'fills', `${date}.jsonl`)),
       ])
+      const fills = [...strategyFills, ...legacyFills]
       if (cycles.length === 0 && recommendations.length === 0 && fills.length === 0) return undefined
       return { day: foldPaperDeskDay({ date, cycles, recommendations, fills }), fills }
     } catch {
