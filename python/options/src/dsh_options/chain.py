@@ -4,6 +4,8 @@
 # SZSE:akshare 无行情面(quotesSource=szse_static_only)→ 显式 NO_DATA,不编造。
 # iquant:经 dsh-iquant-quote option_chain。默认 source=synth;live 时合约市场是
 # SHO/SZO(不是 SH/SZ)。2026-09-08:SH 订 100xxxxx 空;SHO 名单 12416、日 K 通。
+# 2026-09-13:iquant 全推快照买一/卖一(bid/ask)透传,套利扫描可执行边界;
+# akshare 板块列无买/卖价(数据源边界),synth 合成链无盘口——两路均缺省该键。
 # synth:合成链的末行截面,snapshotAt 为合成窗口末日(证明管线,不证明市场事实)。
 
 from datetime import datetime

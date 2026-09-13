@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
+import type { OptionChain } from '@dshtrading/api'
 import type { ArbitrageChain } from '../src/arbitrage/types.ts'
 import { parityMatrix, scanParityArbitrage } from '../src/arbitrage/parity.ts'
 import { scanBoxArbitrage } from '../src/arbitrage/box.ts'
 import { buildVerticalSpread, scanVerticalSpreads } from '../src/arbitrage/vertical.ts'
+import { fromOptionChain } from '../src/arbitrage/adapter.ts'
+import { scanArbitrage } from '../src/arbitrage/index.ts'
 
 const asOf = '2026-09-13'
 const expiryDate = '2026-09-23'
@@ -95,5 +98,61 @@ describe('scanVerticalSpreads', () => {
     const spreads = scanVerticalSpreads(fixture())
     // 3 strikes → 3 pairs × 4 combos = 12
     expect(spreads.length).toBe(12)
+  })
+})
+
+/** 后端 OptionChain（含 2026-09-13 契约扩展的 bid/ask 与 snapshotAt）。 */
+function wireChain(quotes: { bid?: number; ask?: number }): OptionChain {
+  return {
+    underlying: '510050',
+    expiryMonth: '2609',
+    expiryDate,
+    snapshotAt: `${asOf}T15:00:00+08:00`,
+    source: 'iquant',
+    spot: 2.9,
+    calls: [
+      { code: 'C285', strike: 2.85, last: 0.065, ...quotes },
+      { code: 'C290', strike: 2.9, last: 0.045, ...quotes },
+      { code: 'C295', strike: 2.95, last: 0.025, ...quotes },
+    ],
+    puts: [
+      { code: 'P285', strike: 2.85, last: 0.02, ...quotes },
+      { code: 'P290', strike: 2.9, last: 0.035, ...quotes },
+      { code: 'P295', strike: 2.95, last: 0.055, ...quotes },
+    ],
+  }
+}
+
+describe('fromOptionChain（adapter，后端链路）', () => {
+  it('转发 bid/ask 与 snapshotAt（→ asOf），缺价键不落 undefined', () => {
+    const arb = fromOptionChain(wireChain({ bid: 0.044, ask: 0.046 }))
+    expect(arb.asOf).toBe(`${asOf}T15:00:00+08:00`)
+    expect(arb.calls[1]?.bid).toBeCloseTo(0.044, 6)
+    expect(arb.calls[1]?.ask).toBeCloseTo(0.046, 6)
+    const bare = fromOptionChain({ ...wireChain({}), snapshotAt: undefined })
+    expect('bid' in (bare.calls[1] ?? {})).toBe(false)
+    expect('asOf' in bare).toBe(false)
+  })
+
+  it('真实买卖盘 → scanArbitrage 机会 executable=true', () => {
+    // 仅 ATM（K=2.90）挂真实盘：C bid/ask=0.044/0.046（mid=last），P=0.034/0.036（mid=last）。
+    // 卖合成可执行边 (C_bid − P_ask) − cashForward(≈0.0016) ≈ 0.0064 元/股。
+    const base = wireChain({})
+    const withQuotes: OptionChain = {
+      ...base,
+      calls: base.calls.map((c) => (c.strike === 2.9 ? { ...c, bid: 0.044, ask: 0.046 } : c)),
+      puts: base.puts.map((p) => (p.strike === 2.9 ? { ...p, bid: 0.034, ask: 0.036 } : p)),
+    }
+    const ops = scanArbitrage(fromOptionChain(withQuotes), { asOf, threshold: 0.0001 })
+    const parityOp = ops.find((o) => o.kind === 'parity' && o.strike === 2.9)
+    expect(parityOp).toBeDefined()
+    expect(parityOp?.executable).toBe(true)
+    expect(parityOp?.edgePerShare ?? 0).toBeGreaterThan(0.006)
+  })
+
+  it('无买卖盘（last 近似）→ executable=false', () => {
+    const ops = scanArbitrage(fromOptionChain(wireChain({})), { asOf, threshold: 0.0001 })
+    for (const op of ops) expect(op.executable).toBe(false)
+    expect(ops.length).toBeGreaterThan(0)
   })
 })

@@ -14,7 +14,11 @@
       "types": "./lib/plugin.d.ts",
       "default": "./lib/plugin.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./arbitrage": {
+      "types": "./lib/arbitrage/index.d.ts",
+      "default": "./lib/arbitrage/index.js"
+    }
   },
   "files": [
     "lib"

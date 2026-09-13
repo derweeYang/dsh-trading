@@ -11,6 +11,8 @@ import type {
   CnOptionsService,
   CnOptionsTradeService as CnOptionsTradeContract,
   KernelReport,
+  OptionArbitrageScanQuery,
+  OptionArbitrageScanResult,
   OptionChain,
   OptionExpiryCalendar,
   OptionImpliedVolResult,
@@ -35,6 +37,7 @@ import {
 } from './rest.js'
 
 export * from './rest.js'
+export * from './arbitrage.js'
 
 export const name = 'dsh-trading-cn-connector-options'
 
@@ -81,6 +84,10 @@ export class CnOptionsMarketService extends Service implements CnOptionsService 
 
   getOptionChain(query: CnOptionsQuery): Promise<OptionChain> {
     return this.client.getOptionChain(query)
+  }
+
+  getArbitrageScan(query: OptionArbitrageScanQuery): Promise<OptionArbitrageScanResult> {
+    return this.client.getArbitrageScan(query)
   }
 
   getImpliedVol(query: CnOptionsQuery & { readonly rate: number }): Promise<OptionImpliedVolResult> {

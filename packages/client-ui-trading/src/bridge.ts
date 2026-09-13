@@ -14,7 +14,8 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink, OptionPrediction, OptionPredictionAutoSettleResult, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft, OptionPredictionSettle, PredictionKnowledgeItem, MarketExpectation, VolExpectation, PredictionBias } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionArbitrageScanResult, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink, OptionPrediction, OptionPredictionAutoSettleResult, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft, OptionPredictionSettle, PredictionKnowledgeItem, MarketExpectation, VolExpectation, PredictionBias } from '@dshtrading/api'
+import { OPTION_PAPER_FEE_PER_CONTRACT } from '@dshtrading/api'
 import {
   OVERVIEW_KLINE_LIMIT,
   applyTicker,
@@ -296,6 +297,12 @@ export interface OptionExpiriesWire {
 export interface OptionChainWire {
   ok: true
   chain: OptionChain
+}
+
+/** 套利扫描 wire（平价 + 箱型机会表；垂直价差仅显式请求时附带）。 */
+export interface OptionArbitrageWire {
+  ok: true
+  scan: OptionArbitrageScanResult
 }
 
 export interface OptionImpliedVolWire {
@@ -893,30 +900,71 @@ export class TradingBridge {
     return { ok: true, chain: await this.#withSpot(chain) }
   }
 
+  /**
+   * 套利扫描（2026-09-13 后端接线）：拉链一次 → strategies 内核（平价 + 箱型）。
+   * spot 优先取 CN 行情现价（parity 需要；拿不到则退回链自带 spot，再没有平价退化仅箱型）。
+   * fee 缺省注入模拟盘费率（OPTION_PAPER_FEE_PER_CONTRACT，显式 fee=0 可关）。
+   */
+  async optionArbitrage(
+    underlying: string,
+    expiryMonth: string,
+    source?: string,
+    threshold?: string,
+    fee?: string,
+    verticals?: string,
+  ): Promise<OptionArbitrageWire> {
+    const trimmed = underlying.trim()
+    if (trimmed === '') throw new BridgeProtocolError(400, 'options arbitrage: underlying is required')
+    const month = expiryMonth.trim()
+    if (month === '') throw new BridgeProtocolError(400, 'options arbitrage: expiryMonth is required')
+    const typed = source === 'synth' || source === 'akshare' || source === 'iquant' ? source : undefined
+    const thresholdPerShare = parseOptionalFinite(threshold, 'threshold')
+    const feePerContract = fee === undefined ? OPTION_PAPER_FEE_PER_CONTRACT : parseOptionalFinite(fee, 'fee')
+    const spot = await this.#spotPriceOf(trimmed.replace(/\.(SH|SZ)$/i, ''))
+    return {
+      ok: true,
+      scan: await this.requireCnOptions().getArbitrageScan({
+        underlying: trimmed,
+        expiryMonth: month,
+        ...(typed === undefined ? {} : { source: typed }),
+        ...(spot === undefined ? {} : { spot }),
+        ...(thresholdPerShare === undefined ? {} : { thresholdPerShare }),
+        ...(feePerContract === undefined ? {} : { feePerContract }),
+        ...(verticals === '1' || verticals === 'true' ? { includeVerticals: true } : {}),
+      }),
+    }
+  }
+
   /** 现价拼接：名册查交易所 → 现货符号 → tradingCnMarketData ticker 覆盖 spot；任一步失败保留原链。 */
   async #withSpot(chain: OptionChain): Promise<OptionChain> {
-    if (!/^\d{6}$/.test(chain.underlying)) return chain
+    const spot = await this.#spotPriceOf(chain.underlying)
+    return spot === undefined ? chain : { ...chain, spot }
+  }
+
+  /** 现货最新价（6 位 ETF 代码）；名册未注册/行情不可得返回 undefined，不抛错。 */
+  async #spotPriceOf(underlying: string): Promise<number | undefined> {
+    if (!/^\d{6}$/.test(underlying)) return undefined
     let rows: readonly OptionUnderlying[]
     try {
       rows = await this.requireCnOptions().listUnderlyings('akshare')
     } catch {
-      return chain
+      return undefined
     }
-    const exchange = rows.find((row) => row.underlying === chain.underlying)?.exchange
-    const spotSymbol = exchange === 'SSE' ? `${chain.underlying}.SH`
-      : exchange === 'SZSE' ? `${chain.underlying}.SZ`
+    const exchange = rows.find((row) => row.underlying === underlying)?.exchange
+    const spotSymbol = exchange === 'SSE' ? `${underlying}.SH`
+      : exchange === 'SZSE' ? `${underlying}.SZ`
       : undefined // SYNTH 无现货行情
     const market = spotSymbol === undefined ? undefined : this.host.getMarketService('cn')
-    if (spotSymbol === undefined || market === undefined) return chain
+    if (spotSymbol === undefined || market === undefined) return undefined
     try {
       const ticker = await market.getTicker(spotSymbol)
       if (typeof ticker.price === 'number' && Number.isFinite(ticker.price)) {
-        return { ...chain, spot: ticker.price }
+        return ticker.price
       }
     } catch {
-      // 行情拉不到（非交易时段/未挂 provider）→ 保留 python 链自带 spot，不阻塞 T 板
+      // 行情拉不到（非交易时段/未挂 provider）→ 调用方保留原值，不阻塞
     }
-    return chain
+    return undefined
   }
 
   async optionImpliedVol(
@@ -1164,10 +1212,13 @@ export class TradingBridge {
     const built = rows.map((row) => {
       const dayPrior = dayPriorOf(listed.predictions, row.underlying, sessionDate)
       if (dayPrior !== undefined) priors[row.underlying] = dayPrior
+      // exactOptionalPropertyTypes：get() 提前收敛非 undefined，条件展开才不带 | undefined。
+      const snapshotRow = byUnderlying.get(row.underlying)
+      const optionQty = qtyByUnderlying.get(row.underlying)
       return hydrateOverviewRow({
         roster: row,
-        ...(byUnderlying.get(row.underlying) === undefined ? {} : { snapshot: byUnderlying.get(row.underlying) }),
-        ...(qtyByUnderlying.get(row.underlying) === undefined ? {} : { optionQty: qtyByUnderlying.get(row.underlying) }),
+        ...(snapshotRow === undefined ? {} : { snapshot: snapshotRow }),
+        ...(optionQty === undefined ? {} : { optionQty }),
         ivHistory,
         ...(dayPrior === undefined ? {} : { dayPrior }),
       })
@@ -2568,6 +2619,16 @@ export class TradingBridge {
   }
 }
 
+/** 查询串可选数字：undefined/空串 → undefined；非有限数 → 400。 */
+function parseOptionalFinite(raw: string | undefined, field: string): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined
+  const value = Number(raw)
+  if (!Number.isFinite(value)) {
+    throw new BridgeProtocolError(400, `options arbitrage: ${field} must be a finite number (got ${raw})`)
+  }
+  return value
+}
+
 /** 自选 map 的形状校验（Record<market, Instrument[]>，宽容 name 缺省）。 */
 function parseWatchlistsMap(body: unknown): WatchlistsMap {
   if (typeof body !== 'object' || body === null) {
@@ -2699,6 +2760,19 @@ export async function dispatchBridgeRequest(
             search.get('underlying') ?? '',
             search.get('expiryMonth') ?? '',
             search.get('source') ?? undefined,
+          ),
+        }
+      }
+      case '/options/arbitrage': {
+        return {
+          status: 200,
+          payload: await bridge.optionArbitrage(
+            search.get('underlying') ?? '',
+            search.get('expiryMonth') ?? '',
+            search.get('source') ?? undefined,
+            search.get('threshold') ?? undefined,
+            search.get('fee') ?? undefined,
+            search.get('verticals') ?? undefined,
           ),
         }
       }
