@@ -364,9 +364,10 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
         const chain = position.expiryMonth === undefined
           ? undefined
           : await input.getChain(position.underlying, position.expiryMonth).catch(() => undefined)
+        const currentEdge = positionCurrentEdge(position, chain)
         const reason = decideArbClose({
           position,
-          currentEdgePerShare: positionCurrentEdge(position, chain),
+          ...(currentEdge === undefined ? {} : { currentEdgePerShare: currentEdge }),
           todayDate,
         })
         if (reason === undefined) continue
@@ -396,17 +397,19 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
               const spotPrice = opportunity.kind === 'parity'
                 ? await input.getSpot(underlying).catch(() => undefined)
                 : undefined
-              const decided = decideArbOpen({
+              const spotSymbol = input.spotSymbolFor?.(underlying)
+              const openInput = {
                 opportunity,
                 chain,
                 positionKeys: new Set(state.positions.map((position) => position.id)),
                 cash: state.account.cash,
                 nowMs: input.nowMs,
                 ...(spotPrice === undefined ? {} : { spotPrice }),
-                ...(input.spotSymbolFor === undefined ? {} : { spotSymbol: input.spotSymbolFor(underlying) }),
+                ...(spotSymbol === undefined ? {} : { spotSymbol }),
                 ...(marginPer === undefined ? {} : { optionMarginPerContract: marginPer }),
                 feePerContract: fee,
-              })
+              } satisfies ArbOpenInput
+              const decided = decideArbOpen(openInput)
               if (decided.kind !== 'open') continue
               // on-hit refresh：绕缓存强制新拉链重扫——仍 executable 且同向才落账
               // （削缓存前视偏差；边已反转/消失则本轮放弃）。
@@ -415,24 +418,15 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
               const still = scanArbitrage(fromOptionChain(fresh), { feePerContract: fee })
                 .find((item) => positionKeyOf(item) === key && item.direction === opportunity.direction)
               if (still === undefined) continue
-              const confirmed = decideArbOpen({
-                opportunity: still,
-                chain: fresh,
-                positionKeys: new Set(state.positions.map((position) => position.id)),
-                cash: state.account.cash,
-                nowMs: input.nowMs,
-                ...(spotPrice === undefined ? {} : { spotPrice }),
-                ...(input.spotSymbolFor === undefined ? {} : { spotSymbol: input.spotSymbolFor(underlying) }),
-                ...(marginPer === undefined ? {} : { optionMarginPerContract: marginPer }),
-                feePerContract: fee,
-              })
+              const confirmed = decideArbOpen({ ...openInput, opportunity: still, chain: fresh })
               if (confirmed.kind !== 'open') continue
+              const stillStrikes = opportunityStrikes(still)
               state = applyOpen(state, {
                 ...confirmed.fill,
                 positionId: confirmed.positionId,
                 expiryMonth: month,
                 direction: still.direction,
-                strikes: opportunityStrikes(still),
+                ...(stillStrikes === undefined ? {} : { strikes: stillStrikes }),
               })
             }
           }

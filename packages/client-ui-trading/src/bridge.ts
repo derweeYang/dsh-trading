@@ -14,7 +14,7 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionArbitrageScanResult, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink, OptionPrediction, OptionPredictionAutoSettleResult, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft, OptionPredictionSettle, PredictionKnowledgeItem, MarketExpectation, VolExpectation, PredictionBias } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionArbitrageScanResult, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink, OptionPrediction, OptionPredictionAutoSettleResult, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft, OptionPredictionSettle, PredictionKnowledgeItem, MarketExpectation, VolExpectation, PredictionBias } from '@dshtrading/api'
 import { OPTION_PAPER_FEE_PER_CONTRACT, type OptionPaperAccountsWire, type OptionPaperBookId, type OptionPaperBookWire } from '@dshtrading/api'
 import {
   OVERVIEW_KLINE_LIMIT,
@@ -52,7 +52,7 @@ import {
   loadPaperState,
   markLegValueCny,
   OptionCycleBook,
-  OPTION_MULTIPLIER,
+  OPTION_ARB_CHAIN_TTL_MS,
   readJsonl,
   resetPaperState,
   sessionFlag,
@@ -66,6 +66,7 @@ import {
   selectBoxTargets,
   shanghaiCalendarDate,
   shanghaiBucketStartMs,
+  tryArbPaperCycle,
   tryPaperManage,
 } from '@dshtrading/kit-cn'
 import type { ChartActivationStore, CustomIndicatorRecord, CustomIndicatorStore, IndicatorInstance } from '@dshtrading/indicators'
@@ -703,6 +704,10 @@ export class TradingBridge {
   onCycleWrite?: (cycle: OptionCycle) => Promise<void>
   /** T+1 预测模块持久化（前端可运行的数据缝；不依赖期权网关）。 */
   readonly #predictions = new PredictionStore()
+  /** 套利引擎链缓存（key `u:m`；TTL 60s、失败不缓存、refresh 强制新拉）。 */
+  readonly #arbChainCache = new Map<string, { at: number; promise: Promise<OptionChain | undefined> }>()
+  /** 套利周期 in-flight 闸：记 tick asOf，非 0 = 在跑；上轮超 5min 视为僵死强制放行。 */
+  #arbCycleInFlightSince = 0
 
   constructor(private readonly host: BridgeHost) {}
 
@@ -1762,6 +1767,22 @@ export class TradingBridge {
     }
   }
 
+  /** 套利引擎拉链：60s TTL 进程内缓存（失败不缓存，下轮重试），refresh 强制新拉覆盖。 */
+  async #arbChain(underlying: string, expiryMonth: string, opts?: { refresh?: boolean }): Promise<OptionChain | undefined> {
+    const key = `${underlying}:${expiryMonth}`
+    const cached = this.#arbChainCache.get(key)
+    if (opts?.refresh !== true && cached !== undefined && Date.now() - cached.at < OPTION_ARB_CHAIN_TTL_MS) {
+      return await cached.promise
+    }
+    const promise = this.requireCnOptions().getOptionChain({ underlying, expiryMonth })
+      .then((chain) => this.#withSpot(chain))
+      .catch(() => undefined)
+    this.#arbChainCache.set(key, { at: Date.now(), promise })
+    const chain = await promise
+    if (chain === undefined) this.#arbChainCache.delete(key)
+    return chain
+  }
+
   /**
    * 5 分钟桶：给上一桶补分，再在 regular 会话开新预报。同桶幂等。
    * 宿主 30s 心跳调用；POST 供回放 / 单测。
@@ -1847,6 +1868,56 @@ export class TradingBridge {
     }).catch((error) => {
       console.error('[dsh-trading/options-paper] manage failed:', error)
     })
+    // 套利纸面周期（30s 心跳驱动；上轮未完跳过，超 5min 视为僵死放行重试）。
+    if (this.#arbCycleInFlightSince === 0 || nowMs - this.#arbCycleInFlightSince >= 5 * 60_000) {
+      this.#arbCycleInFlightSince = nowMs
+      const exchangeByUnderlying = new Map(roster.map((row) => [row.underlying, row.exchange]))
+      void tryArbPaperCycle({
+        root: optionsDataRoot(),
+        date,
+        nowMs,
+        nowIso: new Date(nowMs).toISOString(),
+        session: sessionFlag(nowMs),
+        underlyings: roster.map((row) => row.underlying),
+        // 近/次两月：过期月滤除后按到期日升序取前二。
+        expiryMonthsFor: async (underlying) => {
+          try {
+            const calendar = await this.requireCnOptions().getOptionExpiries({ underlying })
+            return [...calendar.months]
+              .filter((row) => row.expiryDate >= date)
+              .sort((left, right) => left.expiryDate.localeCompare(right.expiryDate))
+              .slice(0, 2)
+              .map((row) => row.expiryMonth)
+          } catch {
+            return []
+          }
+        },
+        getChain: async (underlying, month, opts) => await this.#arbChain(underlying, month, opts),
+        getSpot: async (underlying) => await this.#spotPriceOf(underlying),
+        // 每张口径保证金（option-bar-agent getMargin 同款：getStrategy totalInitial）。
+        getOptionLegMarginPerContract: async (underlying, legs) => {
+          try {
+            const result = await this.requireCnOptions().getStrategy({
+              underlying,
+              legs: legs.map((leg) => ({ kind: 'option' as const, code: leg.code, side: leg.action, qty: 1 })),
+            })
+            return result.margin?.totalInitial
+          } catch {
+            return undefined
+          }
+        },
+        spotSymbolFor: (underlying) => {
+          const exchange = exchangeByUnderlying.get(underlying)
+          return exchange === 'SSE' ? `${underlying}.SH`
+            : exchange === 'SZSE' ? `${underlying}.SZ`
+            : undefined
+        },
+      }).catch((error) => {
+        console.error('[dsh-trading/options-paper-arb] cycle failed:', error)
+      }).finally(() => {
+        this.#arbCycleInFlightSince = 0
+      })
+    }
     return {
       ok: true,
       ticked,
