@@ -15,7 +15,7 @@
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
 import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionArbitrageScanResult, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink, OptionPrediction, OptionPredictionAutoSettleResult, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft, OptionPredictionSettle, PredictionKnowledgeItem, MarketExpectation, VolExpectation, PredictionBias } from '@dshtrading/api'
-import { OPTION_PAPER_FEE_PER_CONTRACT } from '@dshtrading/api'
+import { OPTION_PAPER_FEE_PER_CONTRACT, type OptionPaperAccountsWire, type OptionPaperBookId, type OptionPaperBookWire } from '@dshtrading/api'
 import {
   OVERVIEW_KLINE_LIMIT,
   applyTicker,
@@ -50,6 +50,7 @@ import {
   loadOverviewSnapshot,
   writeOverviewSnapshot,
   loadPaperState,
+  markLegValueCny,
   OptionCycleBook,
   OPTION_MULTIPLIER,
   readJsonl,
@@ -1666,24 +1667,36 @@ export class TradingBridge {
     }
   }
 
-  async optionPaperAccount(): Promise<OptionPaperAccountWire> {
+  /** 纸账户账本 id 解析：缺省 strategy（旧行为），非法值 400。 */
+  #parsePaperBook(bookRaw: string | undefined): OptionPaperBookId {
+    if (bookRaw === undefined || bookRaw.trim() === '') return 'strategy'
+    const trimmed = bookRaw.trim()
+    if (trimmed !== 'strategy' && trimmed !== 'arbitrage') {
+      throw new BridgeProtocolError(400, 'options paper: book must be strategy|arbitrage')
+    }
+    return trimmed
+  }
+
+  /** 单账本视图：账户 + 持仓 + 盯市权益（期权腿链价回落 fillPrice，现货腿现价回落）。 */
+  async #optionPaperBook(book: OptionPaperBookId): Promise<OptionPaperBookWire> {
     const nowMs = Date.now()
     const nowIso = new Date(nowMs).toISOString()
-    const state = await loadPaperState(optionsDataRoot(), shanghaiCalendarDate(nowMs), nowIso)
+    const state = await loadPaperState(optionsDataRoot(), shanghaiCalendarDate(nowMs), nowIso, book)
     const getMark = this.#paperMarkLookup()
     const marketValueRows = await Promise.all(state.positions.flatMap((position) => (
       position.legs.map(async (leg) => {
+        if (leg.asset === 'spot') {
+          const spot = await this.#spotPriceOf(leg.code)
+          return markLegValueCny(leg, spot ?? leg.fillPrice)
+        }
         const mark = await getMark(leg.code, leg.side)
-        const price = mark?.price ?? leg.fillPrice
-        return (leg.side === 'buy' ? 1 : -1)
-          * price
-          * leg.qty
-          * OPTION_MULTIPLIER
+        return markLegValueCny(leg, mark?.price ?? leg.fillPrice)
       })
     )))
     const marginCny = state.positions.reduce((total, position) => total + position.marginCny, 0)
     return {
       ok: true,
+      book,
       account: state.account,
       equity: state.account.cash
         + marginCny
@@ -1692,7 +1705,19 @@ export class TradingBridge {
     }
   }
 
-  async optionPaperFills(limitRaw?: string): Promise<OptionPaperFillsWire> {
+  async optionPaperAccount(bookRaw?: string): Promise<OptionPaperBookWire> {
+    return await this.#optionPaperBook(this.#parsePaperBook(bookRaw))
+  }
+
+  /** 全部纸账户账本（资产面板两卡一次拉全）。 */
+  async optionPaperAccounts(): Promise<OptionPaperAccountsWire> {
+    const books = await Promise.all((
+      ['arbitrage', 'strategy'] as const
+    ).map((book) => this.#optionPaperBook(book)))
+    return { ok: true, books }
+  }
+
+  async optionPaperFills(limitRaw?: string, bookRaw?: string): Promise<OptionPaperFillsWire> {
     const limit = limitRaw === undefined || limitRaw.trim() === '' ? 48 : Number(limitRaw)
     if (!Number.isInteger(limit) || limit <= 0) {
       throw new BridgeProtocolError(400, 'options paper fills: limit must be a positive integer')
@@ -1702,15 +1727,17 @@ export class TradingBridge {
       optionsDataRoot(),
       shanghaiCalendarDate(nowMs),
       new Date(nowMs).toISOString(),
+      this.#parsePaperBook(bookRaw),
     )
     return { ok: true, fills: state.fills.slice(-limit).reverse() }
   }
 
-  async resetOptionPaper(): Promise<OptionPaperAccountWire> {
+  async resetOptionPaper(bookRaw?: string): Promise<OptionPaperBookWire> {
+    const book = this.#parsePaperBook(bookRaw)
     const nowMs = Date.now()
     const nowIso = new Date(nowMs).toISOString()
-    await resetPaperState(optionsDataRoot(), nowIso)
-    return await this.optionPaperAccount()
+    await resetPaperState(optionsDataRoot(), nowIso, book)
+    return await this.#optionPaperBook(book)
   }
 
   #paperMarkLookup(): (code: string, side: 'buy' | 'sell') => Promise<PaperMarkQuote | undefined> {
@@ -2805,10 +2832,19 @@ export async function dispatchBridgeRequest(
         return { status: 200, payload: await bridge.optionPositions() }
       }
       case '/options/paper/account': {
-        return { status: 200, payload: await bridge.optionPaperAccount() }
+        return { status: 200, payload: await bridge.optionPaperAccount(search.get('book') ?? undefined) }
+      }
+      case '/options/paper/accounts': {
+        return { status: 200, payload: await bridge.optionPaperAccounts() }
       }
       case '/options/paper/fills': {
-        return { status: 200, payload: await bridge.optionPaperFills(search.get('limit') ?? undefined) }
+        return {
+          status: 200,
+          payload: await bridge.optionPaperFills(
+            search.get('limit') ?? undefined,
+            search.get('book') ?? undefined,
+          ),
+        }
       }
       case '/options/overview': {
         return {
@@ -3045,7 +3081,11 @@ export async function dispatchBridgeRequest(
       return { status: 200, payload: await bridge.optionCycleTick(asOf) }
     }
     if (pathname === '/options/paper/reset') {
-      return { status: 200, payload: await bridge.resetOptionPaper() }
+      const fromBody = typeof body === 'object' && body !== null
+        && typeof (body as { book?: unknown }).book === 'string'
+        ? (body as { book: string }).book
+        : undefined
+      return { status: 200, payload: await bridge.resetOptionPaper(search.get('book') ?? fromBody) }
     }
     if (pathname === '/options/strategy') {
       return { status: 200, payload: await bridge.optionStrategy(body) }

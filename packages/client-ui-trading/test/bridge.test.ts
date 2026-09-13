@@ -676,6 +676,37 @@ describe('TradingBridge option paper account', () => {
     }
   })
 
+  it('多账本：/options/paper/accounts 双账本一次返回；book 参数路由；非法 book 400', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-books-bridge-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const bridge = new TradingBridge(fakeHost({}))
+    try {
+      const accounts = await dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/accounts', new URLSearchParams(),
+      )
+      expect(accounts.payload).toMatchObject({
+        ok: true,
+        books: [
+          { book: 'arbitrage', account: { initialCash: 100000, cash: 100000 }, equity: 100000, positions: [] },
+          { book: 'strategy', account: { initialCash: 100000, cash: 100000 }, equity: 100000, positions: [] },
+        ],
+      })
+
+      const arbFills = await dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/fills', new URLSearchParams({ book: 'arbitrage' }),
+      )
+      expect(arbFills.payload).toMatchObject({ ok: true, fills: [] })
+
+      await expect(dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/account', new URLSearchParams({ book: 'nope' }),
+      )).rejects.toMatchObject({ status: 400 })
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
+  })
+
   it('keeps equity at initial cash when opening marks are unchanged', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-equity-'))
     const prev = process.env[OPTIONS_DATA_ENV]
@@ -1690,7 +1721,8 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
       // （1m×5）真的被调用再核对持仓——「未变化」断言立即成立，直接断言 spy 会竞态。
       await vi.waitFor(async () => {
         expect(getKlines).toHaveBeenCalledWith('510050.SH', '1m', 5)
-        const positions = JSON.parse(await readFile(path.join(dir, 'paper', 'positions.json'), 'utf8'))
+        // 旧布局 fixture 经惰性迁移落到 paper/strategy/，管理断言读新位置。
+        const positions = JSON.parse(await readFile(path.join(dir, 'paper', 'strategy', 'positions.json'), 'utf8'))
         expect(positions).toEqual([plantedPosition])
       })
     } finally {
@@ -1744,7 +1776,7 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
         bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf },
       )
       await vi.waitFor(async () => {
-        expect(JSON.parse(await readFile(path.join(dir, 'paper', 'positions.json'), 'utf8'))).toEqual([])
+        expect(JSON.parse(await readFile(path.join(dir, 'paper', 'strategy', 'positions.json'), 'utf8'))).toEqual([])
       })
       expect(placeOptionOrder).not.toHaveBeenCalled()
     } finally {

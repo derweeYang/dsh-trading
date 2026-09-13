@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -473,7 +473,7 @@ describe('option-paper', () => {
       getChain: async () => { throw new Error('duplicate must not fetch chain') },
       getMargin: async () => { throw new Error('duplicate must not fetch margin') },
     })
-    const fills = (await readFile(paperFillsPath(root, input.date), 'utf8'))
+    const fills = (await readFile(paperFillsPath(root, 'strategy', input.date), 'utf8'))
       .trim().split('\n').map((line) => JSON.parse(line))
 
     expect(fills).toHaveLength(2)
@@ -651,5 +651,122 @@ describe('option-paper', () => {
       getChain: async () => { throw new Error('chain failed') },
       getMargin: async () => 282,
     })).resolves.toBeUndefined()
+  })
+
+  it('multi-book: strategy and arbitrage ledgers stay isolated', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-books-'))
+    const strategy = applyOpen(
+      { account: emptyPaperAccount('t', 'strategy'), positions: [], fills: [] },
+      {
+        bucketStart: '2026-09-10T05:40:00.000Z',
+        asOf: '2026-09-10T05:40:23.000Z',
+        underlying: '588000',
+        template: 'vertical',
+        offset: 'open',
+        qty: 1,
+        legs: [{ code: '588000C2609M01650', side: 'buy', qty: 1, fillPrice: 0.05 }],
+        premiumCny: -500,
+        marginCny: 0,
+        reason: 'signal',
+      },
+    )
+    await savePaperState(root, '2026-09-10', strategy, 'strategy')
+
+    const arb = await loadPaperState(root, '2026-09-10', 'unused', 'arbitrage')
+    expect(arb.account.cash).toBe(OPTION_PAPER_INITIAL_CASH)
+    expect(arb.account.id).toBe('arbitrage')
+    expect(arb.positions).toEqual([])
+    expect(arb.fills).toEqual([])
+
+    const strategyState = await loadPaperState(root, '2026-09-10', 'unused', 'strategy')
+    expect(strategyState.positions.map((position) => position.underlying)).toEqual(['588000'])
+    expect(strategyState.account.cash).toBe(OPTION_PAPER_INITIAL_CASH - 500)
+    expect(strategyState.account.id).toBe('strategy')
+  })
+
+  it('lazily migrates legacy single-book layout into strategy/ preserving history', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-migrate-'))
+    // 旧单账本布局：paper/{account.json, positions.json, fills/<date>.jsonl}
+    await mkdir(path.join(root, 'paper', 'fills'), { recursive: true })
+    await writeFile(path.join(root, 'paper', 'account.json'), JSON.stringify({
+      currency: 'CNY', initialCash: 100000, cash: 98765.5, realizedPnl: -123.5, updatedAt: '2026-09-10T07:00:00.000Z',
+    }), 'utf8')
+    await writeFile(path.join(root, 'paper', 'positions.json'), '[{"id":"588000:x"}]', 'utf8')
+    await writeFile(path.join(root, 'paper', 'fills', '2026-09-10.jsonl'), '{"id":"f1"}\n', 'utf8')
+
+    const migrated = await loadPaperState(root, '2026-09-10', 'unused', 'strategy')
+    expect(migrated.account.cash).toBe(98765.5)
+    expect(migrated.account.realizedPnl).toBe(-123.5)
+    expect(migrated.account.id).toBe('strategy')
+    expect(migrated.positions.map((position) => position.id)).toEqual(['588000:x'])
+    expect(migrated.fills.map((fill) => fill.id)).toEqual(['f1'])
+    expect(await readFile(paperAccountPath(root, 'strategy'), 'utf8')).toContain('98765.5')
+    expect(await readFile(paperFillsPath(root, 'strategy', '2026-09-10'), 'utf8')).toContain('f1')
+
+    // arbitrage 账本独立初始化，不被旧数据污染
+    const arb = await loadPaperState(root, '2026-09-10', 'unused', 'arbitrage')
+    expect(arb.account.cash).toBe(OPTION_PAPER_INITIAL_CASH)
+
+    // 二次 load 幂等
+    const again = await loadPaperState(root, '2026-09-10', 'unused', 'strategy')
+    expect(again.account.cash).toBe(98765.5)
+    expect(again.account.realizedPnl).toBe(-123.5)
+  })
+
+  it('migration never overwrites an existing strategy ledger with legacy residue', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dsh-option-paper-residue-'))
+    await mkdir(path.join(root, 'paper'), { recursive: true })
+    await writeFile(path.join(root, 'paper', 'account.json'), '{"currency":"CNY","cash":1}', 'utf8')
+    await savePaperState(root, '2026-09-10', {
+      account: emptyPaperAccount('t', 'strategy'), positions: [], fills: [],
+    }, 'strategy')
+
+    const state = await loadPaperState(root, '2026-09-10', 'unused', 'strategy')
+    expect(state.account.cash).toBe(OPTION_PAPER_INITIAL_CASH)
+  })
+
+  it('applyOpen passes through arbitrage position fields with explicit positionId', () => {
+    const state = applyOpen(
+      { account: emptyPaperAccount('t', 'arbitrage'), positions: [], fills: [] },
+      {
+        bucketStart: '2026-09-10T05:40:00.000Z',
+        asOf: '2026-09-10T05:40:23.000Z',
+        underlying: '510050',
+        template: 'parity',
+        offset: 'open',
+        qty: 2,
+        legs: [
+          { code: '510050C2609M02850', side: 'buy', qty: 2, fillPrice: 0.1201, priceSource: 'ask' },
+          { code: '510050P2609M02850', side: 'sell', qty: 2, fillPrice: 0.0801, priceSource: 'bid' },
+          { code: '510050', side: 'sell', qty: 20000, fillPrice: 2.912, priceSource: 'spot', asset: 'spot', spotSymbol: '510050.SH' },
+        ],
+        premiumCny: -59040,
+        marginCny: 29120,
+        reason: 'arb_open',
+        book: 'arbitrage',
+        expiryDate: '2026-09-23',
+        openEdgePerShare: 0.0123,
+        positionId: 'arb:parity:510050:2609:2.85',
+        expiryMonth: '2609',
+        direction: 'buy_synthetic_sell_spot',
+        strikes: [2.85],
+      },
+    )
+    expect(state.positions[0]).toMatchObject({
+      id: 'arb:parity:510050:2609:2.85',
+      book: 'arbitrage',
+      expiryMonth: '2609',
+      expiryDate: '2026-09-23',
+      direction: 'buy_synthetic_sell_spot',
+      strikes: [2.85],
+      openEdgePerShare: 0.0123,
+    })
+    expect(state.fills[0]).toMatchObject({
+      id: '510050:2026-09-10T05:40:00.000Z',
+      book: 'arbitrage',
+      reason: 'arb_open',
+      expiryDate: '2026-09-23',
+      offset: 'open',
+    })
   })
 })
