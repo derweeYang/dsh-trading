@@ -132,6 +132,9 @@ describe('OptionPaperBooks —— 双账本卡', () => {
   it('两账本各出一卡，arbitrage 在前；权益/现金/初始资金/已实现/收益率五项齐全', async () => {
     const h = harness()
     const { container } = await renderBooks(h)
+    // 分区标题与口径提示常驻（页签标签短，这里给全称）
+    expect(container.textContent).toContain('trade.optPaper.title')
+    expect(container.textContent).toContain('trade.optPaper.hint')
     const cards = Array.from(container.querySelectorAll('[data-opt-paper-book]'))
     expect(cards.map(c => c.getAttribute('data-opt-paper-book'))).toEqual(['arbitrage', 'strategy'])
     const arb = container.querySelector('[data-opt-paper-book="arbitrage"]') as HTMLElement

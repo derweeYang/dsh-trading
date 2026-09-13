@@ -328,6 +328,7 @@ export function OptionPaperBooks({ t }: OptionPaperBooksProps): React.JSX.Elemen
 
   return (
     <div className={own.root} data-dshtrading-option-paper-books="">
+      <div className={own.heading}>{t('trade.optPaper.title')}</div>
       <div className={own.hint}>{t('trade.optPaper.hint')}</div>
       {ordered === null && !unavailable && (
         <div className={css.empty}>{t('trade.optPaper.loading')}</div>

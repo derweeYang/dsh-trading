@@ -13,6 +13,13 @@
   padding: 10px 12px 16px;
 }
 
+.heading {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--dsw-futu-text-primary);
+  margin-bottom: 5px;
+}
+
 .hint {
   font-size: 10.5px;
   line-height: 1.5;
