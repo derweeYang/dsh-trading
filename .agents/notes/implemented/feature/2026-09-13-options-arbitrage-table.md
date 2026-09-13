@@ -1,4 +1,6 @@
-# WB-13 期权 T 板套利机会表（前端）
+# Agent Note: WB-13 期权 T 板套利机会表（前端）
+
+Status: implemented
 
 - **类型**：feature（前端，WorkBuddy lane）
 - **日期**：2026-09-13

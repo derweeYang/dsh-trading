@@ -1,4 +1,6 @@
-# WB-13 增强：套利机会表按分类显示 + 默认盈利>50 过滤（前端）
+# Agent Note: WB-13 增强 套利机会表按分类显示 + 默认盈利>50 过滤（前端）
+
+Status: implemented
 
 - **类型**：feature（前端，WorkBuddy lane）
 - **日期**：2026-09-13

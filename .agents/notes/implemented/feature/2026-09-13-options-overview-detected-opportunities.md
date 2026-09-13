@@ -1,4 +1,6 @@
-# WB-14：检测到的期权机会并入实时总览页（前端消费侧）
+# Agent Note: WB-14 检测到的期权机会并入实时总览页（前端消费侧）
+
+Status: implemented
 
 - 关联任务：数据聚合见 `data/options/opportunities-summary.json` + `docs/option-opportunities-overview.html`（2026-09-13 离线交付）。
 - 后端待办：见 `docs/backend-handoff-2026-09-13.md` 任务 #11（加 `OptionOverview.opportunities`，bridge/kit-cn 聚合 `recommendations/*.jsonl`）。

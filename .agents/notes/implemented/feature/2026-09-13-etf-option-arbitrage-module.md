@@ -1,4 +1,6 @@
-# ETF 期权套利策略模块（纯函数内核）
+# Agent Note: ETF 期权套利策略模块（纯函数内核）
+
+Status: implemented
 
 - 日期：2026-09-13
 - 状态：implemented
