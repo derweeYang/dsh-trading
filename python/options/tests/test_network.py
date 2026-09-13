@@ -23,7 +23,7 @@ def _near_month_50etf(tmp_path):
 def test_network_underlyings_akshare():
     result = contracts.handle_underlyings({"source": "akshare"})
     assert result["rows"] >= 7
-    assert {u["underlying"] for u in result["underlyings"]} >= {"510050", "510300", "159915"}
+    assert {u["underlying"] for u in result["underlyings"]} >= {"510050", "159915"}
 
 
 @pytest.mark.network

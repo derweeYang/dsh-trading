@@ -14,6 +14,7 @@ import { cleanup, fireEvent, render } from '@testing-library/react'
 import type { OptionCycleLoop, OptionOverview, OptionOverviewSort } from '@dshtrading/api'
 import { OptionsOverview } from '../src/client/OptionsOverview.tsx'
 import { OptionsCycleLoop } from '../src/client/OptionsCycleLoop.tsx'
+import { SCAN_ALL } from '../src/client/scan-feedback.ts'
 import type { MarketLocaleKey } from '../src/client/contract.ts'
 
 /** key 直出翻译（断言用 key 而非文案，与词典解耦）。 */
@@ -334,6 +335,59 @@ describe('OptionsOverview', () => {
     expect(card.textContent).toContain('箱体上沿不破，收 theta')
     expect(card.textContent).toContain('卖 2900 购 / 买 2950 购')
     expect(card.textContent).toContain('spot < 2.90')
+  })
+
+  it('扫描回执（2026-09-11）：在途/成功/失败三态换标签，失败原因上浮到页面', () => {
+    // 在途：按钮禁用 + 换文案，用户点完立刻有回执
+    const { container: filling, getByText: getFilling } = renderOverview({
+      onScanRow: vi.fn(),
+      scanFeedback: { phase: 'filling', target: '510050' },
+    })
+    const fillingBtn = getFilling('options.scan.filling') as HTMLButtonElement
+    expect(fillingBtn.disabled).toBe(true)
+    expect(fillingBtn.getAttribute('data-scan-state')).toBe('filling')
+    // 别的行不受影响（同刻只有一个目标在途）
+    expect(filling.querySelectorAll('tbody tr')[1]?.textContent).toContain('options.overview.scanRow')
+    cleanup()
+
+    // 成功：换成「已填入输入框」，不再冒充空闲
+    const { getByText: getFilled } = renderOverview({
+      onScanRow: vi.fn(),
+      scanFeedback: { phase: 'filled', target: '510050' },
+    })
+    expect(getFilled('options.scan.filled')).toBeTruthy()
+    cleanup()
+
+    // 失败：按钮标失败 + 页面顶部露出原因（可自愈类只给结论，不带原始串）
+    const { container: failed, getByText: getFailed } = renderOverview({
+      onScanRow: vi.fn(),
+      scanFeedback: { phase: 'error', target: '510050', failure: 'busy' },
+    })
+    expect(getFailed('options.scan.failed')).toBeTruthy()
+    const alert = failed.querySelector('[role="alert"]') as HTMLElement
+    expect(alert).toBeTruthy()
+    expect(alert.textContent).toContain('options.scan.error.busy')
+    cleanup()
+
+    // 失败原因：unknown 带原文，不吞错
+    const { container: unknownFailed } = renderOverview({
+      onScanRow: vi.fn(),
+      scanFeedback: { phase: 'error', target: SCAN_ALL, failure: 'unknown', detail: 'socket hang up' },
+    })
+    expect((unknownFailed.querySelector('[role="alert"]') as HTMLElement).textContent)
+      .toContain('options.scan.error.unknown')
+  })
+
+  it('扫描回执：顶栏「扫描标的」独立取态，不串行内按钮', () => {
+    const { container, getByText } = renderOverview({
+      onScanAll: vi.fn(),
+      onScanRow: vi.fn(),
+      scanFeedback: { phase: 'filled', target: SCAN_ALL },
+    })
+    expect(getByText('options.scan.filled')).toBeTruthy()
+    const firstRowBtn = container.querySelector('tbody tr td:last-child button') as HTMLButtonElement
+    expect(firstRowBtn.textContent).toBe('options.overview.scanRow')
+    expect(firstRowBtn.disabled).toBe(false)
   })
 
   it('WB-9 明细表默认展开、可折叠（保留 WB-1 9 行基线）', () => {

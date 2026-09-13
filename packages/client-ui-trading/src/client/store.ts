@@ -113,6 +113,13 @@ export function createSelectionStore(): SelectionStore {
   }
 }
 
+/**
+ * 模块级单例：行情中栏与各 StageView 共享同一选中标的。期权 T 板直达 tab
+ * （OptionsStageMiddleView）需要跨视图读取当前标的，故把 selection 提升为单例，
+ * index.ts 的 `selection` 变量直接复用本实例（inject 契约不变）。
+ */
+export const selectionStore: SelectionStore = createSelectionStore()
+
 // ---------------------------------------------------------------------------
 // Per-market watchlists (the "自选" concept; seeded with defaults when empty)
 // ---------------------------------------------------------------------------

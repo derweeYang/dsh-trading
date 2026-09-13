@@ -17,6 +17,42 @@
   background: var(--dsw-futu-bg-base, #ffffff);
 }
 
+/* tab 组语义容器（P1-2：右侧交易台入口是动作按钮，与 role=tablist 分离）。 */
+.tabList {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 下单入口增强（P1-2）：全 tab 常驻交易台入口，右对齐。 */
+.tradeEntry {
+  appearance: none;
+  margin-left: auto;
+  align-self: center;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  background: var(--dsw-futu-bg-subtle, #f4f6f8);
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.tradeEntry:hover {
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  border-color: var(--dsw-futu-border-strong, #b9bfc8);
+}
+
+.tradeEntry[data-active='true'] {
+  color: var(--dsw-futu-accent-text, #1a1e24);
+  border-color: var(--dsw-futu-accent-border, #b9bfc8);
+  background: var(--dsw-futu-accent-subtle, #eef2ff);
+}
+
 .tab {
   appearance: none;
   border: none;

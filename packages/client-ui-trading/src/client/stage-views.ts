@@ -17,11 +17,39 @@
 import type { ComponentType } from 'react'
 import type { MarketLocaleKey } from './contract.ts'
 
+/** 选中标的的最小形状（壳 selection store 的 `instrument` 字段）。 */
+export interface StageSelectionInstrument {
+  market: string
+  symbol: string
+  name?: string
+}
+
+/** 壳 selection store 的最小形状面（hook selector 的输入类型）。 */
+export interface StageSelectionState {
+  instrument: StageSelectionInstrument | null
+}
+
+/**
+ * 标的面钩子（与 QuoteStage 的 `UseStoreState` 同形）：selector 订阅当前选中标的。
+ * 定义在此而不从 QuoteStage 引，是为了让 stage-views 保持零依赖（它被跨 bundle 的
+ * 视图包镜像，见文件头注）；视图包各自镜像同一形状，类型漂移由编译期暴露。
+ */
+export type StageSelectionHook = <TSelected>(selector: (state: StageSelectionState) => TSelected) => TSelected
+
 /** 视图组件收到的运行时面：t 为 dshtrading.market 词典的翻译函数。 */
 export interface StageViewProps {
   t: (key: MarketLocaleKey, params?: Record<string, unknown>) => string
   /** 中栏当前视图 id（useSyncExternalStore 驱动的响应式值）。 */
   view: string
+  /**
+   * 可选标的面（P1-4，2026-09-12）：让插件视图跟随侧栏当前选中标的。
+   *
+   * **刻意可选**——这是跨包契约（`client-ui-knowledge` / `client-ui-strategies` 各自镜像
+   * 同一形状），必须容忍版本错配：新视图 + 老壳 → 拿到 undefined → 走各自的缺省行为
+   * （与本次修复前的表现一致），而不是抛错或视图不注册。故不要改成必填，
+   * 也不要让视图包为此 inject 新服务（服务缺失会让整个 tab 不注册，比降级严重得多）。
+   */
+  useSelection?: StageSelectionHook
 }
 
 /**

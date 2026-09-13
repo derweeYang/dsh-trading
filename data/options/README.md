@@ -8,6 +8,7 @@
 | `recommendations/YYYY-MM-DD.jsonl` | 每桶一条推荐或跳过桩 |
 | `packets/YYYY-MM-DD.jsonl` | 每桶一包 ContextPacket（宿主打标；落盘校验用） |
 | `paper/` | 本地纸账户：账户、持仓与按日成交 JSONL（运行时生成，不入库） |
+| `overview.json` | 总览慢数据快照（5 分钟桶 `snapshotBarFacts` 覆写；`GET /options/overview` 只读） |
 | `iv-daily.jsonl` | 日终 / 回放 ATM IV / HV20（append-only；满 60 点后给本机分位）。历史种子：`node --experimental-strip-types scripts/seed-iv-daily.mjs`（网关 `replay_atm_iv`，已有行不覆盖） |
 | `reviews/YYYY-MM-DD.md` | 当日首次进入 `close5` 的确定性复盘 |
 | `seed-cards.json` | 初始化知识卡片草稿；`source.url` 必须是 `manual:…` 去重键（`file:` 过不了校验） |

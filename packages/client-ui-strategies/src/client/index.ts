@@ -11,7 +11,8 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ComponentType } from 'react'
 import type { ToolCallOwnerProps } from '@deepseek-ai/dsh-client-ui-tool/client'
-import { StrategyView } from './StrategyView.tsx'
+import { StrategyView, type UseStoreState } from './StrategyView.tsx'
+import type { SelectionState } from './shell-faces.ts'
 import { StrategyBacktestCard, StrategyAuthorCard } from './toolview.tsx'
 import type { StrategyEditorSaveInput } from './StrategyEditor.tsx'
 import type { ScreenerEditorSaveInput } from './ScreenerEditor.tsx'
@@ -32,7 +33,15 @@ interface StageViewsService {
     id: string
     titleKey: string
     order?: number
-    render: ComponentType<{ t: (key: string) => string; view: string }>
+    render: ComponentType<{
+      t: (key: string) => string
+      view: string
+      /**
+       * 可选标的面（P1-4，2026-09-12）：壳下传的「当前选中标的」selector 钩子。
+       * 老壳不下传 → undefined → StrategyView 走自身缺省（与修复前一致）。
+       */
+      useSelection?: UseStoreState<SelectionState> | undefined
+    }>
   }): void
 }
 interface BridgeService {
@@ -91,6 +100,9 @@ export function apply(ctx: ClientContext): void {
         t: t as unknown as (key: string) => string,
         view: props.view,
         bridge,
+        // 标的面透传（P1-4）：不接这一步时 StrategyView 的 useSelection 恒为 undefined，
+        // 视图永远回落硬编码的 cn/600519（与侧栏选中标的无关）——2026-09-12 复核确认的接线缺口。
+        ...(props.useSelection === undefined ? {} : { useSelection: props.useSelection }),
       }),
     })
   })

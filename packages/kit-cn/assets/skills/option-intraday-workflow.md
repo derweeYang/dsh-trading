@@ -23,7 +23,7 @@ description: Use when scanning China ETF option underlyings for timing, 5-day re
 ## L1 选场
 
 1. 读总览：`GET /options/overview?sort=strength&includeIv=1` 或行内 `scanPrompt`。
-2. 同源双挂先合并再留一只（链更厚者）：`510300`/`159919`，`510500`/`159922`，`588000`/`588080`。箱体行的 `twinUnderlying` 是权威对侧。
+2. 同源双挂先合并再留一只（链更厚者）：`588000`/`588080`。箱体行的 `twinUnderlying` 是权威对侧（2026-09-13 起 510300/510500 下架，300/500 双挂对已移除）。
 3. `weak_rally` 不做多头卖方；`accelerating_sell` 不做无保护短 put。
 4. 5 日强弱只选标的；IV 分位 / HV20 只标制度。最多 2–3 只进 L2。
 5. **定时桶**：只引用宿主注入的 `ContextPacket`。不要重算 IV / HV / 箱体 / 量比；`ivRegime=unknown` 时不得声称分位。禁止再打 `vol_analytics` 改制度标签。

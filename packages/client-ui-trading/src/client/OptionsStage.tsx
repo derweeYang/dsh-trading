@@ -34,6 +34,7 @@ import { cancelOptionOrder, fetchOptionPositions, fetchOptionStrategy, placeOpti
 import { directionColor, fmtClock, fmtCompact, fmtPercent, fmtPrice } from './format.ts'
 import { usePoll } from './usePoll.ts'
 import { REGIME_KEY, SESSION_REASON_KEY, TEMPLATE_KEY } from './option-vocabulary.ts'
+import { scanLabelKey, type ScanPhase } from './scan-feedback.ts'
 import { StrategyPreview } from './StrategyPreview.tsx'
 import css from './options-stage.module.css'
 
@@ -83,10 +84,17 @@ export interface OptionsStageProps {
    * 校准在宿主/kit 侧，前端复制一份必然漂移。
    */
   forecast?: OptionIntradayBoxRow | null | undefined
-  /** 返回九标的总览（保留排序状态；由 QuoteStage 持有 sort）。 */
+  /** 返回七标的总览（保留排序状态；由 QuoteStage 持有 sort）。 */
   onBackToOverview?: () => void
   /** 用该标的的 scanPrompt 预填 composer（只填不发；未注入 fillComposer 则缺席）。 */
   onScanUnderlying?: (() => void) | undefined
+  /**
+   * 扫描按钮的三态（2026-09-11）：'filling' / 'filled' / 'error'；null = 空闲。
+   * 预填成功页面本无别的变化，不给回执用户只会当成「点了没反应」。
+   */
+  scanPhase?: ScanPhase | null | undefined
+  /** 失败原因（已本地化）；有值时挂到按钮 tooltip 上，不吞错。 */
+  scanMessage?: string | undefined
 }
 
 /** 行权价并集升序：认购/认沽挂出的档位未必对称（深市静态表尤其）。 */
@@ -129,7 +137,7 @@ const OPTION_POSITIONS_POLL_MS = 15000
 export function OptionsStage({
   t, months, selectedMonth, onSelectMonth, chain, failure, loaded, colorMode,
   underlyingSymbol, underlyingName, multiplier, heldQty, onViewSpot, onTradeSpot, onSendLegToAgent,
-  forecast, onBackToOverview, onScanUnderlying,
+  forecast, onBackToOverview, onScanUnderlying, scanPhase, scanMessage,
 }: OptionsStageProps): React.JSX.Element {
   const strikes = chain === null ? [] : strikeOrder(chain)
   const clock = chain === null ? undefined : snapshotClock(chain.snapshotAt)
@@ -229,9 +237,12 @@ export function OptionsStage({
           <button
             type="button"
             className={css.scanBtn}
+            data-scan-state={scanPhase ?? undefined}
+            disabled={scanPhase === 'filling'}
+            title={scanMessage}
             onClick={onScanUnderlying}
           >
-            {t('options.overview.scanRow')}
+            {t(scanLabelKey('options.overview.scanRow', scanPhase ?? null))}
           </button>
         )}
         {selectedMonth !== null && (

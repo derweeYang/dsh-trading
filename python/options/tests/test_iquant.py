@@ -97,10 +97,13 @@ def test_iquant_registry_lists_sse_and_szse_boards():
     result = contracts.handle_underlyings({"source": "iquant"})
     quotes = {row["underlying"]: row["quotesSource"] for row in result["underlyings"]}
     assert quotes["510050"] == "iquant_board"
-    assert quotes["510300"] == "iquant_board"
+    assert quotes["588000"] == "iquant_board"
     assert quotes["159915"] == "iquant_board"
     assert quotes["159901"] == "iquant_board"
-    assert result["rows"] == 9
+    # 2026-09-13 起 510300/510500 移出标的名册
+    assert "510300" not in quotes
+    assert "510500" not in quotes
+    assert result["rows"] == 7
     assert result["source"] == "iquant"
 
 
@@ -255,7 +258,7 @@ def test_fetch_spot_treats_zero_snapshot_as_missing(monkeypatch):
         raise AssertionError(f"unexpected {subcommand}")
 
     monkeypatch.setattr(iquant, "run_quote", run)
-    assert iquant.fetch_spot("510300", {}) == pytest.approx(4.616)
+    assert iquant.fetch_spot("510050", {}) == pytest.approx(4.616)
 
 
 def test_fetch_spot_propagates_snapshot_network(monkeypatch):

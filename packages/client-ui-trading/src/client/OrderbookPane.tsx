@@ -35,6 +35,7 @@ export function OrderbookPane({ t, orderbook, trades, orderbookLoading, colorMod
   // 档位/成交量紧凑单位 locale（亿/万 vs B/M）：词典哨兵键判定。
   const numLocale = scaleLocaleOf(t)
   const degraded = orderbook === null && !orderbookLoading
+  const fullyDegraded = degraded && (trades === null || tradeRows.length === 0)
 
   const buyVolume = orderbook?.bids.reduce((sum, level) => sum + level.amount, 0) ?? 0
   const sellVolume = orderbook?.asks.reduce((sum, level) => sum + level.amount, 0) ?? 0
@@ -58,13 +59,13 @@ export function OrderbookPane({ t, orderbook, trades, orderbookLoading, colorMod
   const tradeRows = (trades ?? []).slice().reverse()
 
   return (
-    <div className={css.root} data-dshtrading-orderbook="">
+    <div className={css.root} data-dshtrading-orderbook="" data-degraded={fullyDegraded ? 'true' : undefined}>
       <div className={css.head}>
         <span>{t('orderbook.title')}</span>
         <button type="button" className={css.close} aria-label={t('orderbook.close')} onClick={onClose}>×</button>
       </div>
       <div className={css.body}>
-        {degraded && <div className={css.degraded}>{t('orderbook.unavailable')}</div>}
+        {degraded && <div className={`${css.degraded} ${fullyDegraded ? css.degradedFull : ''}`}>{t('orderbook.unavailable')}</div>}
         {orderbook !== null && (
           <>
             {buyRatio !== undefined && (

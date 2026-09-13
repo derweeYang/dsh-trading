@@ -1,0 +1,338 @@
+﻿# Review package Task 2
+Commits: none (working tree)
+
+## Stat
+ packages/client-ui-trading/src/option-bar-agent.ts | 142 ++++++++++++++-------
+ .../test/option-bar-agent.test.ts                  |  64 +++++++++-
+ 2 files changed, 156 insertions(+), 50 deletions(-)
+
+## Diff
+
+diff --git a/packages/client-ui-trading/src/option-bar-agent.ts b/packages/client-ui-trading/src/option-bar-agent.ts
+index d4206a8..88ad9d1 100644
+--- a/packages/client-ui-trading/src/option-bar-agent.ts
++++ b/packages/client-ui-trading/src/option-bar-agent.ts
+@@ -4,26 +4,29 @@
+  */
+ import { access, mkdir, writeFile } from 'node:fs/promises'
+ import path from 'node:path'
+ import type { OptionBarRecommendation, OptionCycle, OptionCycleLoop } from '@dshtrading/api'
+ import {
+   OPTION_BAR_AGENT_PROMPT,
+   appendJsonlLine,
+   cyclesPath,
+-  decideBarAgent,
+   foldDailyReview,
+   makeSkipRecommendation,
++  opportunityDecide,
+   recommendationsPath,
+   reviewsPath,
+   sessionAt,
+   shanghaiCalendarDate,
+-  shouldWriteDailyReview,
+   shanghaiBucketStartMs,
++  shouldWriteDailyReview,
+   readJsonl,
++  type DirectorTickContext,
++  type LaneDecision,
++  type TraderLane,
+ } from '@dshtrading/kit-cn'
+ import type { TasksRunner } from './tasks/runner.ts'
+ 
+ export interface OptionBarAgentOptions {
+   dataRoot: () => string
+   now?: () => number
+   runner?: () => TasksRunner | undefined
+   workspaceId?: () => string | undefined
+@@ -35,90 +38,121 @@ export class OptionBarAgentHost {
+   private openSessionId: string | undefined = undefined
+   private openStartedAt = 0
+   private readonly options: OptionBarAgentOptions
+ 
+   constructor(options: OptionBarAgentOptions) {
+     this.options = options
+   }
+ 
+-  async afterTick(input: { ticked: boolean; loop: OptionCycleLoop; nowMs: number }): Promise<void> {
++  /** 缁?Director 涓婁笅鏂囷紙璇荤洏 + inFlight锛夈€?*/
++  async buildContext(input: {
++    ticked: boolean
++    loop: OptionCycleLoop
++    nowMs: number
++  }): Promise<DirectorTickContext> {
+     await this.refreshInFlight()
+     const nowMs = input.nowMs
+     const session = sessionAt(nowMs)
+     const date = shanghaiCalendarDate(nowMs)
+     const root = this.options.dataRoot()
+     const bucketStart = input.loop.lastBucket ?? new Date(shanghaiBucketStartMs(nowMs)).toISOString()
+     const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
+     const alreadyRecommended = recs.some((row) => row.bucketStart === bucketStart)
+     const allCalibrated = input.loop.rows.length > 0
+       && input.loop.rows.every((row) => row.latest?.forecast.noTradeReason === 'calibrated')
+-    const decision = decideBarAgent({
++    return {
+       ticked: input.ticked,
++      loop: input.loop,
++      nowMs,
+       session,
+-      inFlight: this.inFlight,
+-      allCalibrated,
+-      alreadyRecommended,
++      llmBusy: this.inFlight,
+       bucketStart,
+-    })
++      alreadyRecommended,
++      allCalibrated,
++    }
++  }
++
++  /** 鎵ц opportunity 鐨?launch/stub 鍓綔鐢紙涓嶅惈澶嶇洏锛夈€?*/
++  async runOpportunity(ctx: DirectorTickContext, decision: LaneDecision): Promise<void> {
++    const root = this.options.dataRoot()
++    const date = shanghaiCalendarDate(ctx.nowMs)
++    const session = ctx.session
++    const bucketStart = ctx.bucketStart
+ 
+     if (decision.action === 'stub' && decision.skipReason !== undefined) {
+       await this.writeRec(root, date, makeSkipRecommendation({
+         bucketStart,
+-        asOf: new Date(nowMs).toISOString(),
++        asOf: new Date(ctx.nowMs).toISOString(),
+         session,
+         skipReason: decision.skipReason,
+       }))
++      return
+     }
+ 
+-    if (decision.action === 'launch') {
+-      const runner = this.options.runner?.()
+-      if (runner === undefined) {
+-        await this.writeRec(root, date, makeSkipRecommendation({
+-          bucketStart,
+-          asOf: new Date(nowMs).toISOString(),
+-          session,
+-          skipReason: 'launch_failed',
+-        }))
+-      } else {
+-        this.inFlight = true
+-        try {
+-          const workspaceId = this.options.workspaceId?.()
+-          const sessionId = await runner.launch({
+-            id: `option-bar-${bucketStart}`,
+-            title: `ETF option bar ${bucketStart}`,
+-            prompt: `${OPTION_BAR_AGENT_PROMPT}\n\nbucketStart=${bucketStart}\nasOf=${new Date(nowMs).toISOString()}`,
+-            agentPreset: 'trader',
+-            ...(workspaceId === undefined ? {} : { workspaceId }),
+-          })
+-          this.openSessionId = sessionId
+-          this.openStartedAt = nowMs
+-        } catch (error) {
+-          this.inFlight = false
+-          this.openSessionId = undefined
+-          this.options.log?.('option-bar launch failed', error)
+-          await this.writeRec(root, date, makeSkipRecommendation({
+-            bucketStart,
+-            asOf: new Date(nowMs).toISOString(),
+-            session,
+-            skipReason: 'launch_failed',
+-          }))
+-        }
+-      }
++    if (decision.action !== 'launch') return
++
++    const runner = this.options.runner?.()
++    if (runner === undefined) {
++      await this.writeRec(root, date, makeSkipRecommendation({
++        bucketStart,
++        asOf: new Date(ctx.nowMs).toISOString(),
++        session,
++        skipReason: 'launch_failed',
++      }))
++      return
+     }
+ 
++    this.inFlight = true
++    try {
++      const workspaceId = this.options.workspaceId?.()
++      const sessionId = await runner.launch({
++        id: `option-bar-${bucketStart}`,
++        title: `ETF option bar ${bucketStart}`,
++        prompt: `${OPTION_BAR_AGENT_PROMPT}\n\nbucketStart=${bucketStart}\nasOf=${new Date(ctx.nowMs).toISOString()}`,
++        agentPreset: 'trader',
++        ...(workspaceId === undefined ? {} : { workspaceId }),
++      })
++      this.openSessionId = sessionId
++      this.openStartedAt = ctx.nowMs
++    } catch (error) {
++      this.inFlight = false
++      this.openSessionId = undefined
++      this.options.log?.('option-bar launch failed', error)
++      await this.writeRec(root, date, makeSkipRecommendation({
++        bucketStart,
++        asOf: new Date(ctx.nowMs).toISOString(),
++        session,
++        skipReason: 'launch_failed',
++      }))
++    }
++  }
++
++  async maybeWriteReview(nowMs: number): Promise<void> {
++    const session = sessionAt(nowMs)
++    const date = shanghaiCalendarDate(nowMs)
++    const root = this.options.dataRoot()
+     const reviewFile = reviewsPath(root, date)
+     const exists = await fileExists(reviewFile)
+-    if (shouldWriteDailyReview(session, exists)) {
+-      const cycles = await readJsonl<OptionCycle>(cyclesPath(root, date))
+-      const recommendations = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
+-      const md = foldDailyReview({ date, cycles, recommendations })
+-      await mkdir(path.dirname(reviewFile), { recursive: true })
+-      await writeFile(reviewFile, md, 'utf8')
++    if (!shouldWriteDailyReview(session, exists)) return
++    const cycles = await readJsonl<OptionCycle>(cyclesPath(root, date))
++    const recommendations = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
++    const md = foldDailyReview({ date, cycles, recommendations })
++    await mkdir(path.dirname(reviewFile), { recursive: true })
++    await writeFile(reviewFile, md, 'utf8')
++  }
++
++  /** 鍏煎鏃у叆鍙ｏ細鍗曡溅閬撴満浼氳矾寰勶紙鏃?Director锛夈€?*/
++  async afterTick(input: { ticked: boolean; loop: OptionCycleLoop; nowMs: number }): Promise<void> {
++    const ctx = await this.buildContext(input)
++    const decision = opportunityDecide(ctx)
++    if (decision.action === 'launch' || decision.action === 'stub') {
++      await this.runOpportunity(ctx, decision)
+     }
++    await this.maybeWriteReview(input.nowMs)
+   }
+ 
+   settle(): void {
+     this.inFlight = false
+     this.openSessionId = undefined
+   }
+ 
+   private async refreshInFlight(): Promise<void> {
+@@ -137,16 +171,26 @@ export class OptionBarAgentHost {
+     try {
+       await appendJsonlLine(recommendationsPath(root, date), row)
+     } catch (error) {
+       this.options.log?.('option-bar recommendation persist failed', error)
+     }
+   }
+ }
+ 
++export function createOpportunityLane(host: OptionBarAgentHost): TraderLane {
++  return {
++    id: 'opportunity',
++    decide: (ctx) => opportunityDecide(ctx),
++    run: async (ctx, decision) => {
++      await host.runOpportunity(ctx, decision)
++    },
++  }
++}
++
+ async function fileExists(filePath: string): Promise<boolean> {
+   try {
+     await access(filePath)
+     return true
+   } catch {
+     return false
+   }
+ }
+diff --git a/packages/client-ui-trading/test/option-bar-agent.test.ts b/packages/client-ui-trading/test/option-bar-agent.test.ts
+index 84c955e..9d0b1e8 100644
+--- a/packages/client-ui-trading/test/option-bar-agent.test.ts
++++ b/packages/client-ui-trading/test/option-bar-agent.test.ts
+@@ -1,18 +1,19 @@
+ import { mkdtemp } from 'node:fs/promises'
+ import os from 'node:os'
+ import path from 'node:path'
+ import { describe, expect, it } from 'vitest'
+ import type { OptionBarRecommendation } from '@dshtrading/api'
+ import { readJsonl, recommendationsPath, reviewsPath } from '@dshtrading/kit-cn'
+-import { OptionBarAgentHost } from '../src/option-bar-agent.ts'
++import { createOpportunityLane, OptionBarAgentHost } from '../src/option-bar-agent.ts'
+ 
+ const LUNCH = Date.parse('2026-09-08T03:25:00.000Z')
+ const CLOSE5 = Date.parse('2026-09-08T06:55:00.000Z')
++const REGULAR = Date.parse('2026-09-08T01:45:12.000Z')
+ 
+ describe('OptionBarAgentHost', () => {
+   it('lunch 鏂版《鍐?session 妗╀笖涓?launch', async () => {
+     const dir = await mkdtemp(path.join(os.tmpdir(), 'bar-agent-'))
+     let launched = 0
+     const host = new OptionBarAgentHost({
+       dataRoot: () => dir,
+       runner: () => ({
+@@ -52,9 +53,70 @@ describe('OptionBarAgentHost', () => {
+     await writeFile(first, 'KEEP\n', 'utf8')
+     await host.afterTick({
+       ticked: true,
+       nowMs: CLOSE5,
+       loop: { running: true, horizonMin: 5, lastBucket: '2026-09-08T06:55:00.000Z', rows: [] },
+     })
+     expect(await readFile(first, 'utf8')).toBe('KEEP\n')
+   })
++
++  it('regular 鏂版《 launch 涓斾笉鍐欐々', async () => {
++    const dir = await mkdtemp(path.join(os.tmpdir(), 'bar-agent-'))
++    let launched = 0
++    const host = new OptionBarAgentHost({
++      dataRoot: () => dir,
++      runner: () => ({
++        launch: async () => {
++          launched += 1
++          return 's1'
++        },
++        inspect: async () => ({ outcome: 'pending' as const }),
++      } as never),
++    })
++    await host.afterTick({
++      ticked: true,
++      nowMs: REGULAR,
++      loop: {
++        running: true,
++        horizonMin: 5,
++        lastBucket: '2026-09-08T01:45:00.000Z',
++        rows: [],
++      },
++    })
++    expect(launched).toBe(1)
++    expect(host.inFlight).toBe(true)
++    const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(dir, '2026-09-08'))
++    expect(recs).toEqual([])
++  })
++
++  it('createOpportunityLane 濮旀墭 decide/run', async () => {
++    const dir = await mkdtemp(path.join(os.tmpdir(), 'bar-agent-'))
++    let launched = 0
++    const host = new OptionBarAgentHost({
++      dataRoot: () => dir,
++      runner: () => ({
++        launch: async () => {
++          launched += 1
++          return 's1'
++        },
++        inspect: async () => ({ outcome: 'pending' as const }),
++      } as never),
++    })
++    const lane = createOpportunityLane(host)
++    const ctx = await host.buildContext({
++      ticked: true,
++      nowMs: REGULAR,
++      loop: {
++        running: true,
++        horizonMin: 5,
++        lastBucket: '2026-09-08T01:45:00.000Z',
++        rows: [],
++      },
++    })
++    expect(lane.id).toBe('opportunity')
++    const decision = lane.decide(ctx)
++    expect(decision.action).toBe('launch')
++    await lane.run?.(ctx, decision)
++    expect(launched).toBe(1)
++    expect(host.inFlight).toBe(true)
++  })
+ })

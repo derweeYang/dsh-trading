@@ -8,6 +8,8 @@ import type {
   FundamentalsPackage, KernelReport, OptionBarContextPacket, OptionChain, OptionCycle, OptionCycleLoop,
   OptionExpiryCalendar, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewSort,
   OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying,
+  OptionPrediction, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft,
+  OptionPredictionSettle, PredictionKnowledgeItem,
 } from '@dshtrading/api'
 import type { CustomIndicatorRecord, IndicatorInstance } from '@dshtrading/indicators'
 import type { KnowledgeCard } from '@dshtrading/knowledge'
@@ -182,10 +184,10 @@ export async function fetchOptionsResolve(symbol: string): Promise<OptionsOutcom
 /* ── 期权聚合面（C1 总览 / L2 箱体 / 5 分钟闭环；2026-09-09 WB-0）────────── */
 
 /**
- * 九标的总览（C1）。桥侧聚合现货/日 K/底仓/期权持仓，**只拉这一条**——
+ * 七标的总览（C1）。桥侧聚合现货/日 K/底仓/期权持仓，**只拉这一条**——
  * 不要再拼 tickers + klines + positions（交接单 WB-1 明令禁止）。
  *
- * `includeIv` 默认 false：置 1 会逐标的打 vol_analytics 网关，九路并发打爆
+ * `includeIv` 默认 false：置 1 会逐标的打 vol_analytics 网关，多路并发打爆
  * 网关；仅排序切到 `iv` 时由调用方显式打开。单行缺键由 UI 按行容错。
  */
 export async function fetchOptionsOverview(query: {
@@ -279,6 +281,108 @@ export async function fetchOptionsCycles(query: {
     )
     if (wire.cycles === undefined) return optionsFailure(new Error('cycles missing in wire'))
     return { ok: true, data: wire.cycles }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/* ── T+1 预测模块（盘势/波动预期 + 跟踪回溯 + 经验沉淀；2026-09-12）────────── */
+
+/** 预测看板：每个标的的最新一条 T+1 预测（GET /options/predictions）。 */
+export async function fetchOptionPredictions(query?: {
+  underlying?: string
+  asOf?: string
+}): Promise<OptionsOutcome<OptionPredictionBoard>> {
+  try {
+    const search = new URLSearchParams()
+    if (query?.underlying !== undefined) search.set('underlying', query.underlying)
+    if (query?.asOf !== undefined) search.set('asOf', query.asOf)
+    const wire = await getJson<{ ok: boolean; board: OptionPredictionBoard }>(
+      `/dshtrading/api/options/predictions?${search.toString()}`,
+    )
+    if (wire.board === undefined) return optionsFailure(new Error('board missing in wire'))
+    return { ok: true, data: wire.board }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/**
+ * 跟踪回溯：单标的（或全局）历史 + 统计 + 经验沉淀
+ * （GET /options/predictions/track）。limit 仅约束返回的预测条数（统计仍按全量）。
+ */
+export async function fetchOptionPredictionTrack(query?: {
+  underlying?: string
+  limit?: number
+}): Promise<OptionsOutcome<OptionPredictionTrack>> {
+  try {
+    const search = new URLSearchParams()
+    if (query?.underlying !== undefined) search.set('underlying', query.underlying)
+    if (query?.limit !== undefined) search.set('limit', String(query.limit))
+    const wire = await getJson<{ ok: boolean; track: OptionPredictionTrack }>(
+      `/dshtrading/api/options/predictions/track?${search.toString()}`,
+    )
+    if (wire.track === undefined) return optionsFailure(new Error('track missing in wire'))
+    return { ok: true, data: wire.track }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/** 新建一条 T+1 预测（POST /options/predictions；桥补全 id / createdAt / asOfDate）。 */
+export async function createOptionPrediction(draft: OptionPredictionDraft): Promise<OptionsOutcome<OptionPrediction>> {
+  try {
+    const response = await fetch('/dshtrading/api/options/predictions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(draft),
+    })
+    const wire = await response.json().catch(() => undefined) as
+      | { ok?: boolean; prediction?: OptionPrediction; code?: string; message?: string }
+      | undefined
+    if (!response.ok || wire?.ok !== true || wire.prediction === undefined) {
+      const code = wire?.code ?? `HTTP_${response.status}`
+      return { ok: false, code, message: wire?.message ?? code }
+    }
+    return { ok: true, data: wire.prediction }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/** T+1 收盘后回填实盘结果（POST /options/predictions/settle；桥重写 hit/score 等）。 */
+export async function settleOptionPrediction(input: OptionPredictionSettle): Promise<OptionsOutcome<OptionPrediction>> {
+  try {
+    const response = await fetch('/dshtrading/api/options/predictions/settle', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    const wire = await response.json().catch(() => undefined) as
+      | { ok?: boolean; prediction?: OptionPrediction; code?: string; message?: string }
+      | undefined
+    if (!response.ok || wire?.ok !== true || wire.prediction === undefined) {
+      const code = wire?.code ?? `HTTP_${response.status}`
+      return { ok: false, code, message: wire?.message ?? code }
+    }
+    return { ok: true, data: wire.prediction }
+  } catch (err) {
+    return optionsFailure(err)
+  }
+}
+
+/** 经验沉淀汇总（GET /options/predictions/knowledge；可选 underlying 过滤）。 */
+export async function fetchOptionPredictionKnowledge(query?: {
+  underlying?: string
+}): Promise<OptionsOutcome<readonly PredictionKnowledgeItem[]>> {
+  try {
+    const search = new URLSearchParams()
+    if (query?.underlying !== undefined) search.set('underlying', query.underlying)
+    const wire = await getJson<{ ok: boolean; knowledge: readonly PredictionKnowledgeItem[] }>(
+      `/dshtrading/api/options/predictions/knowledge?${search.toString()}`,
+    )
+    if (wire.knowledge === undefined) return optionsFailure(new Error('knowledge missing in wire'))
+    return { ok: true, data: wire.knowledge }
   } catch (err) {
     return optionsFailure(err)
   }
@@ -1167,6 +1271,55 @@ export interface TradingBridgeService {
   fetchNews: typeof fetchNews
   fetchSymbols: typeof fetchSymbols
   subscribeTradingEvents: typeof subscribeTradingEvents
+}
+
+/* ------------------------------------------------------------------ *
+ * 壳 / 宿主能力（P0-2，2026-09-12）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 「打开设置」契约事件名。与 node 半 `src/shell-settings.ts` 的 `OPEN_SETTINGS_EVENT`
+ * **必须字面相同**——跨半契约不走 import（client 半零跨半 import，避免把 node 半模块
+ * 打进浏览器 bundle），漂移由 `test/shell-open-settings.test.ts` 断言两边相等兜底。
+ */
+export const OPEN_SETTINGS_EVENT = 'dshtrading:open-settings' as const
+
+/** 「打开设置」结果：宿主服务可用 / 上游能力缺口 / 桥不可达。 */
+export type OpenSettingsOutcome =
+  | { ok: true; via: 'settings.open' | 'ui.openSettings' }
+  | { ok: false; reason: 'unsupported' | 'unreachable'; code?: string; message?: string }
+
+/**
+ * 请求宿主打开设置（POST /shell/open-settings）。node 半先探测宿主服务
+ * （`settings.open` → `ui.openSettings`），都没有时返 501 `SETTINGS_OPEN_UNSUPPORTED`。
+ *
+ * 超时护栏（1.2s）：宿主服务调用走得是一条本地 HTTP 往返，正常 <1ms；但桥整体挂起时
+ * 不能把「点设置」永久挂住——超时按 `unreachable` 处理，调用方据此退回 DOM 触发器。
+ */
+export async function requestOpenSettings(): Promise<OpenSettingsOutcome> {
+  try {
+    const response = await fetch('/dshtrading/api/shell/open-settings', {
+      method: 'POST',
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(1200),
+    })
+    const wire = await response.json().catch(() => undefined) as
+      | { ok?: boolean; invoked?: boolean; via?: string; code?: string; message?: string }
+      | undefined
+    const via = wire?.via
+    if (response.ok && wire?.ok === true && wire.invoked === true && (via === 'settings.open' || via === 'ui.openSettings')) {
+      return { ok: true, via }
+    }
+    const code = wire?.code ?? `HTTP_${response.status}`
+    const message = wire?.message
+    // 501 + SETTINGS_OPEN_UNSUPPORTED = 宿主确实没这个能力（上游缺口，属预期分支）；
+    // 其余非 2xx（404 旧 node 半、5xx、超时）都算桥不可达——两者对调用方都意味着「退回 DOM」，
+    // 但分开上报便于在 console 里区分「宿主缺 API」与「桥坏了」。
+    const reason = response.status === 501 && code === 'SETTINGS_OPEN_UNSUPPORTED' ? 'unsupported' : 'unreachable'
+    return { ok: false, reason, code, ...(message === undefined ? {} : { message }) }
+  } catch (err) {
+    return { ok: false, reason: 'unreachable', message: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 /** 服务装配（shell apply 时以本模块函数 provide，零转发成本）。 */

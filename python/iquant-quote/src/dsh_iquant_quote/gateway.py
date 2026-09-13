@@ -157,11 +157,10 @@ class GatewayServer(ThreadingHTTPServer):
 
 
 def preheat_symbols() -> list[str]:
-    """预热标的清单：默认九标的期权页名册，可用环境变量覆盖。"""
+    """预热标的清单：默认七标的期权页名册（2026-09-13 起 510300/510500 下架），可用环境变量覆盖。"""
     raw = os.environ.get(
         "IQUANT_QUOTE_PREHEAT_SYMBOLS",
-        "510050.SH,510300.SH,510500.SH,588000.SH,588080.SH,"
-        "159901.SZ,159915.SZ,159919.SZ,159922.SZ",
+        "510050.SH,588000.SH,588080.SH,159901.SZ,159915.SZ,159919.SZ,159922.SZ",
     )
     return [item.strip() for item in raw.split(",") if item.strip()]
 
@@ -193,7 +192,7 @@ def preheat() -> None:
 
 
 def _preheat_chains(spots: dict[str, float]) -> None:
-    """九标的 × 未过期近/次月链：先 ATM 波（保 overview 首屏），再全链波（保 T 板）。
+    """七标的 × 未过期近/次月链：先 ATM 波（保 overview 首屏），再全链波（保 T 板）。
 
     盘外链快照靠逐合约日 K 回落，冷打一条全链 ~10s；不预热则网关重启后的
     首屏 / T 板要现场冷打（2026-09-11 overview 慢诊断）。ATM 波每链仅 ~6 合约，

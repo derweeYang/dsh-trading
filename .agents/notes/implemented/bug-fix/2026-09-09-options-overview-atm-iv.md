@@ -28,7 +28,8 @@ router 默认的 `iquant`。期权总览机会卡同时报「IV 缺失」：① 
 
 ## Consequences
 
-- 总览首屏会多九路（缓存后每 5 分钟）`implied_vol`；失败按行缺席。
+- 总览 GET 不再现场打 `implied_vol`：ATM IV 随 5 分钟桶写入 `overview.json`，页面读文件。
+- 总览首屏曾多九路（缓存后每 5 分钟）`implied_vol`；失败按行缺席（已被文件快照取代）。
 - iQuant 的 `ivPercentile` 仍然经常缺席；IV 排序在只有 `atmIv` 时按近月 ATM 排。
 - 改 `cn.provider` 后 agent 面连接器仍须新建会话才切换（既有 restart 语义）。
 - 盘后 `implied_vol` 曾整页空：`fetch_spot` 只信 2s snapshot，`NO_DATA` 被桥吞掉。

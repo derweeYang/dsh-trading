@@ -18,7 +18,7 @@ import {
 } from './tasks-protocol.ts'
 import { subscribeTradingEvents } from './api.ts'
 import type { MarketLocaleKey } from './contract.ts'
-import { fetchTasksMeta, fetchTasksSnapshot, postTaskAction, type TasksMeta } from './tasks-api.ts'
+import { fetchTasksAvailability, fetchTasksMeta, fetchTasksSnapshot, postTaskAction, type TasksAvailability, type TasksMeta } from './tasks-api.ts'
 import css from './session-rail.module.css'
 
 /** 本包 locale 词典的 t 面（SessionRail 注入转发）。 */
@@ -43,6 +43,7 @@ export function ScheduledTasksPanel({ t, openSession, close }: ScheduledTasksPan
   const [snapshot, setSnapshot] = useState<TasksSnapshot | null>(null)
   const [meta, setMeta] = useState<TasksMeta | null>(null)
   const [loadError, setLoadError] = useState(false)
+  const [availability, setAvailability] = useState<TasksAvailability | null>(null)
   const [editing, setEditing] = useState<'new' | TaskRecord | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -55,6 +56,13 @@ export function ScheduledTasksPanel({ t, openSession, close }: ScheduledTasksPan
       setLoadError(false)
     } catch {
       setLoadError(true)
+    }
+    // 可用性单独取（P0-1）：失败只意味着「未知」，不能连累快照/元数据把整个面板
+    // 打成 loadFailed——旧 node 半没有这条路由是常态，不是服务不可用。
+    try {
+      setAvailability(await fetchTasksAvailability())
+    } catch {
+      setAvailability(null)
     }
   }, [])
 
@@ -85,22 +93,43 @@ export function ScheduledTasksPanel({ t, openSession, close }: ScheduledTasksPan
 
   const tasks = [...(snapshot?.tasks ?? [])].sort((a, b) => b.updatedAt - a.updatedAt)
   const defaultPermission = snapshot?.sessionDefaultPermission ?? 'read-only'
+  /**
+   * 只读降级（P0-1）：ledger 被另一存活宿主持锁时服务仍在（可查看历史），但写动作必失败。
+   * `availability === null`（未探测到 / 探测失败）按可写处理——fail-open，别把能用打成不能用。
+   */
+  const readonly = availability !== null && !availability.writable
 
   return (
     <div className={css.tasksPanel} data-dshtrading-tasks-panel="" role="panel" aria-label={t('tasks.open')}>
       <header className={css.tasksHead}>
         <strong className={css.tasksTitle}>{t('tasks.open')}</strong>
         <span className={css.tasksSpacer} />
-        <button type="button" className={css.tasksNewBtn} onClick={() => { setEditing('new') }} disabled={busy}>{t('tasks.new')}</button>
+        <button
+          type="button"
+          className={css.tasksNewBtn}
+          disabled={busy || readonly}
+          title={readonly ? t('tasks.readonly') : undefined}
+          onClick={() => { setEditing('new') }}
+        >{t('tasks.new')}</button>
         <button type="button" className={css.tasksCloseBtn} aria-label={t('tasks.close')} title={t('tasks.close')} onClick={close}>×</button>
       </header>
       <div className={css.tasksBody}>
+        {/* 只读横幅（P0-1）：先说明「为什么点不动」再让按钮变灰，否则用户只见一片禁用。 */}
+        {readonly && (
+          <p className={css.tasksReadonly} role="status" data-dshtrading-tasks-readonly="">
+            <strong>{t('tasks.readonly')}</strong>
+            {' — '}
+            {t('tasks.readonlyHint')}
+            {availability?.reason !== undefined && <span className={css.tasksReadonlyReason}>{availability.reason}</span>}
+          </p>
+        )}
         {loadError && <p className={css.tasksError}>{t('tasks.loadFailed')}</p>}
         {editing !== null ? (
           <TaskEditor
             t={t}
             meta={meta}
             task={editing === 'new' ? undefined : editing}
+            readonly={readonly}
             onDone={() => { setEditing(null); void reload() }}
             onCancel={() => { setEditing(null) }}
           />
@@ -122,7 +151,7 @@ export function ScheduledTasksPanel({ t, openSession, close }: ScheduledTasksPan
                         type="button"
                         className={css.taskToggle}
                         data-on={task.schedule.enabled ? 'true' : undefined}
-                        disabled={busy}
+                        disabled={busy || readonly}
                         onClick={() => { void act({ kind: 'set-schedule', taskId: task.id, patch: { enabled: !task.schedule?.enabled } }) }}
                       >{task.schedule.enabled ? t('tasks.action.disable') : t('tasks.action.enable')}</button>
                     )}
@@ -145,7 +174,7 @@ export function ScheduledTasksPanel({ t, openSession, close }: ScheduledTasksPan
                   <button
                     type="button"
                     className={css.confirmBtn}
-                    disabled={busy}
+                    disabled={busy || readonly}
                     onClick={() => { void act({ kind: 'confirm-permission', taskId: task.id }) }}
                   >{t('tasks.permission.confirm')}</button>
                 )}
@@ -153,15 +182,15 @@ export function ScheduledTasksPanel({ t, openSession, close }: ScheduledTasksPan
                   <button
                     type="button"
                     className={css.miniBtn}
-                    disabled={busy || permissionPending(task, defaultPermission) || task.executions.some(execution => execution.endedAt === undefined)}
+                    disabled={busy || readonly || permissionPending(task, defaultPermission) || task.executions.some(execution => execution.endedAt === undefined)}
                     onClick={() => { void act({ kind: 'run', taskId: task.id }) }}
                   >{t('tasks.action.run')}</button>
-                  <button type="button" className={css.miniBtn} disabled={busy} onClick={() => { setEditing(task) }}>{t('tasks.action.edit')}</button>
+                  <button type="button" className={css.miniBtn} disabled={busy || readonly} onClick={() => { setEditing(task) }}>{t('tasks.action.edit')}</button>
                   <button type="button" className={css.miniBtn} onClick={() => { setExpanded(expanded === task.id ? null : task.id) }}>{t('tasks.action.history')}</button>
                   <button
                     type="button"
                     className={css.miniBtnDanger}
-                    disabled={busy}
+                    disabled={busy || readonly}
                     onClick={() => {
                       if (window.confirm(t('tasks.action.deleteConfirm'))) void act({ kind: 'delete', taskId: task.id })
                     }}
@@ -216,12 +245,15 @@ interface TaskEditorProps {
   meta: TasksMeta | null
   /** undefined = 新建；否则编辑既有任务。 */
   task: TaskRecord | undefined
+  /** 只读降级（P0-1）：保存路径整体关闭——正常情况下入口已禁用，这里兜住状态竞态
+   *（面板先以可写渲染、随后 availability 才落地为只读）。 */
+  readonly: boolean
   onDone(): void
   onCancel(): void
 }
 
 /** 内联编辑器：新建与编辑共用（保存走 create/update 幂等动作）。 */
-function TaskEditor({ t, meta, task, onDone, onCancel }: TaskEditorProps) {
+function TaskEditor({ t, meta, task, readonly, onDone, onCancel }: TaskEditorProps) {
   const [title, setTitle] = useState(task?.title ?? '')
   const [prompt, setPrompt] = useState(task?.prompt ?? '')
   const [scheduleEnabled, setScheduleEnabled] = useState(task?.schedule?.enabled ?? true)
@@ -237,7 +269,7 @@ function TaskEditor({ t, meta, task, onDone, onCancel }: TaskEditorProps) {
   const titleValid = title.trim() !== ''
 
   const save = async (): Promise<void> => {
-    if (!titleValid || !cronValid || busy) return
+    if (!titleValid || !cronValid || busy || readonly) return
     setBusy(true)
     setError(undefined)
     const schedule = { enabled: scheduleEnabled, cron }
@@ -368,9 +400,10 @@ function TaskEditor({ t, meta, task, onDone, onCancel }: TaskEditorProps) {
           ))}
         </select>
       </label>
+      {readonly && <p className={css.formError}>{t('tasks.readonlyHint')}</p>}
       {error !== undefined && <p className={css.formError}>{error}</p>}
       <div className={css.formActions}>
-        <button type="button" className={css.primaryBtn} disabled={busy || !titleValid || !cronValid} onClick={() => { void save() }}>
+        <button type="button" className={css.primaryBtn} disabled={busy || readonly || !titleValid || !cronValid} onClick={() => { void save() }}>
           {t('tasks.action.save')}
         </button>
         <button type="button" className={css.miniBtn} disabled={busy} onClick={onCancel}>{t('tasks.action.cancel')}</button>

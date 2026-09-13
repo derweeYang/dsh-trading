@@ -1,16 +1,21 @@
 /**
- * 期权总览聚合（C1/C2 桥侧纯函数）。行情与持仓由桥注入；本文件零 I/O。
+ * 期权总览聚合（C1/C2 桥侧纯函数）。活牌采集只在 snapshotBarFacts；
+ * GET /options/overview 从 overview.json 水合。本文件零 I/O。
  * 不进 client 半——只给 node 半 bridge 与单测用。
  */
 import type {
   KernelReport,
   Kline,
+  OptionBarDailyIv,
+  OptionBarDayPrior,
   OptionOverviewDay,
   OptionOverviewRow,
   OptionOverviewSort,
+  OptionUnderlying,
   Ticker,
+  UnderlyingLink,
 } from '@dshtrading/api'
-import { quarantineIv } from '@dshtrading/kit-cn'
+import { atmIvPercentile, quarantineIv, tagIvRegime } from '@dshtrading/kit-cn'
 
 export const HV20_WINDOW = 20
 /** 日 K 根数：量能用近 20 根；HV20 需要 window+1 根收盘。 */
@@ -220,6 +225,7 @@ export function composeScanPrompt(input: {
   ivPercentile?: number
   atmIv?: number
   divergence?: 'weak_rally' | 'accelerating_sell'
+  dayPrior?: OptionBarDayPrior
 }): string {
   const lines = [
     `Scan China ETF option underlying ${input.underlying} (${input.name}).`,
@@ -232,6 +238,9 @@ export function composeScanPrompt(input: {
     input.atmIv !== undefined ? `Near-month ATM IV ${input.atmIv.toFixed(3)}.` : undefined,
     input.divergence === 'weak_rally' ? 'Volume-price: rally on shrinking volume.' : undefined,
     input.divergence === 'accelerating_sell' ? 'Volume-price: decline on rising volume.' : undefined,
+    input.dayPrior === undefined
+      ? undefined
+      : `Day prior (not a box or hard gate): ${input.dayPrior.marketExpectation} / vol ${input.dayPrior.volExpectation} for ${input.dayPrior.targetDate}, confidence ${Math.round(input.dayPrior.confidence * 100)}%.`,
     'Call cn_get_option_intraday_box for the 5-minute box JSON; do not invent box levels.',
     'Then cn_get_option_chain / cn_get_option_iv / cn_get_option_vol_analytics / cn_get_option_strategy.',
     'Follow option-intraday-workflow. Technical analysis only; not investment advice. Prefill legs — do not place live orders.',
@@ -239,14 +248,22 @@ export function composeScanPrompt(input: {
   return lines.filter((line): line is string => line !== undefined).join(' ')
 }
 
-export function composeScanAllPrompt(rows: readonly OptionOverviewRow[]): string {
+export function composeScanAllPrompt(
+  rows: readonly OptionOverviewRow[],
+  priors?: Readonly<Record<string, OptionBarDayPrior | undefined>>,
+): string {
   const summary = rows.slice(0, 9).map((row) => {
     const ret = row.return5d === undefined ? '?' : `${row.return5d.toFixed(1)}%`
-    return `${row.underlying} 5d=${ret}`
+    const prior = priors?.[row.underlying]
+    const priorText = prior === undefined
+      ? ''
+      : ` prior=${prior.marketExpectation}/${prior.volExpectation}`
+    return `${row.underlying} 5d=${ret}${priorText}`
   }).join('; ')
   return (
     `Scan these China ETF option underlyings for timing and structure: ${summary}. `
     + 'Rank by 5-day strength and volume confirmation. '
+    + 'Day prior is a directional hint only, not a box or hard gate. '
     + 'Call cn_get_option_intraday_box for the 5-minute box; do not invent levels. '
     + 'Then chain / IV / vol_analytics / strategy. Follow option-intraday-workflow. '
     + 'Technical analysis only; not investment advice. Prefill legs — do not place live orders.'
@@ -261,5 +278,152 @@ export function applyTicker(_metrics: ReturnType<typeof buildOverviewMetrics>, t
   return {
     last: ticker.price,
     ...(ticker.changePercent === undefined ? {} : { changePct: ticker.changePercent }),
+  }
+}
+
+/** 落盘行：去掉 strategy / scanPrompt（读时再投影、再拼）。 */
+export type OptionOverviewSnapshotRow = Omit<OptionOverviewRow, 'strategy' | 'scanPrompt'>
+
+export function persistableOverviewRow(row: OptionOverviewRow): OptionOverviewSnapshotRow {
+  const { strategy: _strategy, scanPrompt: _scanPrompt, ...rest } = row
+  return rest
+}
+
+function snapshotNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function snapshotDays(value: unknown): OptionOverviewDay[] {
+  if (!Array.isArray(value)) return []
+  const days: OptionOverviewDay[] = []
+  for (const item of value) {
+    if (item === null || typeof item !== 'object') continue
+    const rec = item as Record<string, unknown>
+    if (typeof rec.date !== 'string' || rec.date.trim() === '') continue
+    const changePct = snapshotNumber(rec.changePct)
+    if (changePct === undefined) continue
+    days.push({
+      date: rec.date,
+      changePct,
+      volumeSurge: rec.volumeSurge === true,
+    })
+  }
+  return days
+}
+
+export function parseOverviewSnapshotRow(raw: unknown): OptionOverviewSnapshotRow | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const rec = raw as Record<string, unknown>
+  if (typeof rec.underlying !== 'string' || rec.underlying.trim() === '') return undefined
+  if (rec.exchange !== 'SSE' && rec.exchange !== 'SZSE' && rec.exchange !== 'SYNTH') return undefined
+  const name = typeof rec.name === 'string' ? rec.name : rec.underlying
+  const last = snapshotNumber(rec.last)
+  const changePct = snapshotNumber(rec.changePct)
+  const return5d = snapshotNumber(rec.return5d)
+  const volumeRatio = snapshotNumber(rec.volumeRatio)
+  const strengthScore = snapshotNumber(rec.strengthScore)
+  const heldQty = snapshotNumber(rec.heldQty)
+  const optionQty = snapshotNumber(rec.optionQty)
+  const ivPercentile = snapshotNumber(rec.ivPercentile)
+  const atmIv = quarantineIv(snapshotNumber(rec.atmIv))
+  const nextAtmIv = quarantineIv(snapshotNumber(rec.nextAtmIv))
+  const hv20 = quarantineIv(snapshotNumber(rec.hv20))
+  const divergence = rec.divergence === 'weak_rally' || rec.divergence === 'accelerating_sell'
+    ? rec.divergence
+    : undefined
+  const spotSymbol = typeof rec.spotSymbol === 'string' ? rec.spotSymbol : undefined
+  const link = rec.link !== null && typeof rec.link === 'object' ? rec.link as UnderlyingLink : undefined
+  return {
+    underlying: rec.underlying,
+    name,
+    exchange: rec.exchange,
+    days: snapshotDays(rec.days),
+    ...(spotSymbol === undefined ? {} : { spotSymbol }),
+    ...(link === undefined ? {} : { link }),
+    ...(last === undefined ? {} : { last }),
+    ...(changePct === undefined ? {} : { changePct }),
+    ...(return5d === undefined ? {} : { return5d }),
+    ...(volumeRatio === undefined ? {} : { volumeRatio }),
+    ...(strengthScore === undefined ? {} : { strengthScore }),
+    ...(divergence === undefined ? {} : { divergence }),
+    ...(heldQty === undefined ? {} : { heldQty }),
+    ...(optionQty === undefined ? {} : { optionQty }),
+    ...(ivPercentile === undefined ? {} : { ivPercentile }),
+    ...(atmIv === undefined ? {} : { atmIv }),
+    ...(nextAtmIv === undefined ? {} : { nextAtmIv }),
+    ...(hv20 === undefined ? {} : { hv20 }),
+  }
+}
+
+export function hydrateOverviewRow(input: {
+  roster: OptionUnderlying
+  snapshot?: OptionOverviewSnapshotRow
+  optionQty?: number
+  ivHistory: readonly OptionBarDailyIv[]
+  dayPrior?: OptionBarDayPrior
+}): OptionOverviewRow {
+  const { roster, snapshot, optionQty, ivHistory, dayPrior } = input
+  const spotSymbol = snapshot?.spotSymbol ?? spotSymbolOf(roster.underlying, roster.exchange)
+  const link: UnderlyingLink | undefined = snapshot?.link ?? (spotSymbol === undefined ? undefined : {
+    underlying: roster.underlying,
+    spotSymbol,
+    exchange: roster.exchange,
+    callPrefix: `${roster.underlying}C`,
+    putPrefix: `${roster.underlying}P`,
+  })
+  const heldQty = roster.heldQty ?? snapshot?.heldQty
+  let ivPercentile = snapshot?.ivPercentile
+  const atmIv = snapshot?.atmIv
+  if (ivPercentile === undefined && atmIv !== undefined) {
+    const series = ivHistory
+      .filter((item) => item.underlying === roster.underlying && item.atmIv !== undefined)
+      .map((item) => ({ date: item.date, atmIv: item.atmIv as number }))
+    ivPercentile = atmIvPercentile(series, atmIv)
+  }
+  const nextAtmIv = snapshot?.nextAtmIv
+  const hv20 = snapshot?.hv20
+  const ivRegime = tagIvRegime({
+    ...(ivPercentile === undefined ? {} : { ivPercentile }),
+    ...(atmIv === undefined ? {} : { atmIv }),
+    ...(nextAtmIv === undefined ? {} : { nextAtmIv }),
+    ...(hv20 === undefined ? {} : { hv20 }),
+  })
+  const quote = {
+    ...(snapshot?.last === undefined ? {} : { last: snapshot.last }),
+    ...(snapshot?.changePct === undefined ? {} : { changePct: snapshot.changePct }),
+  }
+  const scanPrompt = composeScanPrompt({
+    underlying: roster.underlying,
+    name: roster.name,
+    ...quote,
+    ...(snapshot?.return5d === undefined ? {} : { return5d: snapshot.return5d }),
+    ...(snapshot?.volumeRatio === undefined ? {} : { volumeRatio: snapshot.volumeRatio }),
+    ...(heldQty === undefined ? {} : { heldQty }),
+    ...(optionQty === undefined ? {} : { optionQty }),
+    ...(ivPercentile === undefined ? {} : { ivPercentile }),
+    ...(atmIv === undefined ? {} : { atmIv }),
+    ...(snapshot?.divergence === undefined ? {} : { divergence: snapshot.divergence }),
+    ...(dayPrior === undefined ? {} : { dayPrior }),
+  })
+  return {
+    underlying: roster.underlying,
+    name: roster.name,
+    exchange: roster.exchange,
+    days: snapshot?.days ?? [],
+    scanPrompt,
+    ivRegime,
+    ...(spotSymbol === undefined ? {} : { spotSymbol }),
+    ...(link === undefined ? {} : { link }),
+    ...quote,
+    ...(snapshot?.return5d === undefined ? {} : { return5d: snapshot.return5d }),
+    ...(snapshot?.volumeRatio === undefined ? {} : { volumeRatio: snapshot.volumeRatio }),
+    ...(snapshot?.strengthScore === undefined ? {} : { strengthScore: snapshot.strengthScore }),
+    ...(snapshot?.divergence === undefined ? {} : { divergence: snapshot.divergence }),
+    ...(heldQty === undefined ? {} : { heldQty }),
+    ...(optionQty === undefined ? {} : { optionQty }),
+    ...(ivPercentile === undefined ? {} : { ivPercentile }),
+    ...(atmIv === undefined ? {} : { atmIv }),
+    ...(nextAtmIv === undefined ? {} : { nextAtmIv }),
+    ...(hv20 === undefined ? {} : { hv20 }),
   }
 }

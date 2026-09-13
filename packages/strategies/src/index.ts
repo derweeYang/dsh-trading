@@ -86,3 +86,6 @@ export {
   smaBaselineStrategy,
   momentum12mStrategy,
 } from './paradigms/index.ts'
+
+// ETF 期权套利策略模块（平价矩阵 / 箱型 / 垂直价差，纯函数、可浏览器打包）
+export * from './arbitrage/index.ts'

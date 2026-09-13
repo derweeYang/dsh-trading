@@ -86,11 +86,12 @@ describe('selectBoxTargets', () => {
 
 describe('twinUnderlyingOf', () => {
   it('同源双挂成对；单挂缺席', () => {
-    expect(twinUnderlyingOf('510300')).toBe('159919')
-    expect(twinUnderlyingOf('159919')).toBe('510300')
-    expect(twinUnderlyingOf('510500')).toBe('159922')
+    // 2026-09-13 起 510300/510500 下架，300/500 双挂对随之移除
     expect(twinUnderlyingOf('588000')).toBe('588080')
+    expect(twinUnderlyingOf('588080')).toBe('588000')
     expect(twinUnderlyingOf('510050')).toBeUndefined()
+    expect(twinUnderlyingOf('159919')).toBeUndefined()
+    expect(twinUnderlyingOf('510300')).toBeUndefined()
   })
 })
 
@@ -194,14 +195,14 @@ describe('buildIntradayBox', () => {
       },
     })
     const row = buildIntradayBox({
-      underlying: '510300',
-      name: '华泰柏瑞沪深300ETF',
+      underlying: '588000',
+      name: '华夏科创50ETF',
       exchange: 'SSE',
       klines,
       nowMs: CST_1030,
     })
     expect(row.regime).toBe('vol_expand')
-    expect(row.twinUnderlying).toBe('159919')
+    expect(row.twinUnderlying).toBe('588080')
     expect(row.candidates.map((item) => item.template)).toContain('straddle')
     expect(row.candidates.length).toBeGreaterThan(0)
     expect(row.candidates.length).toBeLessThanOrEqual(2)

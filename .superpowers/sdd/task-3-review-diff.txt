@@ -1,0 +1,193 @@
+﻿# Review package Task 3
+Commits: none
+
+## Stat
+ M packages/client-ui-trading/src/index.ts
+?? packages/client-ui-trading/src/trader-director-host.ts
+?? packages/client-ui-trading/test/trader-director-host.test.ts
+
+## Diff index.ts (relevant hunks)
+
+diff --git a/packages/client-ui-trading/src/index.ts b/packages/client-ui-trading/src/index.ts
+index e8efc23..8321c52 100644
+--- a/packages/client-ui-trading/src/index.ts
++++ b/packages/client-ui-trading/src/index.ts
+@@ -32,16 +32,17 @@ import {
+ } from './bridge.ts'
+ import { attachEventStream } from './sse.ts'
+ import { TaskActionError } from './tasks/ledger.ts'
+ import { registerTasksTools } from './tasks/tools.ts'
+ import { TASKS_ACTION_BYTES_LIMIT, parseTasksEnvelope } from './client/tasks-protocol.ts'
+ import { TradingTasksService } from './tasks/service.ts'
+ import { TasksRunner, type SessionCommandDispatcher, type SessionGateway } from './tasks/runner.ts'
+ import { OptionBarAgentHost } from './option-bar-agent.ts'
++import { TraderDirectorHost } from './trader-director-host.ts'
+ import {
+   appendJsonlLine,
+   cyclesPath,
+   optionsDataRoot,
+   readJsonl,
+   shanghaiCalendarDate,
+ } from '@dshtrading/kit-cn'
+ import type { OptionCycle } from '@dshtrading/api'
+@@ -237,22 +238,23 @@ export function apply(ctx: Context): void {
+       dataRoot: optionDataRoot,
+       runner: () => barRunner,
+       workspaceId: () => {
+         const registry = resolveHostService('workspaceRegistry') as import('./tasks/service.ts').WorkspaceDirectoryLike | undefined
+         return registry?.list()[0]?.id
+       },
+       log: (message, error) => { console.error(`[dsh-trading/option-bar] ${message}`, error) },
+     })
++    const director = new TraderDirectorHost({ opportunity: barAgent })
+     ctx.effect(() => {
+       bridge.startOptionCycleLoop()
+       const tick = (): void => {
+         void bridge.optionCycleTick().then((result) => {
+           const nowMs = Date.parse(result.asOf)
+-          return barAgent.afterTick({
++          return director.afterTick({
+             ticked: result.ticked,
+             loop: result.loop,
+             nowMs: Number.isFinite(nowMs) ? nowMs : Date.now(),
+           })
+         }).catch((error: unknown) => {
+           const code = error instanceof Error && 'code' in error
+             ? String((error as { code?: unknown }).code)
+             : ''
+
+=== NEW FILE trader-director-host.ts ===
+
+/**
+ * 浜ゆ槗鍛樻€绘帶瀹夸富锛氱粍涓夎溅閬撱€佹寜 route 鎵ц銆佸鐩樻寕鍦ㄦ満浼?Host銆? */
+import type { OptionCycleLoop } from '@dshtrading/api'
+import {
+  createIdleLane,
+  routeTraderLanes,
+  type TraderLane,
+} from '@dshtrading/kit-cn'
+import { createOpportunityLane, OptionBarAgentHost } from './option-bar-agent.ts'
+
+export interface TraderDirectorHostOptions {
+  opportunity: OptionBarAgentHost
+  /** 浠呮祴璇曪細瑕嗙洊 risk.run锛屾柇瑷€ Phase1 涓嶈璋冪敤 */
+  riskRun?: () => Promise<void>
+  behaviorRun?: () => Promise<void>
+}
+
+export class TraderDirectorHost {
+  private readonly opportunity: OptionBarAgentHost
+  private readonly lanes: {
+    opportunity: TraderLane
+    risk: TraderLane
+    behavior: TraderLane
+  }
+
+  constructor(options: TraderDirectorHostOptions) {
+    this.opportunity = options.opportunity
+    const risk = createIdleLane('risk')
+    const behavior = createIdleLane('behavior')
+    this.lanes = {
+      opportunity: createOpportunityLane(options.opportunity),
+      risk: options.riskRun === undefined
+        ? risk
+        : { ...risk, run: async () => { await options.riskRun!() } },
+      behavior: options.behaviorRun === undefined
+        ? behavior
+        : { ...behavior, run: async () => { await options.behaviorRun!() } },
+    }
+  }
+
+  async afterTick(input: {
+    ticked: boolean
+    loop: OptionCycleLoop
+    nowMs: number
+  }): Promise<void> {
+    const ctx = await this.opportunity.buildContext(input)
+    const routed = routeTraderLanes(ctx, this.lanes)
+    for (const { id, decision } of routed) {
+      const lane = this.lanes[id]
+      if (decision.action === 'launch' || decision.action === 'stub') {
+        await lane.run?.(ctx, decision)
+      }
+    }
+    await this.opportunity.maybeWriteReview(input.nowMs)
+  }
+}
+
+=== NEW FILE trader-director-host.test.ts ===
+
+import { mkdtemp } from 'node:fs/promises'
+import os from 'os'
+import path from 'path'
+import { describe, expect, it, vi } from 'vitest'
+import type { OptionBarRecommendation } from '@dshtrading/api'
+import { readJsonl, recommendationsPath } from '@dshtrading/kit-cn'
+import { OptionBarAgentHost } from '../src/option-bar-agent.ts'
+import { TraderDirectorHost } from '../src/trader-director-host.ts'
+
+const LUNCH = Date.parse('2026-09-08T03:25:00.000Z')
+const REGULAR = Date.parse('2026-09-08T01:45:00.000Z')
+
+describe('TraderDirectorHost', () => {
+  it('lunch 鏂版《锛氬啓 session 妗╋紱risk/behavior run 涓嶈璋冪敤', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'director-'))
+    const riskRun = vi.fn(async () => {})
+    const behaviorRun = vi.fn(async () => {})
+    const opportunity = new OptionBarAgentHost({
+      dataRoot: () => dir,
+      runner: () => ({
+        launch: async () => 's1',
+        inspect: async () => ({ outcome: 'pending' as const }),
+      } as never),
+    })
+    const director = new TraderDirectorHost({
+      opportunity,
+      riskRun,
+      behaviorRun,
+    })
+    await director.afterTick({
+      ticked: true,
+      nowMs: LUNCH,
+      loop: {
+        running: true,
+        horizonMin: 5,
+        lastBucket: '2026-09-08T03:25:00.000Z',
+        rows: [],
+      },
+    })
+    const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(dir, '2026-09-08'))
+    expect(recs[0]?.skipReason).toBe('session')
+    expect(riskRun).not.toHaveBeenCalled()
+    expect(behaviorRun).not.toHaveBeenCalled()
+  })
+
+  it('regular launch锛氫細 launch锛涙埅鏂悗 risk run 浠嶄笉璋冪敤', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'director-'))
+    let launched = 0
+    const riskRun = vi.fn(async () => {})
+    const opportunity = new OptionBarAgentHost({
+      dataRoot: () => dir,
+      runner: () => ({
+        launch: async () => {
+          launched += 1
+          return 's1'
+        },
+        inspect: async () => ({ outcome: 'pending' as const }),
+      } as never),
+    })
+    const director = new TraderDirectorHost({ opportunity, riskRun })
+    await director.afterTick({
+      ticked: true,
+      nowMs: REGULAR,
+      loop: {
+        running: true,
+        horizonMin: 5,
+        lastBucket: '2026-09-08T01:45:00.000Z',
+        rows: [],
+      },
+    })
+    expect(launched).toBe(1)
+    expect(riskRun).not.toHaveBeenCalled()
+  })
+})

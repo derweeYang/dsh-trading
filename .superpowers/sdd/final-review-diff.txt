@@ -1,0 +1,1421 @@
+﻿# Whole-branch review package: TraderDirector Phase 1
+Branch: etf-options
+BASE note: HEAD at start was 59bcf82; work is uncommitted (plan forbade commits). Diff = TraderDirector-related paths only.
+
+## Files
+ M .agents/notes/proposed/feature/2026-09-08-option-bar-agent.md
+ M packages/client-ui-trading/src/index.ts
+ M packages/client-ui-trading/src/option-bar-agent.ts
+ M packages/client-ui-trading/test/option-bar-agent.test.ts
+ M packages/kit-cn/src/index.ts
+?? .agents/notes/proposed/architecture/2026-09-09-trader-director.md
+?? docs/specs/2026-09-09-trader-director-design.md
+?? docs/specs/2026-09-09-trader-director-plan.md
+?? packages/client-ui-trading/src/trader-director-host.ts
+?? packages/client-ui-trading/test/trader-director-host.test.ts
+?? packages/kit-cn/src/trader-director.ts
+?? packages/kit-cn/test/trader-director.test.ts
+
+## Diff (tracked)
+
+diff --git a/.agents/notes/proposed/feature/2026-09-08-option-bar-agent.md b/.agents/notes/proposed/feature/2026-09-08-option-bar-agent.md
+index def2caf..88a6641 100644
+--- a/.agents/notes/proposed/feature/2026-09-08-option-bar-agent.md
++++ b/.agents/notes/proposed/feature/2026-09-08-option-bar-agent.md
+@@ -5,13 +5,13 @@ Status: proposed
+ ## Problem
+ 
+ 5 鍒嗛挓绠变綋闂幆宸插湪瀹夸富蹇冭烦閲屾墦鍒嗭紝浣嗚处鏈湪鍐呭瓨銆侀噸鍚嵆涓紱L3 绛栫暐鎺ㄨ崘浠嶉潬浜烘墜鎴?`scanPrompt` 寮€浼氳瘽銆傝鍋氥€屼氦鏄撴椂娈垫瘡鏍?5 鍒嗛挓 K 璺戜竴娆℃櫤鑳戒綋銆佸啓娓呰禋鍝被閽便€佺洏鍚庡鐩樸€嶆椂锛岃嫢鐢ㄥ彸渚ф爮 cron 姣?5 鍒嗛挓鎵浣擄紝浼氶噸寮€宸插惁鍐崇殑璺緞锛氫細璇濈儳涓婁笅鏂囥€佸垎鏁颁笉鍙鐜般€傚鐩樿嫢鍐欏埌 `knowledge-stock` L5锛孌SH `knowledge_search` 涔熻涓嶅埌銆? 
+ ## Proposal
+ 
+-瑙勬牸瑙?[docs/specs/2026-09-08-option-bar-agent.md](../../../../docs/specs/2026-09-08-option-bar-agent.md)銆傝鐐癸細
++瑙勬牸瑙?[docs/specs/2026-09-08-option-bar-agent.md](../../../../docs/specs/2026-09-08-option-bar-agent.md)銆傜紪鎺掍笂灞傦紙涓夎溅閬撴€绘帶銆佹湰鏈熷彧鎸傛湰鏅鸿兘浣擄級瑙?[trader-director](../architecture/2026-09-09-trader-director.md)銆傝鐐癸細
+ 
+ 1. 鏈粨 `data/options/` 钀?cycles / recommendations / reviews锛汱0 鎵撳垎浠嶆槸绾嚱鏁般€? 2. LLM 鍙湪 `sessionFlag === 'regular'` 鐨?*鏂版《**瑙﹀彂锛屽叏甯傚満涓€娆?trader 浼氳瘽锛涢潪 regular 鍙啓妗┿€? 3. 鎺ㄨ崘瀛楁闂泦 `opportunity`锛堣禋鍝被閽憋級+ `logic` + `playbook`锛涙ā鏉垮繀椤绘潵鑷?`candidates`銆? 4. 鐩樺悗澶嶇洏纭畾鎬ф眹鎬伙紝涓嶅紑 LLM銆? 5. knowledge-stock 鍙姇褰卞垵濮嬪寲鍗＄墖锛涙瘡鏃ヨ处涓嶈繘 stock銆?diff --git a/packages/client-ui-trading/src/index.ts b/packages/client-ui-trading/src/index.ts
+index e8efc23..8321c52 100644
+--- a/packages/client-ui-trading/src/index.ts
++++ b/packages/client-ui-trading/src/index.ts
+@@ -34,12 +34,13 @@ import { attachEventStream } from './sse.ts'
+ import { TaskActionError } from './tasks/ledger.ts'
+ import { registerTasksTools } from './tasks/tools.ts'
+ import { TASKS_ACTION_BYTES_LIMIT, parseTasksEnvelope } from './client/tasks-protocol.ts'
+ import { TradingTasksService } from './tasks/service.ts'
+ import { TasksRunner, type SessionCommandDispatcher, type SessionGateway } from './tasks/runner.ts'
+ import { OptionBarAgentHost } from './option-bar-agent.ts'
++import { TraderDirectorHost } from './trader-director-host.ts'
+ import {
+   appendJsonlLine,
+   cyclesPath,
+   optionsDataRoot,
+   readJsonl,
+   shanghaiCalendarDate,
+@@ -239,18 +240,19 @@ export function apply(ctx: Context): void {
+       workspaceId: () => {
+         const registry = resolveHostService('workspaceRegistry') as import('./tasks/service.ts').WorkspaceDirectoryLike | undefined
+         return registry?.list()[0]?.id
+       },
+       log: (message, error) => { console.error(`[dsh-trading/option-bar] ${message}`, error) },
+     })
++    const director = new TraderDirectorHost({ opportunity: barAgent })
+     ctx.effect(() => {
+       bridge.startOptionCycleLoop()
+       const tick = (): void => {
+         void bridge.optionCycleTick().then((result) => {
+           const nowMs = Date.parse(result.asOf)
+-          return barAgent.afterTick({
++          return director.afterTick({
+             ticked: result.ticked,
+             loop: result.loop,
+             nowMs: Number.isFinite(nowMs) ? nowMs : Date.now(),
+           })
+         }).catch((error: unknown) => {
+           const code = error instanceof Error && 'code' in error
+diff --git a/packages/client-ui-trading/src/option-bar-agent.ts b/packages/client-ui-trading/src/option-bar-agent.ts
+index d4206a8..88ad9d1 100644
+--- a/packages/client-ui-trading/src/option-bar-agent.ts
++++ b/packages/client-ui-trading/src/option-bar-agent.ts
+@@ -6,22 +6,25 @@ import { access, mkdir, writeFile } from 'node:fs/promises'
+ import path from 'node:path'
+ import type { OptionBarRecommendation, OptionCycle, OptionCycleLoop } from '@dshtrading/api'
+ import {
+   OPTION_BAR_AGENT_PROMPT,
+   appendJsonlLine,
+   cyclesPath,
+-  decideBarAgent,
+   foldDailyReview,
+   makeSkipRecommendation,
++  opportunityDecide,
+   recommendationsPath,
+   reviewsPath,
+   sessionAt,
+   shanghaiCalendarDate,
+-  shouldWriteDailyReview,
+   shanghaiBucketStartMs,
++  shouldWriteDailyReview,
+   readJsonl,
++  type DirectorTickContext,
++  type LaneDecision,
++  type TraderLane,
+ } from '@dshtrading/kit-cn'
+ import type { TasksRunner } from './tasks/runner.ts'
+ 
+ export interface OptionBarAgentOptions {
+   dataRoot: () => string
+   now?: () => number
+@@ -37,86 +40,117 @@ export class OptionBarAgentHost {
+   private readonly options: OptionBarAgentOptions
+ 
+   constructor(options: OptionBarAgentOptions) {
+     this.options = options
+   }
+ 
+-  async afterTick(input: { ticked: boolean; loop: OptionCycleLoop; nowMs: number }): Promise<void> {
++  /** 缁?Director 涓婁笅鏂囷紙璇荤洏 + inFlight锛夈€?*/
++  async buildContext(input: {
++    ticked: boolean
++    loop: OptionCycleLoop
++    nowMs: number
++  }): Promise<DirectorTickContext> {
+     await this.refreshInFlight()
+     const nowMs = input.nowMs
+     const session = sessionAt(nowMs)
+     const date = shanghaiCalendarDate(nowMs)
+     const root = this.options.dataRoot()
+     const bucketStart = input.loop.lastBucket ?? new Date(shanghaiBucketStartMs(nowMs)).toISOString()
+     const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
+     const alreadyRecommended = recs.some((row) => row.bucketStart === bucketStart)
+     const allCalibrated = input.loop.rows.length > 0
+       && input.loop.rows.every((row) => row.latest?.forecast.noTradeReason === 'calibrated')
+-    const decision = decideBarAgent({
++    return {
+       ticked: input.ticked,
++      loop: input.loop,
++      nowMs,
+       session,
+-      inFlight: this.inFlight,
+-      allCalibrated,
+-      alreadyRecommended,
++      llmBusy: this.inFlight,
+       bucketStart,
+-    })
++      alreadyRecommended,
++      allCalibrated,
++    }
++  }
++
++  /** 鎵ц opportunity 鐨?launch/stub 鍓綔鐢紙涓嶅惈澶嶇洏锛夈€?*/
++  async runOpportunity(ctx: DirectorTickContext, decision: LaneDecision): Promise<void> {
++    const root = this.options.dataRoot()
++    const date = shanghaiCalendarDate(ctx.nowMs)
++    const session = ctx.session
++    const bucketStart = ctx.bucketStart
+ 
+     if (decision.action === 'stub' && decision.skipReason !== undefined) {
+       await this.writeRec(root, date, makeSkipRecommendation({
+         bucketStart,
+-        asOf: new Date(nowMs).toISOString(),
++        asOf: new Date(ctx.nowMs).toISOString(),
+         session,
+         skipReason: decision.skipReason,
+       }))
++      return
+     }
+ 
+-    if (decision.action === 'launch') {
+-      const runner = this.options.runner?.()
+-      if (runner === undefined) {
+-        await this.writeRec(root, date, makeSkipRecommendation({
+-          bucketStart,
+-          asOf: new Date(nowMs).toISOString(),
+-          session,
+-          skipReason: 'launch_failed',
+-        }))
+-      } else {
+-        this.inFlight = true
+-        try {
+-          const workspaceId = this.options.workspaceId?.()
+-          const sessionId = await runner.launch({
+-            id: `option-bar-${bucketStart}`,
+-            title: `ETF option bar ${bucketStart}`,
+-            prompt: `${OPTION_BAR_AGENT_PROMPT}\n\nbucketStart=${bucketStart}\nasOf=${new Date(nowMs).toISOString()}`,
+-            agentPreset: 'trader',
+-            ...(workspaceId === undefined ? {} : { workspaceId }),
+-          })
+-          this.openSessionId = sessionId
+-          this.openStartedAt = nowMs
+-        } catch (error) {
+-          this.inFlight = false
+-          this.openSessionId = undefined
+-          this.options.log?.('option-bar launch failed', error)
+-          await this.writeRec(root, date, makeSkipRecommendation({
+-            bucketStart,
+-            asOf: new Date(nowMs).toISOString(),
+-            session,
+-            skipReason: 'launch_failed',
+-          }))
+-        }
+-      }
++    if (decision.action !== 'launch') return
++
++    const runner = this.options.runner?.()
++    if (runner === undefined) {
++      await this.writeRec(root, date, makeSkipRecommendation({
++        bucketStart,
++        asOf: new Date(ctx.nowMs).toISOString(),
++        session,
++        skipReason: 'launch_failed',
++      }))
++      return
+     }
+ 
++    this.inFlight = true
++    try {
++      const workspaceId = this.options.workspaceId?.()
++      const sessionId = await runner.launch({
++        id: `option-bar-${bucketStart}`,
++        title: `ETF option bar ${bucketStart}`,
++        prompt: `${OPTION_BAR_AGENT_PROMPT}\n\nbucketStart=${bucketStart}\nasOf=${new Date(ctx.nowMs).toISOString()}`,
++        agentPreset: 'trader',
++        ...(workspaceId === undefined ? {} : { workspaceId }),
++      })
++      this.openSessionId = sessionId
++      this.openStartedAt = ctx.nowMs
++    } catch (error) {
++      this.inFlight = false
++      this.openSessionId = undefined
++      this.options.log?.('option-bar launch failed', error)
++      await this.writeRec(root, date, makeSkipRecommendation({
++        bucketStart,
++        asOf: new Date(ctx.nowMs).toISOString(),
++        session,
++        skipReason: 'launch_failed',
++      }))
++    }
++  }
++
++  async maybeWriteReview(nowMs: number): Promise<void> {
++    const session = sessionAt(nowMs)
++    const date = shanghaiCalendarDate(nowMs)
++    const root = this.options.dataRoot()
+     const reviewFile = reviewsPath(root, date)
+     const exists = await fileExists(reviewFile)
+-    if (shouldWriteDailyReview(session, exists)) {
+-      const cycles = await readJsonl<OptionCycle>(cyclesPath(root, date))
+-      const recommendations = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
+-      const md = foldDailyReview({ date, cycles, recommendations })
+-      await mkdir(path.dirname(reviewFile), { recursive: true })
+-      await writeFile(reviewFile, md, 'utf8')
++    if (!shouldWriteDailyReview(session, exists)) return
++    const cycles = await readJsonl<OptionCycle>(cyclesPath(root, date))
++    const recommendations = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
++    const md = foldDailyReview({ date, cycles, recommendations })
++    await mkdir(path.dirname(reviewFile), { recursive: true })
++    await writeFile(reviewFile, md, 'utf8')
++  }
++
++  /** 鍏煎鏃у叆鍙ｏ細鍗曡溅閬撴満浼氳矾寰勶紙鏃?Director锛夈€?*/
++  async afterTick(input: { ticked: boolean; loop: OptionCycleLoop; nowMs: number }): Promise<void> {
++    const ctx = await this.buildContext(input)
++    const decision = opportunityDecide(ctx)
++    if (decision.action === 'launch' || decision.action === 'stub') {
++      await this.runOpportunity(ctx, decision)
+     }
++    await this.maybeWriteReview(input.nowMs)
+   }
+ 
+   settle(): void {
+     this.inFlight = false
+     this.openSessionId = undefined
+   }
+@@ -139,12 +173,22 @@ export class OptionBarAgentHost {
+     } catch (error) {
+       this.options.log?.('option-bar recommendation persist failed', error)
+     }
+   }
+ }
+ 
++export function createOpportunityLane(host: OptionBarAgentHost): TraderLane {
++  return {
++    id: 'opportunity',
++    decide: (ctx) => opportunityDecide(ctx),
++    run: async (ctx, decision) => {
++      await host.runOpportunity(ctx, decision)
++    },
++  }
++}
++
+ async function fileExists(filePath: string): Promise<boolean> {
+   try {
+     await access(filePath)
+     return true
+   } catch {
+     return false
+diff --git a/packages/client-ui-trading/test/option-bar-agent.test.ts b/packages/client-ui-trading/test/option-bar-agent.test.ts
+index 84c955e..9d0b1e8 100644
+--- a/packages/client-ui-trading/test/option-bar-agent.test.ts
++++ b/packages/client-ui-trading/test/option-bar-agent.test.ts
+@@ -1,16 +1,17 @@
+ import { mkdtemp } from 'node:fs/promises'
+ import os from 'node:os'
+ import path from 'node:path'
+ import { describe, expect, it } from 'vitest'
+ import type { OptionBarRecommendation } from '@dshtrading/api'
+ import { readJsonl, recommendationsPath, reviewsPath } from '@dshtrading/kit-cn'
+-import { OptionBarAgentHost } from '../src/option-bar-agent.ts'
++import { createOpportunityLane, OptionBarAgentHost } from '../src/option-bar-agent.ts'
+ 
+ const LUNCH = Date.parse('2026-09-08T03:25:00.000Z')
+ const CLOSE5 = Date.parse('2026-09-08T06:55:00.000Z')
++const REGULAR = Date.parse('2026-09-08T01:45:12.000Z')
+ 
+ describe('OptionBarAgentHost', () => {
+   it('lunch 鏂版《鍐?session 妗╀笖涓?launch', async () => {
+     const dir = await mkdtemp(path.join(os.tmpdir(), 'bar-agent-'))
+     let launched = 0
+     const host = new OptionBarAgentHost({
+@@ -54,7 +55,68 @@ describe('OptionBarAgentHost', () => {
+       ticked: true,
+       nowMs: CLOSE5,
+       loop: { running: true, horizonMin: 5, lastBucket: '2026-09-08T06:55:00.000Z', rows: [] },
+     })
+     expect(await readFile(first, 'utf8')).toBe('KEEP\n')
+   })
++
++  it('regular 鏂版《 launch 涓斾笉鍐欐々', async () => {
++    const dir = await mkdtemp(path.join(os.tmpdir(), 'bar-agent-'))
++    let launched = 0
++    const host = new OptionBarAgentHost({
++      dataRoot: () => dir,
++      runner: () => ({
++        launch: async () => {
++          launched += 1
++          return 's1'
++        },
++        inspect: async () => ({ outcome: 'pending' as const }),
++      } as never),
++    })
++    await host.afterTick({
++      ticked: true,
++      nowMs: REGULAR,
++      loop: {
++        running: true,
++        horizonMin: 5,
++        lastBucket: '2026-09-08T01:45:00.000Z',
++        rows: [],
++      },
++    })
++    expect(launched).toBe(1)
++    expect(host.inFlight).toBe(true)
++    const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(dir, '2026-09-08'))
++    expect(recs).toEqual([])
++  })
++
++  it('createOpportunityLane 濮旀墭 decide/run', async () => {
++    const dir = await mkdtemp(path.join(os.tmpdir(), 'bar-agent-'))
++    let launched = 0
++    const host = new OptionBarAgentHost({
++      dataRoot: () => dir,
++      runner: () => ({
++        launch: async () => {
++          launched += 1
++          return 's1'
++        },
++        inspect: async () => ({ outcome: 'pending' as const }),
++      } as never),
++    })
++    const lane = createOpportunityLane(host)
++    const ctx = await host.buildContext({
++      ticked: true,
++      nowMs: REGULAR,
++      loop: {
++        running: true,
++        horizonMin: 5,
++        lastBucket: '2026-09-08T01:45:00.000Z',
++        rows: [],
++      },
++    })
++    expect(lane.id).toBe('opportunity')
++    const decision = lane.decide(ctx)
++    expect(decision.action).toBe('launch')
++    await lane.run?.(ctx, decision)
++    expect(launched).toBe(1)
++    expect(host.inFlight).toBe(true)
++  })
+ })
+diff --git a/packages/kit-cn/src/index.ts b/packages/kit-cn/src/index.ts
+index 7e8a736..20e5b7b 100644
+--- a/packages/kit-cn/src/index.ts
++++ b/packages/kit-cn/src/index.ts
+@@ -47,12 +47,13 @@ export * from './fundamentals.js'
+ export * from './news.js'
+ export * from './sentiment.js'
+ export * from './options-tools.js'
+ export * from './intraday-box.js'
+ export * from './option-cycles.js'
+ export * from './option-bar-ledger.js'
++export * from './trader-director.js'
+ 
+ // 鈹€鈹€ skill provider锛坔ost 闈?skill 鍏ㄥ眬鍙鍗冲彲锛屾湰鍒囩墖涓嶆敼 skill 浣滅敤鍩燂級 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+ 
+ const PROVIDER_NAME = 'dsh-trading-cn'
+ 
+ const SKILL_BODY_URL = new URL('../assets/skills/cn-risk-checklist.md', import.meta.url)
+
+=== FILE packages/kit-cn/src/trader-director.ts ===
+
+/**
+ * 浜ゆ槗鍛樻€绘帶锛氫笁杞﹂亾璺敱绾嚱鏁般€備笉绠楃浣撱€佷笉鍐欑洏銆佷笉璋?LLM銆? */
+import type { OptionCycleLoop, OptionIntradaySession, OptionBarSkipReason } from '@dshtrading/api'
+import { decideBarAgent, type BarAgentDecision } from './option-bar-ledger.js'
+
+export type LaneId = 'opportunity' | 'risk' | 'behavior'
+export type LaneAction = 'idle' | 'launch' | 'stub'
+
+export interface LaneDecision {
+  readonly action: LaneAction
+  readonly skipReason?: OptionBarSkipReason
+  readonly bucketStart?: string
+}
+
+export interface DirectorTickContext {
+  readonly ticked: boolean
+  readonly loop: OptionCycleLoop
+  readonly nowMs: number
+  readonly session: OptionIntradaySession
+  readonly llmBusy: boolean
+  readonly bucketStart: string
+  readonly alreadyRecommended: boolean
+  readonly allCalibrated: boolean
+}
+
+export interface TraderLane {
+  readonly id: LaneId
+  decide(ctx: DirectorTickContext): LaneDecision
+  run?(ctx: DirectorTickContext, decision: LaneDecision): Promise<void>
+}
+
+export function createIdleLane(id: 'risk' | 'behavior'): TraderLane {
+  return {
+    id,
+    decide: () => ({ action: 'idle' }),
+  }
+}
+
+export function opportunityDecide(ctx: DirectorTickContext): LaneDecision {
+  const d: BarAgentDecision = decideBarAgent({
+    ticked: ctx.ticked,
+    session: ctx.session,
+    inFlight: ctx.llmBusy,
+    allCalibrated: ctx.allCalibrated,
+    alreadyRecommended: ctx.alreadyRecommended,
+    bucketStart: ctx.bucketStart,
+  })
+  return {
+    action: d.action,
+    ...(d.skipReason === undefined ? {} : { skipReason: d.skipReason }),
+    bucketStart: d.bucketStart,
+  }
+}
+
+export function routeTraderLanes(
+  ctx: DirectorTickContext,
+  lanes: {
+    readonly opportunity: TraderLane
+    readonly risk: TraderLane
+    readonly behavior: TraderLane
+  },
+): readonly { id: LaneId; decision: LaneDecision }[] {
+  const out: { id: LaneId; decision: LaneDecision }[] = []
+  const o = lanes.opportunity.decide(ctx)
+  if (o.action !== 'idle') {
+    out.push({ id: 'opportunity', decision: o })
+    if (o.action === 'launch') return out
+  }
+  const r = lanes.risk.decide(ctx)
+  if (r.action !== 'idle') out.push({ id: 'risk', decision: r })
+  const b = lanes.behavior.decide(ctx)
+  if (b.action !== 'idle') out.push({ id: 'behavior', decision: b })
+  return out
+}
+
+=== FILE packages/kit-cn/test/trader-director.test.ts ===
+
+import { describe, expect, it, vi } from 'vitest'
+import type { OptionCycleLoop } from '@dshtrading/api'
+import {
+  createIdleLane,
+  opportunityDecide,
+  routeTraderLanes,
+  type DirectorTickContext,
+  type TraderLane,
+} from '../src/trader-director.ts'
+
+const emptyLoop: OptionCycleLoop = {
+  running: true,
+  horizonMin: 5,
+  lastBucket: '2026-09-08T01:45:00.000Z',
+  rows: [],
+}
+
+function baseCtx(over: Partial<DirectorTickContext> = {}): DirectorTickContext {
+  return {
+    ticked: true,
+    loop: emptyLoop,
+    nowMs: Date.parse('2026-09-08T01:45:12.000Z'),
+    session: 'regular',
+    llmBusy: false,
+    bucketStart: '2026-09-08T01:45:00.000Z',
+    alreadyRecommended: false,
+    allCalibrated: false,
+    ...over,
+  }
+}
+
+describe('opportunityDecide', () => {
+  it('regular 鏂伴《 鈫?launch', () => {
+    expect(opportunityDecide(baseCtx()).action).toBe('launch')
+  })
+
+  it('llmBusy 鈫?overlap stub', () => {
+    expect(opportunityDecide(baseCtx({ llmBusy: true }))).toMatchObject({
+      action: 'stub',
+      skipReason: 'overlap',
+    })
+  })
+})
+
+describe('routeTraderLanes', () => {
+  it('opportunity launch 鍚庝笉鍐嶈闂?risk/behavior', () => {
+    const riskDecide = vi.fn(() => ({ action: 'idle' as const }))
+    const behaviorDecide = vi.fn(() => ({ action: 'idle' as const }))
+    const opportunity: TraderLane = {
+      id: 'opportunity',
+      decide: (ctx) => opportunityDecide(ctx),
+    }
+    const risk: TraderLane = { id: 'risk', decide: riskDecide }
+    const behavior: TraderLane = { id: 'behavior', decide: behaviorDecide }
+    const routed = routeTraderLanes(baseCtx(), { opportunity, risk, behavior })
+    expect(routed).toEqual([{ id: 'opportunity', decision: expect.objectContaining({ action: 'launch' }) }])
+    expect(riskDecide).not.toHaveBeenCalled()
+    expect(behaviorDecide).not.toHaveBeenCalled()
+  })
+
+  it('opportunity idle 鏃剁户缁棶 risk/behavior锛堜簩鑰?idle锛?, () => {
+    const risk = createIdleLane('risk')
+    const behavior = createIdleLane('behavior')
+    const opportunity: TraderLane = {
+      id: 'opportunity',
+      decide: () => ({ action: 'idle' }),
+    }
+    const routed = routeTraderLanes(baseCtx({ ticked: false }), { opportunity, risk, behavior })
+    expect(routed).toEqual([])
+  })
+
+  it('opportunity stub 浠嶈矾鐢?opportunity锛屽苟缁х画闂悗缁紙Phase1 idle锛?, () => {
+    const riskDecide = vi.fn(() => ({ action: 'idle' as const }))
+    const behaviorDecide = vi.fn(() => ({ action: 'idle' as const }))
+    const opportunity: TraderLane = {
+      id: 'opportunity',
+      decide: (ctx) => opportunityDecide(ctx),
+    }
+    const routed = routeTraderLanes(
+      baseCtx({ session: 'lunch' }),
+      {
+        opportunity,
+        risk: { id: 'risk', decide: riskDecide },
+        behavior: { id: 'behavior', decide: behaviorDecide },
+      },
+    )
+    expect(routed[0]).toMatchObject({ id: 'opportunity', decision: { action: 'stub', skipReason: 'session' } })
+    expect(riskDecide).toHaveBeenCalled()
+    expect(behaviorDecide).toHaveBeenCalled()
+  })
+
+  it('createIdleLane 浠绘剰 session 鍧?idle', () => {
+    expect(createIdleLane('risk').decide(baseCtx({ session: 'close5' })).action).toBe('idle')
+    expect(createIdleLane('behavior').decide(baseCtx()).action).toBe('idle')
+  })
+})
+
+=== FILE packages/client-ui-trading/src/trader-director-host.ts ===
+
+/**
+ * 浜ゆ槗鍛樻€绘帶瀹夸富锛氱粍涓夎溅閬撱€佹寜 route 鎵ц銆佸鐩樻寕鍦ㄦ満浼?Host銆? */
+import type { OptionCycleLoop } from '@dshtrading/api'
+import {
+  createIdleLane,
+  routeTraderLanes,
+  type TraderLane,
+} from '@dshtrading/kit-cn'
+import { createOpportunityLane, OptionBarAgentHost } from './option-bar-agent.ts'
+
+export interface TraderDirectorHostOptions {
+  opportunity: OptionBarAgentHost
+  /** 浠呮祴璇曪細瑕嗙洊 risk.run锛屾柇瑷€ Phase1 涓嶈璋冪敤 */
+  riskRun?: () => Promise<void>
+  behaviorRun?: () => Promise<void>
+}
+
+export class TraderDirectorHost {
+  private readonly opportunity: OptionBarAgentHost
+  private readonly lanes: {
+    opportunity: TraderLane
+    risk: TraderLane
+    behavior: TraderLane
+  }
+
+  constructor(options: TraderDirectorHostOptions) {
+    this.opportunity = options.opportunity
+    const risk = createIdleLane('risk')
+    const behavior = createIdleLane('behavior')
+    this.lanes = {
+      opportunity: createOpportunityLane(options.opportunity),
+      risk: options.riskRun === undefined
+        ? risk
+        : { ...risk, run: async () => { await options.riskRun!() } },
+      behavior: options.behaviorRun === undefined
+        ? behavior
+        : { ...behavior, run: async () => { await options.behaviorRun!() } },
+    }
+  }
+
+  async afterTick(input: {
+    ticked: boolean
+    loop: OptionCycleLoop
+    nowMs: number
+  }): Promise<void> {
+    const ctx = await this.opportunity.buildContext(input)
+    const routed = routeTraderLanes(ctx, this.lanes)
+    for (const { id, decision } of routed) {
+      const lane = this.lanes[id]
+      if (decision.action === 'launch' || decision.action === 'stub') {
+        await lane.run?.(ctx, decision)
+      }
+    }
+    await this.opportunity.maybeWriteReview(input.nowMs)
+  }
+}
+
+=== FILE packages/client-ui-trading/test/trader-director-host.test.ts ===
+
+import { mkdtemp } from 'node:fs/promises'
+import os from 'os'
+import path from 'path'
+import { describe, expect, it, vi } from 'vitest'
+import type { OptionBarRecommendation } from '@dshtrading/api'
+import { readJsonl, recommendationsPath } from '@dshtrading/kit-cn'
+import { OptionBarAgentHost } from '../src/option-bar-agent.ts'
+import { TraderDirectorHost } from '../src/trader-director-host.ts'
+
+const LUNCH = Date.parse('2026-09-08T03:25:00.000Z')
+const REGULAR = Date.parse('2026-09-08T01:45:00.000Z')
+
+describe('TraderDirectorHost', () => {
+  it('lunch 鏂版《锛氬啓 session 妗╋紱risk/behavior run 涓嶈璋冪敤', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'director-'))
+    const riskRun = vi.fn(async () => {})
+    const behaviorRun = vi.fn(async () => {})
+    const opportunity = new OptionBarAgentHost({
+      dataRoot: () => dir,
+      runner: () => ({
+        launch: async () => 's1',
+        inspect: async () => ({ outcome: 'pending' as const }),
+      } as never),
+    })
+    const director = new TraderDirectorHost({
+      opportunity,
+      riskRun,
+      behaviorRun,
+    })
+    await director.afterTick({
+      ticked: true,
+      nowMs: LUNCH,
+      loop: {
+        running: true,
+        horizonMin: 5,
+        lastBucket: '2026-09-08T03:25:00.000Z',
+        rows: [],
+      },
+    })
+    const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(dir, '2026-09-08'))
+    expect(recs[0]?.skipReason).toBe('session')
+    expect(riskRun).not.toHaveBeenCalled()
+    expect(behaviorRun).not.toHaveBeenCalled()
+  })
+
+  it('regular launch锛氫細 launch锛涙埅鏂悗 risk run 浠嶄笉璋冪敤', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'director-'))
+    let launched = 0
+    const riskRun = vi.fn(async () => {})
+    const opportunity = new OptionBarAgentHost({
+      dataRoot: () => dir,
+      runner: () => ({
+        launch: async () => {
+          launched += 1
+          return 's1'
+        },
+        inspect: async () => ({ outcome: 'pending' as const }),
+      } as never),
+    })
+    const director = new TraderDirectorHost({ opportunity, riskRun })
+    await director.afterTick({
+      ticked: true,
+      nowMs: REGULAR,
+      loop: {
+        running: true,
+        horizonMin: 5,
+        lastBucket: '2026-09-08T01:45:00.000Z',
+        rows: [],
+      },
+    })
+    expect(launched).toBe(1)
+    expect(riskRun).not.toHaveBeenCalled()
+  })
+})
+
+=== FILE docs/specs/2026-09-09-trader-director-plan.md ===
+
+# TraderDirector锛堜氦鏄撳憳鎬绘帶锛塈mplementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 钀藉湴钖勭紪鎺掑眰 `TraderDirector`锛氫笁杞﹂亾绔彛锛坥pportunity / risk / behavior锛夛紝Phase 1 鍙疄鐜版満浼氳溅閬撲笖瀵瑰琛屼负涓庣幇 `OptionBarAgentHost` 绛変环銆?
+**Architecture:** 绾嚱鏁拌矾鐢卞湪 `kit-cn`锛涙満浼氬壇浣滅敤浠嶅湪 `client-ui-trading` 鐨?Host銆侱irector 鍏堢粍 `DirectorTickContext`锛堝惈鏈轰細鍐崇瓥鎵€闇€甯冨皵閲忥級锛屽啀 `routeTraderLanes`锛涗粎瀵?`launch`/`stub` 璋?`run`锛沗launch` 鍚庢湰 tick 涓嶅啀璋冨悗缁溅閬撱€俁isk/Behavior 涓烘亽 `idle` 鐨?no-op銆?
+**Tech Stack:** TypeScript銆乿itest銆乣@dshtrading/api`銆乣@dshtrading/kit-cn`銆乣@dshtrading/client-ui-trading` node 鍗娿€?
+**Spec:** [2026-09-09-trader-director-design.md](./2026-09-09-trader-director-design.md)
+
+## Global Constraints
+
+- 鏁板瓧鍙潵鑷伐鍏?JSON锛涚姝㈣嚜缂栫浣撴垨 1 鍒嗛挓 K銆?- `sessionFlag === 'regular'` 鎵嶅紑浼氳瘽锛涗竴鏍?K 鍏ㄥ競鍦轰竴娆°€?- 棰勫～ 鈮?涓嬪崟锛涚姝㈣嚜鍔ㄥ疄鐩樸€?- 涓嶅惎 master 涓夊弶銆?- Cursor 涓嶆敼 `packages/client-ui-*/src/client/**`銆?- 涓嶆柊寤轰簨浠舵€荤嚎 / `data/trader/` 璐︽湰銆?- Phase 1 鍏抽棴椋庨櫓鎶㈠崰锛汻isk/Behavior 涓嶅惎 LLM銆佷笉鍐欑洏銆?- 鐢ㄦ埛鏈姹傚垯涓?git commit銆?
+## 鏂囦欢鍦板浘
+
+| 鏂囦欢 | 鑱岃矗 |
+|---|---|
+| `packages/kit-cn/src/trader-director.ts` | `DirectorTickContext`銆乣TraderLane`銆乣createIdleLane`銆乣routeTraderLanes`銆乣opportunityDecide` |
+| `packages/kit-cn/test/trader-director.test.ts` | 璺敱 / idle / launch 鎴柇鍗曟祴 |
+| `packages/kit-cn/src/index.ts` | `export * from './trader-director.js'` |
+| `packages/client-ui-trading/src/option-bar-agent.ts` | Host 鏀逛负銆岀粍 ctx 鈫?route 鈫?run銆嶏紱鎶藉嚭 `OpportunityLane` |
+| `packages/client-ui-trading/src/trader-director-host.ts` | 缁勮涓夎溅閬?+ `afterTick` 鍏ュ彛 |
+| `packages/client-ui-trading/src/index.ts` | tick 閽╁瓙鏀规寕 `TraderDirectorHost` |
+| `packages/client-ui-trading/test/option-bar-agent.test.ts` | 琛屼负鍥炲綊锛坙unch 妗?/ close5 澶嶇洏锛?|
+| `packages/client-ui-trading/test/trader-director-host.test.ts` | Director 鎸傝浇鍚庝粛绛変环 + B/C 涓?run |
+| `docs/specs/2026-09-09-trader-director-design.md` | 鐘舵€佹敼涓?plan-ready锛堝疄鐜板悗鏀?implemented 璁板湪 Note锛?|
+
+**婢勬竻锛堢浉瀵硅鏍?搂2.1锛夛細** `run` 鍦?`launch` **涓?* `stub` 鏃堕兘浼氳皟鐢紙鏈轰細杞﹂亾鍐欐々鎴栧惎浼氳瘽锛夛紱浠?`idle` 璺宠繃 `run`銆俙launch` 涔嬪悗鎴柇鍚庣画杞﹂亾銆?
+---
+
+### Task 1: kit-cn 璺敱绾嚱鏁帮紙TDD锛?
+**Files:**
+- Create: `packages/kit-cn/src/trader-director.ts`
+- Create: `packages/kit-cn/test/trader-director.test.ts`
+- Modify: `packages/kit-cn/src/index.ts`锛堝湪 `option-bar-ledger` 瀵煎嚭鏃佸姞涓€琛岋級
+
+**Interfaces:**
+- Consumes: `OptionCycleLoop`銆乣OptionIntradaySession`銆乣OptionBarSkipReason` from `@dshtrading/api`锛沗decideBarAgent`銆乣BarAgentDecision` from `./option-bar-ledger.js`
+- Produces:
+  - `LaneId`銆乣LaneAction`銆乣LaneDecision`銆乣DirectorTickContext`銆乣TraderLane`
+  - `createIdleLane(id: 'risk' | 'behavior'): TraderLane`
+  - `opportunityDecide(ctx: DirectorTickContext): LaneDecision`
+  - `routeTraderLanes(ctx, lanes): readonly { id: LaneId; decision: LaneDecision }[]`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `packages/kit-cn/test/trader-director.test.ts`:
+
+```ts
+import { describe, expect, it, vi } from 'vitest'
+import type { OptionCycleLoop } from '@dshtrading/api'
+import {
+  createIdleLane,
+  opportunityDecide,
+  routeTraderLanes,
+  type DirectorTickContext,
+  type TraderLane,
+} from '../src/trader-director.ts'
+
+const emptyLoop: OptionCycleLoop = {
+  running: true,
+  horizonMin: 5,
+  lastBucket: '2026-09-08T01:45:00.000Z',
+  rows: [],
+}
+
+function baseCtx(over: Partial<DirectorTickContext> = {}): DirectorTickContext {
+  return {
+    ticked: true,
+    loop: emptyLoop,
+    nowMs: Date.parse('2026-09-08T01:45:12.000Z'),
+    session: 'regular',
+    llmBusy: false,
+    bucketStart: '2026-09-08T01:45:00.000Z',
+    alreadyRecommended: false,
+    allCalibrated: false,
+    ...over,
+  }
+}
+
+describe('opportunityDecide', () => {
+  it('regular 鏂版《 鈫?launch', () => {
+    expect(opportunityDecide(baseCtx()).action).toBe('launch')
+  })
+
+  it('llmBusy 鈫?overlap stub', () => {
+    expect(opportunityDecide(baseCtx({ llmBusy: true }))).toMatchObject({
+      action: 'stub',
+      skipReason: 'overlap',
+    })
+  })
+})
+
+describe('routeTraderLanes', () => {
+  it('opportunity launch 鍚庝笉鍐嶈闂?risk/behavior', () => {
+    const riskDecide = vi.fn(() => ({ action: 'idle' as const }))
+    const behaviorDecide = vi.fn(() => ({ action: 'idle' as const }))
+    const opportunity: TraderLane = {
+      id: 'opportunity',
+      decide: (ctx) => opportunityDecide(ctx),
+    }
+    const risk: TraderLane = { id: 'risk', decide: riskDecide }
+    const behavior: TraderLane = { id: 'behavior', decide: behaviorDecide }
+    const routed = routeTraderLanes(baseCtx(), { opportunity, risk, behavior })
+    expect(routed).toEqual([{ id: 'opportunity', decision: expect.objectContaining({ action: 'launch' }) }])
+    expect(riskDecide).not.toHaveBeenCalled()
+    expect(behaviorDecide).not.toHaveBeenCalled()
+  })
+
+  it('opportunity idle 鏃剁户缁棶 risk/behavior锛堜簩鑰?idle锛?, () => {
+    const risk = createIdleLane('risk')
+    const behavior = createIdleLane('behavior')
+    const opportunity: TraderLane = {
+      id: 'opportunity',
+      decide: () => ({ action: 'idle' }),
+    }
+    const routed = routeTraderLanes(baseCtx({ ticked: false }), { opportunity, risk, behavior })
+    expect(routed).toEqual([])
+  })
+
+  it('opportunity stub 浠嶈矾鐢?opportunity锛屽苟缁х画闂悗缁紙Phase1 idle锛?, () => {
+    const riskDecide = vi.fn(() => ({ action: 'idle' as const }))
+    const behaviorDecide = vi.fn(() => ({ action: 'idle' as const }))
+    const opportunity: TraderLane = {
+      id: 'opportunity',
+      decide: (ctx) => opportunityDecide(ctx),
+    }
+    const routed = routeTraderLanes(
+      baseCtx({ session: 'lunch' }),
+      {
+        opportunity,
+        risk: { id: 'risk', decide: riskDecide },
+        behavior: { id: 'behavior', decide: behaviorDecide },
+      },
+    )
+    expect(routed[0]).toMatchObject({ id: 'opportunity', decision: { action: 'stub', skipReason: 'session' } })
+    expect(riskDecide).toHaveBeenCalled()
+    expect(behaviorDecide).toHaveBeenCalled()
+  })
+
+  it('createIdleLane 浠绘剰 session 鎭?idle', () => {
+    expect(createIdleLane('risk').decide(baseCtx({ session: 'close5' })).action).toBe('idle')
+    expect(createIdleLane('behavior').decide(baseCtx()).action).toBe('idle')
+  })
+})
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pnpm --filter @dshtrading/kit-cn test -- trader-director`
+
+Expected: FAIL锛堟ā鍧椾笉瀛樺湪鎴栧鍑虹己澶憋級
+
+- [ ] **Step 3: Write minimal implementation**
+
+Create `packages/kit-cn/src/trader-director.ts`:
+
+```ts
+/**
+ * 浜ゆ槗鍛樻€绘帶锛氫笁杞﹂亾璺敱绾嚱鏁般€備笉绠楃浣撱€佷笉鍐欑洏銆佷笉璋?LLM銆? */
+import type { OptionCycleLoop, OptionIntradaySession, OptionBarSkipReason } from '@dshtrading/api'
+import { decideBarAgent, type BarAgentDecision } from './option-bar-ledger.js'
+
+export type LaneId = 'opportunity' | 'risk' | 'behavior'
+export type LaneAction = 'idle' | 'launch' | 'stub'
+
+export interface LaneDecision {
+  readonly action: LaneAction
+  readonly skipReason?: OptionBarSkipReason
+  readonly bucketStart?: string
+}
+
+export interface DirectorTickContext {
+  readonly ticked: boolean
+  readonly loop: OptionCycleLoop
+  readonly nowMs: number
+  readonly session: OptionIntradaySession
+  readonly llmBusy: boolean
+  readonly bucketStart: string
+  readonly alreadyRecommended: boolean
+  readonly allCalibrated: boolean
+}
+
+export interface TraderLane {
+  readonly id: LaneId
+  decide(ctx: DirectorTickContext): LaneDecision
+  run?(ctx: DirectorTickContext, decision: LaneDecision): Promise<void>
+}
+
+export function createIdleLane(id: 'risk' | 'behavior'): TraderLane {
+  return {
+    id,
+    decide: () => ({ action: 'idle' }),
+  }
+}
+
+export function opportunityDecide(ctx: DirectorTickContext): LaneDecision {
+  const d: BarAgentDecision = decideBarAgent({
+    ticked: ctx.ticked,
+    session: ctx.session,
+    inFlight: ctx.llmBusy,
+    allCalibrated: ctx.allCalibrated,
+    alreadyRecommended: ctx.alreadyRecommended,
+    bucketStart: ctx.bucketStart,
+  })
+  return {
+    action: d.action,
+    ...(d.skipReason === undefined ? {} : { skipReason: d.skipReason }),
+    bucketStart: d.bucketStart,
+  }
+}
+
+export function routeTraderLanes(
+  ctx: DirectorTickContext,
+  lanes: {
+    readonly opportunity: TraderLane
+    readonly risk: TraderLane
+    readonly behavior: TraderLane
+  },
+): readonly { id: LaneId; decision: LaneDecision }[] {
+  const out: { id: LaneId; decision: LaneDecision }[] = []
+  const o = lanes.opportunity.decide(ctx)
+  if (o.action !== 'idle') {
+    out.push({ id: 'opportunity', decision: o })
+    if (o.action === 'launch') return out
+  }
+  const r = lanes.risk.decide(ctx)
+  if (r.action !== 'idle') out.push({ id: 'risk', decision: r })
+  const b = lanes.behavior.decide(ctx)
+  if (b.action !== 'idle') out.push({ id: 'behavior', decision: b })
+  return out
+}
+```
+
+Add to `packages/kit-cn/src/index.ts`:
+
+```ts
+export * from './trader-director.js'
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `pnpm --filter @dshtrading/kit-cn test -- trader-director`
+
+Expected: PASS
+
+- [ ] **Step 5: Commit**锛堜粎褰撶敤鎴锋槑纭姹傛椂锛?
+```bash
+git add packages/kit-cn/src/trader-director.ts packages/kit-cn/test/trader-director.test.ts packages/kit-cn/src/index.ts
+git commit -m "feat(kit-cn): add TraderDirector lane router"
+```
+
+---
+
+### Task 2: OpportunityLane + Host 鏀逛负 route 椹卞姩
+
+**Files:**
+- Modify: `packages/client-ui-trading/src/option-bar-agent.ts`
+- Modify: `packages/client-ui-trading/test/option-bar-agent.test.ts`锛堜繚鎸佺幇鏈変袱娴嬪叏缁匡紱蹇呰鏃惰ˉ launch 娴嬶級
+
+**Interfaces:**
+- Consumes: Task 1 鐨?`DirectorTickContext`銆乣LaneDecision`銆乣TraderLane`銆乣opportunityDecide`銆乣routeTraderLanes`銆乣createIdleLane`
+- Produces:
+  - `OptionBarAgentHost` 浠嶆毚闇?`afterTick` / `inFlight` / `settle`锛堝洖褰掑吋瀹癸級
+  - `createOpportunityLane(host: OptionBarAgentHost): TraderLane` 鈥?`decide`鈫抈opportunityDecide`锛沗run`鈫掑啓妗╂垨 launch锛堜粠鐜?`afterTick` 鎶藉嚭锛?
+- [ ] **Step 1: 閲嶆瀯 `option-bar-agent.ts`**
+
+淇濈暀 `OptionBarAgentHost` 鐨?`inFlight` / `refreshInFlight` / `writeRec` / 澶嶇洏閫昏緫銆傚皢銆屽喅绛?+ launch/stub銆嶆娊鎴愬彲琚?Lane 璋冪敤鐨勬柟娉曪細
+
+```ts
+import {
+  OPTION_BAR_AGENT_PROMPT,
+  appendJsonlLine,
+  cyclesPath,
+  foldDailyReview,
+  makeSkipRecommendation,
+  opportunityDecide,
+  recommendationsPath,
+  reviewsPath,
+  sessionAt,
+  shanghaiCalendarDate,
+  shanghaiBucketStartMs,
+  shouldWriteDailyReview,
+  readJsonl,
+  type DirectorTickContext,
+  type LaneDecision,
+  type TraderLane,
+} from '@dshtrading/kit-cn'
+
+// ... OptionBarAgentOptions / class fields 涓嶅彉 ...
+
+/** 缁?Director 涓婁笅鏂囷紙璇荤洏 + inFlight锛夈€?*/
+async buildContext(input: {
+  ticked: boolean
+  loop: OptionCycleLoop
+  nowMs: number
+}): Promise<DirectorTickContext> {
+  await this.refreshInFlight()
+  const nowMs = input.nowMs
+  const session = sessionAt(nowMs)
+  const date = shanghaiCalendarDate(nowMs)
+  const root = this.options.dataRoot()
+  const bucketStart = input.loop.lastBucket ?? new Date(shanghaiBucketStartMs(nowMs)).toISOString()
+  const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
+  const alreadyRecommended = recs.some((row) => row.bucketStart === bucketStart)
+  const allCalibrated = input.loop.rows.length > 0
+    && input.loop.rows.every((row) => row.latest?.forecast.noTradeReason === 'calibrated')
+  return {
+    ticked: input.ticked,
+    loop: input.loop,
+    nowMs,
+    session,
+    llmBusy: this.inFlight,
+    bucketStart,
+    alreadyRecommended,
+    allCalibrated,
+  }
+}
+
+/** 鎵ц opportunity 鐨?launch/stub 鍓綔鐢紙涓嶅惈澶嶇洏锛夈€?*/
+async runOpportunity(ctx: DirectorTickContext, decision: LaneDecision): Promise<void> {
+  const root = this.options.dataRoot()
+  const date = shanghaiCalendarDate(ctx.nowMs)
+  const session = ctx.session
+  const bucketStart = ctx.bucketStart
+
+  if (decision.action === 'stub' && decision.skipReason !== undefined) {
+    await this.writeRec(root, date, makeSkipRecommendation({
+      bucketStart,
+      asOf: new Date(ctx.nowMs).toISOString(),
+      session,
+      skipReason: decision.skipReason,
+    }))
+    return
+  }
+
+  if (decision.action !== 'launch') return
+
+  const runner = this.options.runner?.()
+  if (runner === undefined) {
+    await this.writeRec(root, date, makeSkipRecommendation({
+      bucketStart,
+      asOf: new Date(ctx.nowMs).toISOString(),
+      session,
+      skipReason: 'launch_failed',
+    }))
+    return
+  }
+
+  this.inFlight = true
+  try {
+    const workspaceId = this.options.workspaceId?.()
+    const sessionId = await runner.launch({
+      id: `option-bar-${bucketStart}`,
+      title: `ETF option bar ${bucketStart}`,
+      prompt: `${OPTION_BAR_AGENT_PROMPT}\n\nbucketStart=${bucketStart}\nasOf=${new Date(ctx.nowMs).toISOString()}`,
+      agentPreset: 'trader',
+      ...(workspaceId === undefined ? {} : { workspaceId }),
+    })
+    this.openSessionId = sessionId
+    this.openStartedAt = ctx.nowMs
+  } catch (error) {
+    this.inFlight = false
+    this.openSessionId = undefined
+    this.options.log?.('option-bar launch failed', error)
+    await this.writeRec(root, date, makeSkipRecommendation({
+      bucketStart,
+      asOf: new Date(ctx.nowMs).toISOString(),
+      session,
+      skipReason: 'launch_failed',
+    }))
+  }
+}
+
+async maybeWriteReview(nowMs: number): Promise<void> {
+  const session = sessionAt(nowMs)
+  const date = shanghaiCalendarDate(nowMs)
+  const root = this.options.dataRoot()
+  const reviewFile = reviewsPath(root, date)
+  const exists = await fileExists(reviewFile)
+  if (!shouldWriteDailyReview(session, exists)) return
+  const cycles = await readJsonl<OptionCycle>(cyclesPath(root, date))
+  const recommendations = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
+  const md = foldDailyReview({ date, cycles, recommendations })
+  await mkdir(path.dirname(reviewFile), { recursive: true })
+  await writeFile(reviewFile, md, 'utf8')
+}
+
+/** 鍏煎鏃у叆鍙ｏ細鍗曡溅閬撴満浼氳矾寰勶紙鏃?Director锛夈€?*/
+async afterTick(input: { ticked: boolean; loop: OptionCycleLoop; nowMs: number }): Promise<void> {
+  const ctx = await this.buildContext(input)
+  const decision = opportunityDecide(ctx)
+  if (decision.action === 'launch' || decision.action === 'stub') {
+    await this.runOpportunity(ctx, decision)
+  }
+  await this.maybeWriteReview(input.nowMs)
+}
+
+export function createOpportunityLane(host: OptionBarAgentHost): TraderLane {
+  return {
+    id: 'opportunity',
+    decide: (ctx) => opportunityDecide(ctx),
+    run: async (ctx, decision) => {
+      await host.runOpportunity(ctx, decision)
+    },
+  }
+}
+```
+
+鍒犻櫎 Host 鍐呭 `decideBarAgent` 鐨勭洿鎺ヨ皟鐢紙鏀硅蛋 `opportunityDecide`锛夈€俙refreshInFlight` / `writeRec` / `settle` / `fileExists` 淇濇寔鍘熸牱銆?
+- [ ] **Step 2: Run existing Host tests**
+
+Run: `pnpm --filter @dshtrading/client-ui-trading test -- option-bar-agent`
+
+Expected: PASS锛坙unch 妗┿€乧lose5 澶嶇洏涓嶈鐩栵級
+
+- [ ] **Step 3: Commit**锛堜粎褰撶敤鎴锋槑纭姹傛椂锛?
+```bash
+git add packages/client-ui-trading/src/option-bar-agent.ts packages/client-ui-trading/test/option-bar-agent.test.ts
+git commit -m "refactor(client-ui-trading): split option-bar host for director lanes"
+```
+
+---
+
+### Task 3: TraderDirectorHost 鎺ョ嚎
+
+**Files:**
+- Create: `packages/client-ui-trading/src/trader-director-host.ts`
+- Create: `packages/client-ui-trading/test/trader-director-host.test.ts`
+- Modify: `packages/client-ui-trading/src/index.ts`锛坄barAgent.afterTick` 鈫?`director.afterTick`锛?
+**Interfaces:**
+- Consumes: `OptionBarAgentHost`銆乣createOpportunityLane`銆乣createIdleLane`銆乣routeTraderLanes`
+- Produces: `TraderDirectorHost.afterTick(input)` 鈥?瀹夸富鍞竴鍏ュ彛
+
+- [ ] **Step 1: Write the failing test**
+
+Create `packages/client-ui-trading/test/trader-director-host.test.ts`:
+
+```ts
+import { mkdtemp } from 'node:fs/promises'
+import os from 'os'
+import path from 'path'
+import { describe, expect, it, vi } from 'vitest'
+import type { OptionBarRecommendation } from '@dshtrading/api'
+import { readJsonl, recommendationsPath } from '@dshtrading/kit-cn'
+import { OptionBarAgentHost } from '../src/option-bar-agent.ts'
+import { TraderDirectorHost } from '../src/trader-director-host.ts'
+
+const LUNCH = Date.parse('2026-09-08T03:25:00.000Z')
+const REGULAR = Date.parse('2026-09-08T01:45:00.000Z')
+
+describe('TraderDirectorHost', () => {
+  it('lunch 鏂版《锛氬啓 session 妗╋紱risk/behavior run 涓嶈璋冪敤', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'director-'))
+    const riskRun = vi.fn(async () => {})
+    const behaviorRun = vi.fn(async () => {})
+    const opportunity = new OptionBarAgentHost({
+      dataRoot: () => dir,
+      runner: () => ({
+        launch: async () => 's1',
+        inspect: async () => ({ outcome: 'pending' as const }),
+      } as never),
+    })
+    const director = new TraderDirectorHost({
+      opportunity,
+      riskRun,
+      behaviorRun,
+    })
+    await director.afterTick({
+      ticked: true,
+      nowMs: LUNCH,
+      loop: {
+        running: true,
+        horizonMin: 5,
+        lastBucket: '2026-09-08T03:25:00.000Z',
+        rows: [],
+      },
+    })
+    const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(dir, '2026-09-08'))
+    expect(recs[0]?.skipReason).toBe('session')
+    expect(riskRun).not.toHaveBeenCalled()
+    expect(behaviorRun).not.toHaveBeenCalled()
+  })
+
+  it('regular launch锛氫細 launch锛涙埅鏂悗 risk run 浠嶄笉璋冪敤', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'director-'))
+    let launched = 0
+    const riskRun = vi.fn(async () => {})
+    const opportunity = new OptionBarAgentHost({
+      dataRoot: () => dir,
+      runner: () => ({
+        launch: async () => {
+          launched += 1
+          return 's1'
+        },
+        inspect: async () => ({ outcome: 'pending' as const }),
+      } as never),
+    })
+    const director = new TraderDirectorHost({ opportunity, riskRun })
+    await director.afterTick({
+      ticked: true,
+      nowMs: REGULAR,
+      loop: {
+        running: true,
+        horizonMin: 5,
+        lastBucket: '2026-09-08T01:45:00.000Z',
+        rows: [],
+      },
+    })
+    expect(launched).toBe(1)
+    expect(riskRun).not.toHaveBeenCalled()
+  })
+})
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pnpm --filter @dshtrading/client-ui-trading test -- trader-director-host`
+
+Expected: FAIL锛堟ā鍧椾笉瀛樺湪锛?
+- [ ] **Step 3: Implement `trader-director-host.ts`**
+
+```ts
+/**
+ * 浜ゆ槗鍛樻€绘帶瀹夸富锛氱粍涓夎溅閬撱€佹寜 route 鎵ц銆佸鐩樻寕鍦ㄦ満浼?Host銆? */
+import type { OptionCycleLoop } from '@dshtrading/api'
+import {
+  createIdleLane,
+  routeTraderLanes,
+  type TraderLane,
+} from '@dshtrading/kit-cn'
+import { createOpportunityLane, OptionBarAgentHost } from './option-bar-agent.ts'
+
+export interface TraderDirectorHostOptions {
+  opportunity: OptionBarAgentHost
+  /** 浠呮祴璇曪細瑕嗙洊 risk.run锛屾柇瑷€ Phase1 涓嶈璋冪敤 */
+  riskRun?: () => Promise<void>
+  behaviorRun?: () => Promise<void>
+}
+
+export class TraderDirectorHost {
+  private readonly opportunity: OptionBarAgentHost
+  private readonly lanes: {
+    opportunity: TraderLane
+    risk: TraderLane
+    behavior: TraderLane
+  }
+
+  constructor(options: TraderDirectorHostOptions) {
+    this.opportunity = options.opportunity
+    const risk = createIdleLane('risk')
+    const behavior = createIdleLane('behavior')
+    this.lanes = {
+      opportunity: createOpportunityLane(options.opportunity),
+      risk: options.riskRun === undefined
+        ? risk
+        : { ...risk, run: async () => { await options.riskRun!() } },
+      behavior: options.behaviorRun === undefined
+        ? behavior
+        : { ...behavior, run: async () => { await options.behaviorRun!() } },
+    }
+  }
+
+  async afterTick(input: {
+    ticked: boolean
+    loop: OptionCycleLoop
+    nowMs: number
+  }): Promise<void> {
+    const ctx = await this.opportunity.buildContext(input)
+    const routed = routeTraderLanes(ctx, this.lanes)
+    for (const { id, decision } of routed) {
+      const lane = this.lanes[id]
+      if (decision.action === 'launch' || decision.action === 'stub') {
+        await lane.run?.(ctx, decision)
+      }
+    }
+    await this.opportunity.maybeWriteReview(input.nowMs)
+  }
+}
+```
+
+娉ㄦ剰锛氭祴璇曠敤 `riskRun` 瑕嗗啓鍙湪 `decide` 闈?idle 鏃舵墠浼氳璋冨埌锛汸hase 1 idle 鏁?`not.toHaveBeenCalled` 鎴愮珛銆傝嫢瑕佹祴銆宻tub 鍚?decide 琚皟鐢ㄣ€嶏紝Task 1 宸茶鐩栥€?
+- [ ] **Step 4: Wire `index.ts`**
+
+鎶婏細
+
+```ts
+const barAgent = new OptionBarAgentHost({ ... })
+// ...
+return barAgent.afterTick({ ... })
+```
+
+鏀逛负锛?
+```ts
+import { TraderDirectorHost } from './trader-director-host.ts'
+
+const barAgent = new OptionBarAgentHost({ ... })
+const director = new TraderDirectorHost({ opportunity: barAgent })
+// ...
+return director.afterTick({
+  ticked: result.ticked,
+  loop: result.loop,
+  nowMs: Number.isFinite(nowMs) ? nowMs : Date.now(),
+})
+```
+
+- [ ] **Step 5: Run tests**
+
+Run:
+
+```bash
+pnpm --filter @dshtrading/kit-cn test -- trader-director
+pnpm --filter @dshtrading/client-ui-trading test -- option-bar-agent
+pnpm --filter @dshtrading/client-ui-trading test -- trader-director-host
+```
+
+Expected: 鍏ㄩ儴 PASS
+
+- [ ] **Step 6: Commit**锛堜粎褰撶敤鎴锋槑纭姹傛椂锛?
+```bash
+git add packages/client-ui-trading/src/trader-director-host.ts packages/client-ui-trading/test/trader-director-host.test.ts packages/client-ui-trading/src/index.ts packages/client-ui-trading/src/option-bar-agent.ts
+git commit -m "feat(client-ui-trading): wire TraderDirectorHost over option-bar"
+```
+
+---
+
+### Task 4: 鏂囨。鏀跺彛
+
+**Files:**
+- Modify: `docs/specs/2026-09-09-trader-director-design.md` 鈥?鐘舵€佽鏀逛负 `proposed锛堣鍒掑凡灏辩华锛塦锛浡?.1 鏃佹敞 `run` 鍚?stub
+- Modify: `.agents/notes/proposed/architecture/2026-09-09-trader-director.md` 鈥?Proposal 鏈姞璁″垝閾炬帴
+
+- [ ] **Step 1: 瑙勬牸鐘舵€佷笌 stub 婢勬竻**
+
+鍦ㄨ璁℃枃妗ｅご閮ㄧ姸鎬佹敼涓猴細
+
+```markdown
+- 鐘舵€侊細proposed锛堣鍒掑凡灏辩华 鈫?[plan](./2026-09-09-trader-director-plan.md)锛?```
+
+鍦?搂2.1銆屼粎瀵?`launch` 璋?`run`銆嶆敼涓猴細
+
+```markdown
+- 瀵?`launch` 涓?`stub` 璋?`run`锛堟満浼氬啓妗╂垨鍚細璇濓級锛沗idle` 涓嶈皟锛沗launch` 鍚庢埅鏂悗缁溅閬?```
+
+- [ ] **Step 2: Note 鍔犺鍒掗摼鎺?*
+
+鍦?Proposal 鏈拷鍔狅細
+
+```markdown
+瀹炵幇璁″垝锛歔docs/specs/2026-09-09-trader-director-plan.md](../../../../docs/specs/2026-09-09-trader-director-plan.md)銆?```
+
+- [ ] **Step 3: Commit**锛堜粎褰撶敤鎴锋槑纭姹傛椂锛?
+```bash
+git add docs/specs/2026-09-09-trader-director-design.md docs/specs/2026-09-09-trader-director-plan.md .agents/notes/proposed/architecture/2026-09-09-trader-director.md
+git commit -m "docs: add TraderDirector implementation plan"
+```
+
+---
+
+## Spec coverage锛堣嚜妫€锛?
+| 瑙勬牸瑕佹眰 | 浠诲姟 |
+|---|---|
+| TraderDirector + 涓夌鍙?| Task 1鈥? |
+| Opportunity = option-bar | Task 2鈥? |
+| Risk/Behavior no-op | Task 1 `createIdleLane` + Task 3 |
+| 琛屼负绛変环锛堟椂娈?妗?澶嶇洏锛?| Task 2鈥? 鍥炲綊娴?|
+| 鏃犱簨浠舵€荤嚎 / 鏃犱笅鍗?/ 鏃?master | Global Constraints |
+| launch 鎴柇鍚庣画杞﹂亾 | Task 1 鍗曟祴 |
+| llmBusy 鈫?overlap | Task 1 |
+| 鏂囨。鍐欐竻 B/C 杈圭晫 | Task 4 + 宸叉湁 design 搂9 |
+
+## Placeholder scan
+
+鏃?TBD /銆岀◢鍚庡疄鐜般€嶆楠わ紱B/C 鐨?Phase 2/3 浠呭湪 design 搂9锛屾湰璁″垝涓嶅疄鐜般€?
+
+=== FILE .agents/notes/proposed/architecture/2026-09-09-trader-director.md ===
+
+# Agent Note: 浜ゆ槗鍛樻€绘帶锛圱raderDirector锛夎杽缂栨帓
+
+Status: proposed
+
+## Problem
+
+鐩爣鏅鸿兘浣撻渶瑕佸悓鏃跺叿澶囷細涓板瘜鏈熸潈鐭ヨ瘑銆佺洏涓満浼氭崟鎹夈€佷氦鏄撹涓哄垎鏋愩€佹寔浠撻闄╄瘑鍒€傝嫢鍋氭垚鍗曚竴銆屼竾鑳戒細璇濄€嶏紝浼氫笌宸茶惤鍦扮殑 L0 绾嚱鏁扮浣撻棴鐜€乷ption-bar 姣忔《鑷冲涓€杞?trader銆佺姝?master 涓夊弶绛夌害鏉熷啿绐侊紝涓?B/C 鑳藉姏灏氭棤鏁版嵁闈€傞渶瑕佷竴涓彲婕旇繘鐨勬€绘帶锛屾妸 A+B+C 鍚堟垚鍏ュ彛锛屼絾绗竴鏈熷彧钀藉湴鏈轰細杞﹂亾涓旇涓哄澶栫瓑浠枫€?
+## Proposal
+
+閲囩敤**钖勬€绘帶 + 涓夎溅閬撶鍙?*锛堟柟妗?1锛夈€傝鏍艰 [docs/specs/2026-09-09-trader-director-design.md](../../../../docs/specs/2026-09-09-trader-director-design.md)銆傝鐐癸細
+
+1. `TraderDirector` 鍙仛鏃堕挓璺敱涓庡叏灞€ LLM 浜掓枼锛涗笉缂?prompt銆佷笉绠?Greeks銆?2. 涓夌鍙ｏ細`opportunity` / `risk` / `behavior`锛涜皟搴﹂『搴忓浐瀹氾紝opportunity 浼樺厛銆?3. Phase 1锛歚OpportunityLane` = 鐜版湁 `decideBarAgent` + `OptionBarAgentHost`锛汻isk/Behavior 鎭?`idle`銆?4. 璐︽湰涓庢帹鑽愬绾︽部鐢?[option-bar-agent](../../../../docs/specs/2026-09-08-option-bar-agent.md)锛涗笉鏂板紑浜嬩欢鎬荤嚎銆?5. 鎺ュ彛涓庡彲娴嬬紪鎺掕繘 `kit-cn`锛涘涓绘帴绾跨暀鍦?`client-ui-trading` node 鍗娿€?
+瀹炵幇璁″垝锛歔docs/specs/2026-09-09-trader-director-plan.md](../../../../docs/specs/2026-09-09-trader-director-plan.md)銆?
+涓?[option-bar-agent 鎻愭](../feature/2026-09-08-option-bar-agent.md) 鐨勫叧绯伙細鏈褰曟槸鍏?*缂栨帓涓婂眰**锛屼笉鍙栦唬 5 鍒嗛挓 K 璐︽湰涓庨棴闆嗚涔夈€?
+杩涘害锛?026-09-09 Task 2锛夛細`OptionBarAgentHost` 宸叉媶鍑?`buildContext` / `runOpportunity` / `maybeWriteReview` 涓?`createOpportunityLane`锛沗afterTick` 浠嶈蛋鍗曡溅閬?`opportunityDecide`锛堟棤 Director锛夛紝lunch 妗╀笌 close5 澶嶇洏琛屼负涓嶅彉銆?
+杩涘害锛?026-09-09 Task 3锛夛細`TraderDirectorHost` 宸叉寕涓夎溅閬擄紙opportunity + idle risk/behavior锛夛紱`index.ts` tick 閽╁瓙鏀硅蛋 `director.afterTick`銆侾hase 1 浠?opportunity 浼?`run`锛沴unch 鍐?session 妗╋紝regular launch 鍚庢埅鏂悗缁溅閬撱€侶ost 鐨?`afterTick` 浠嶄繚鐣欎綔鍗曡溅閬撳吋瀹瑰叆鍙ｃ€?
+## Context & Efficiency Impact
+
+Phase 1 涓嶅鍔犳瘡妗朵細璇濇鏁帮紙浠?regular 鏂版《鑷冲 1 娆★級銆侾rompt 浠嶄负 Layer 2 闈欐€?`OPTION_BAR_AGENT_PROMPT`锛涘姩鎬佷粎 `bucketStart` / loop 鎽樿娌夊簳 Layer 3銆侭/C no-op 鏃?Token 鎴愭湰銆傚悗缁?Risk 鑻ュ紑鍚姠鍗犻渶鍙︿及浼氳瘽浜夌敤銆?
+## Alternatives considered
+
+- **鏂规 2锛氳兘鍔涙敞鍐岃〃 + 鍏变韩浜嬩欢璐︽湰**锛氶暱鏈熸洿骞插噣锛屼絾 Phase 1 灏辫瀹氫簨浠?schema 涓庡弻鍐欙紝鐩稿銆孉 绛変环钀藉湴銆嶈繃閲嶃€傝触銆?- **鏂规 3锛歨ost master 涓夊瓙浠ｇ悊缂栨帓**锛氫笌 option-bar 宸插惁鍐宠矾寰勫啿绐侊紙鐑?Token銆侀噸鍙犻毦鎺э級銆傝触銆?- **绗竴鏈熺洿鎺ュ仛 Risk 鎴?Behavior**锛氭椂閽熶笌宸ュ叿閾句笉濡傛満浼氳溅閬撴垚鐔燂紱鐢ㄦ埛閫夊畾 A銆傝触锛堟湰鏈熶笉鍋氾級銆?
+## Verification & Gates
+
+- Director 鍗曟祴锛氬彧瑙﹁揪 opportunity锛汢/C 鎭?idle锛沗llmBusy` 鈫?overlap銆?- 鐜版湁 option-bar / box / cycle 鍗曟祴鍏ㄧ豢銆?- 楠屾敹锛氬澶栬涓轰笌鐜?option-bar 绛変环 + 浠ｇ爜鍙涓夌鍙ｃ€?
+## Risks
+
+- 杩囧害鎶借薄锛氳嫢 Director 鍙槸涓€灞傜┖澹冲嵈鏀瑰潖 Host 鏃跺簭鈥斺€旂敤銆岃涓虹瓑浠枫€嶉獙鏀朵笌鏈€灏忛€傞厤鍣ㄧ紦瑙ｃ€?- 鏈潵 Risk 鎶㈠崰涓?opportunity overlap 璇箟鍐茬獊鈥斺€擯hase 1 鍏抽棴鎶㈠崰锛涘彟寮€ spec 鍐嶅紑銆?- option-bar 鎻愭浠嶄负 proposed锛欴irector 瀹炵幇搴斾笌鍏?Host 鍚屽彉鏇存垨绱ч殢鍏跺悗锛岄伩鍏嶅弻杞?afterTick銆?

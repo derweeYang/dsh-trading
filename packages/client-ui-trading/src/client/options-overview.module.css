@@ -1,4 +1,4 @@
-/* OptionsOverview —— 九标的期权总览（2026-09-09 WB-1）。
+/* OptionsOverview —— 七标的期权总览（2026-09-09 WB-1）。
    token 与 options-stage / quote-stage 同族（--dsw-futu-*）。 */
 
 .root {
@@ -87,6 +87,40 @@
   background: var(--dsw-futu-bg-surface-active, rgba(0, 0, 0, 0.08));
 }
 
+/* 扫描动作三态（2026-09-11）：成功/失败都要看得出来，否则「预填成功但页面无变化」
+   会被当成「点了没反应」。在途禁用（同刻只允许一次预填）。 */
+.scanAllBtn[data-scan-state='filled'],
+.scanRowBtn[data-scan-state='filled'],
+.ghostBtn[data-scan-state='filled'] {
+  border-color: var(--dsw-futu-text-secondary, #5f6672);
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.scanAllBtn[data-scan-state='error'],
+.scanRowBtn[data-scan-state='error'],
+.ghostBtn[data-scan-state='error'] {
+  border-color: var(--dsw-futu-warning, #e6a23c);
+  color: var(--dsw-futu-warning, #b8822a);
+}
+
+.scanAllBtn:disabled,
+.scanRowBtn:disabled,
+.ghostBtn:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+/* 扫描失败原因：一次性动作失败必须留痕，不吞错、不静默。 */
+.scanError {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  font-size: 12px;
+  border: 1px solid var(--dsw-futu-warning, #e6a23c);
+  border-radius: var(--dsw-futu-radius-sm, 4px);
+  background: color-mix(in srgb, var(--dsw-futu-warning, #e6a23c) 12%, transparent);
+  color: var(--dsw-futu-warning, #b8822a);
+}
+
 .notice,
 .hint {
   font-size: 12px;
@@ -106,7 +140,7 @@
   flex: 0 0 auto;
 }
 
-/* ── WB-9 ① 九标的 5 日叠加走势 ─────────────────────────────────────── */
+/* ── WB-9 ① 七标的 5 日叠加走势 ─────────────────────────────────────── */
 
 .overlay {
   display: flex;

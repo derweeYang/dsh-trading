@@ -21,24 +21,6 @@
       "quotesSource": "sse_board"
     },
     {
-      "underlying": "510300",
-      "exchange": "SSE",
-      "boardName": "华泰柏瑞沪深300ETF期权",
-      "name": "华泰柏瑞沪深300ETF",
-      "multiplier": 10000,
-      "tickSize": 0.0001,
-      "quotesSource": "sse_board"
-    },
-    {
-      "underlying": "510500",
-      "exchange": "SSE",
-      "boardName": "南方中证500ETF期权",
-      "name": "南方中证500ETF",
-      "multiplier": 10000,
-      "tickSize": 0.0001,
-      "quotesSource": "sse_board"
-    },
-    {
       "underlying": "588000",
       "exchange": "SSE",
       "boardName": "华夏科创50ETF期权",
@@ -99,24 +81,6 @@
       "exchange": "SSE",
       "boardName": "iquant50ETF",
       "name": "华夏上证50ETF",
-      "multiplier": 10000,
-      "tickSize": 0.0001,
-      "quotesSource": "iquant_board"
-    },
-    {
-      "underlying": "510300",
-      "exchange": "SSE",
-      "boardName": "iquant300ETF",
-      "name": "华泰柏瑞沪深300ETF",
-      "multiplier": 10000,
-      "tickSize": 0.0001,
-      "quotesSource": "iquant_board"
-    },
-    {
-      "underlying": "510500",
-      "exchange": "SSE",
-      "boardName": "iquant500ETF",
-      "name": "南方中证500ETF",
       "multiplier": 10000,
       "tickSize": 0.0001,
       "quotesSource": "iquant_board"

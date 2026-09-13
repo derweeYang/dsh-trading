@@ -32,20 +32,18 @@ export class TradingServiceError extends Error {
 }
 
 /** 与 python/options underlyings.json 对齐的静态名册（桥/工具显隐用，不打网关）。 */
-export const SSE_UNDERLYINGS = ['510050', '510300', '510500', '588000', '588080'] as const
+export const SSE_UNDERLYINGS = ['510050', '588000', '588080'] as const
 export const SZSE_UNDERLYINGS = ['159919', '159915', '159901', '159922'] as const
 export const SYNTH_UNDERLYINGS = ['910050'] as const
 /** iquant（国信）名册：沪深皆可达；合约行情市场是 SHO/SZO，不是 SH/SZ。 */
 export const IQUANT_UNDERLYINGS = [
-  '510050', '510300', '510500', '588000', '588080',
+  '510050', '588000', '588080',
   '159919', '159915', '159901', '159922',
 ] as const
 
 const STATIC_ROWS: Record<OptionSource, readonly OptionUnderlying[]> = {
   akshare: [
     { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
-    { underlying: '510300', exchange: 'SSE', name: '华泰柏瑞沪深300ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
-    { underlying: '510500', exchange: 'SSE', name: '南方中证500ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
     { underlying: '588000', exchange: 'SSE', name: '华夏科创50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
     { underlying: '588080', exchange: 'SSE', name: '易方达科创50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
     { underlying: '159919', exchange: 'SZSE', name: '嘉实沪深300ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'szse_static_only' },
@@ -55,8 +53,6 @@ const STATIC_ROWS: Record<OptionSource, readonly OptionUnderlying[]> = {
   ],
   iquant: [
     { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
-    { underlying: '510300', exchange: 'SSE', name: '华泰柏瑞沪深300ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
-    { underlying: '510500', exchange: 'SSE', name: '南方中证500ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
     { underlying: '588000', exchange: 'SSE', name: '华夏科创50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
     { underlying: '588080', exchange: 'SSE', name: '易方达科创50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },
     { underlying: '159919', exchange: 'SZSE', name: '嘉实沪深300ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'iquant_board' },

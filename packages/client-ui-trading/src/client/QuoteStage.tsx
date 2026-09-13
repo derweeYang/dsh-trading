@@ -14,6 +14,7 @@ import {
 } from './api.ts'
 import { setHoldingsPanelOpen } from './holdings-store.ts'
 import { tradeModeStore, writeTradeMode } from './trade-mode-store.ts'
+import { tradeDeskStore, writeTradeDeskOpen, toggleTradeDesk } from './trade-desk-store.ts'
 import { TvChart, toBar, toVolume } from './TvChart.tsx'
 import type { TvChartCapture, TvIndicatorGroup } from './TvChart.tsx'
 import { composeQuoteMessage } from './compose-quote.ts'
@@ -43,7 +44,19 @@ import type { SelectionState } from './store.ts'
 import type { ChartState } from './chart-state.ts'
 import type { AccountBalance, Instrument, Order, Orderbook, Position, TradeFill, TradeTick } from './types.ts'
 import { colorModeStore } from './color-mode.ts'
-import { optionsOverviewStore, optionsCycleLoopStore, stageActions } from './stage-actions.ts'
+import {
+  optionsOverviewStore,
+  optionsCycleLoopStore,
+  stageActions,
+  consumeQuoteLensRequest,
+  subscribeQuoteLens,
+} from './stage-actions.ts'
+import {
+  describeScanFailure,
+  scanFailureText,
+  SCAN_FILLED_HOLD_MS,
+  type ScanPhase,
+} from './scan-feedback.ts'
 import { MARKET_INDICES, getMarketSessionStatus } from './market-status.ts'
 import type { Kline, MarketId, Ticker } from './types.ts'
 import { usePoll } from './usePoll.ts'
@@ -60,7 +73,10 @@ import css from './quote-stage.module.css'
 
 const INTERVAL_KEY_PREFIX = 'dshtrading.interval.'
 const ORDERBOOK_OPEN_KEY = 'dshtrading.orderbook.open'
-const TRADE_DESK_OPEN_KEY = 'dshtrading.tradeDesk.open'
+const STAGE_TAB_KEY = 'dshtrading.stageTab'
+/** 行情板块子页签（P1-3，2026-09-12）：跨标的/跨会话记忆，切走中栏视图（互斥卸载）后仍停上次页签。 */
+type StageTab = 'chart' | 'fundamentals' | 'options' | 'news' | 'announcements'
+const STAGE_TABS: readonly StageTab[] = ['chart', 'fundamentals', 'options', 'news', 'announcements']
 const TICKER_POLL_MS = 5000
 const KLINE_RESYNC_MS = 30000
 // 盘口/分笔轮询（issue #39）：竖栏打开才拉；一次刷新 = depth + trades 两请求，
@@ -227,10 +243,28 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   /** 行情板块页签（图表 | 基本面 | 新闻 | 公告）：跨标的保持。
    *  期权不再埋在此处——升格为与现货平级的「现货 ⇄ 期权」双透镜（见 lens）。
    *  「衍生品」页签（crypto 专属）已随市场收敛移除。 */
-  const [stageTab, setStageTab] = useState<'chart' | 'fundamentals' | 'options' | 'news' | 'announcements'>('chart')
+  const [stageTab, setStageTab] = useState<StageTab>(() => readStageTab())
+  // P1-3（2026-09-12）：页签落 localStorage——本组件是切视图时新挂载的（视图互斥卸载），
+  // 不留痕每次切回中栏都回落 'chart'，用户上次停留的页签丢失。
+  useEffect(() => { writeStageTab(stageTab) }, [stageTab])
   /** 「现货 ⇄ 期权」对等双透镜（2026-09-08 期权升格重构）：仅带期权标的（optionsAvailable）
-   *  启用；期权从 6 个次级页签升格为与 A 股现货平级的一级切换。非期权标的恒 'spot'。 */
-  const [lens, setLens] = useState<'spot' | 'options'>('spot')
+   *  启用；期权从 6 个次级页签升格为与 A 股现货平级的一级切换。非期权标的恒 'spot'。
+   *  初值取「进 T 板」的一次性请求（2026-09-11）：总览点卡要的是合约面，
+   *  而本组件是切视图时新挂载的，state 初值就是唯一能承接该意图的位置。 */
+  const [lens, setLens] = useState<'spot' | 'options'>(() => consumeQuoteLensRequest() ?? 'spot')
+  useEffect(() => subscribeQuoteLens((next) => { consumeQuoteLensRequest(); setLens(next) }), [])
+  /**
+   * T 板「AI 扫描」的回执照（三态 + 失败原因）。**必须留在首个 early return 之前**：
+   * 本组件在无标的时提前 return 空态，hooks 落在 return 之后会在「空态 → 有标的」
+   * 的那一刻改变 hook 数量（React #310 崩掉整个中栏 slot，2026-09-11 实测）。
+   */
+  const [tboardScan, setTboardScan] = useState<{ phase: ScanPhase; message?: string } | null>(null)
+  // 成功回执不常驻：到点回落空闲态（与总览三个扫描按钮同款）。失败态留到下次点击。
+  useEffect(() => {
+    if (tboardScan?.phase !== 'filled') return
+    const timer = setTimeout(() => { setTboardScan(null) }, SCAN_FILLED_HOLD_MS)
+    return () => { clearTimeout(timer) }
+  }, [tboardScan])
   /**
    * 透镜可用性判据（redesign 2026-09-09 收紧回 optionsAvailable）：总览已升格为
    * 中栏顶部 tab，全市场扫描不再依赖透镜——透镜只服务注册标的（T 板/链）。
@@ -245,8 +279,10 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   const [orderbook, setOrderbook] = useState<Orderbook | null>(null)
   const [orderbookLoading, setOrderbookLoading] = useState(false)
   const [trades, setTrades] = useState<TradeTick[] | null>(null)
-  /** 交易工作台（issue #40）：默认关（安全敏感面）；只读数据 null = 服务未挂载/凭证缺失。 */
-  const [tradeDeskOpen, setTradeDeskOpen] = useState<boolean>(() => readTradeDeskOpen())
+  /** 交易工作台（issue #40）：默认关（安全敏感面）；只读数据 null = 服务未挂载/凭证缺失。
+   *  P1-2（2026-09-12）：开关移入 trade-desk-store 单例——tab 条全局入口（MiddleStage）
+   *  与这里读写同一份，非行情 tab 也能开交易台；切走再切回行情视图保持展开态。 */
+  const tradeDeskOpen = useSyncExternalStore(tradeDeskStore().subscribe, tradeDeskStore().getSnapshot)
   /** 右侧栏资产面板（2026-09-05 起取代底部资产抽屉）：默认展开，开关跨会话记忆。 */
   const [tradePositions, setTradePositions] = useState<Position[] | null>(null)
   const [tradeBalances, setTradeBalances] = useState<AccountBalance[] | null>(null)
@@ -276,7 +312,6 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
     if (mode === 'paper') {
       // 切换到模拟盘时，若交易台未开，自动打开方便体验
       if (!tradeDeskOpen) {
-        setTradeDeskOpen(true)
         writeTradeDeskOpen(true)
       }
     }
@@ -915,12 +950,24 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
   const displayName = (!isPlaceholderName ? rawName : (tickerName || rawName || symbol))
 
   /* ── WB-2 扫描入口（T 板操作条）：只预填 composer，不下单 ───────────────
-   *  总览快照由顶部 tab 薄壳写入 optionsOverviewStore；本透镜只读，不重复拉。 */
+   *  总览快照由顶部 tab 薄壳写入 optionsOverviewStore；本透镜只读，不重复拉。
+   *  快照缺席（没进过「期权总览」tab / 首轮未落地）不再静默 return——回落到
+   *  只带标的身份的最小 prompt（数值一律交给 Agent 现取，前端不编），并把
+   *  filling/filled/error 三态挂到按钮上，点击必有回执。 */
   const scanUnderlying = fillComposer === undefined || optionUnderlying === undefined
     ? undefined
     : (): void => {
         const cached = overviewSnap?.rows.find(item => item.underlying === optionUnderlying)
-        if (cached !== undefined) void fillComposer(cached.scanPrompt)
+        const prompt = cached !== undefined
+          ? cached.scanPrompt
+          : t('options.scan.fallbackPrompt', { symbol: optionUnderlying, name: displayName })
+        setTboardScan({ phase: 'filling' })
+        void fillComposer(prompt).then(() => {
+          setTboardScan({ phase: 'filled' })
+        }).catch((error: unknown) => {
+          // 失败原因分档：可自愈的三类只给结论，未知类把原文挂 tooltip，不静默。
+          setTboardScan({ phase: 'error', message: scanFailureText(t, describeScanFailure(error)) })
+        })
       }
 
   /** 期权合约 → Agent 下单请求文案（dry-run 优先；ETF ↔ 期权互联在客户端即打通）。
@@ -1129,12 +1176,7 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
             className={css.pickerButton}
             data-active={tradeDeskOpen ? 'true' : undefined}
             aria-pressed={tradeDeskOpen}
-            onClick={() => {
-              setTradeDeskOpen((open) => {
-                writeTradeDeskOpen(!open)
-                return !open
-              })
-            }}
+            onClick={() => { toggleTradeDesk() }}
           >
             {t('trade.toggle')}
           </button>
@@ -1390,10 +1432,7 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
                   }}
                   onToggleTradeMode={handleToggleTradeMode}
                   onSubmit={onSubmitGuiOrder}
-                  onClose={() => {
-                    setTradeDeskOpen(false)
-                    writeTradeDeskOpen(false)
-                  }}
+                  onClose={() => { writeTradeDeskOpen(false) }}
                 />
               )}
             </div>
@@ -1417,8 +1456,10 @@ export function QuoteStage({ t, useSelection, useChart, toggleIndicator, setIndi
             forecast={optionForecast}
             onBackToOverview={() => { stageActions.current.switchToOverview?.() }}
             onViewSpot={() => { setLens('spot'); setStageTab('chart') }}
-            onTradeSpot={() => { setTradeDeskOpen(true) }}
+            onTradeSpot={() => { writeTradeDeskOpen(true) }}
             {...(scanUnderlying !== undefined ? { onScanUnderlying: scanUnderlying } : {})}
+            scanPhase={tboardScan?.phase ?? null}
+            {...(tboardScan?.message !== undefined ? { scanMessage: tboardScan.message } : {})}
             {...(sendLegToAgent !== undefined ? { onSendLegToAgent: sendLegToAgent } : {})}
           />
         </div>
@@ -1775,17 +1816,21 @@ function writeOrderbookOpen(open: boolean): void {
   } catch { /* 忽略 */ }
 }
 
-/** 交易台开关记忆（issue #40；默认关——安全敏感面）。 */
-function readTradeDeskOpen(): boolean {
+/** 交易台开关记忆已迁至 trade-desk-store（P1-2，2026-09-12）：tab 条全局入口与本组件
+ *  共用同一单例与同一持久化键。 */
+
+/** 行情子页签记忆（P1-3；坏值/隐私模式回落 'chart'）。 */
+function readStageTab(): StageTab {
   try {
-    return localStorage.getItem(TRADE_DESK_OPEN_KEY) === '1'
+    const raw = localStorage.getItem(STAGE_TAB_KEY)
+    if (raw !== null && (STAGE_TABS as readonly string[]).includes(raw)) return raw as StageTab
   } catch { /* 忽略 */ }
-  return false
+  return 'chart'
 }
 
-function writeTradeDeskOpen(open: boolean): void {
+function writeStageTab(tab: StageTab): void {
   try {
-    localStorage.setItem(TRADE_DESK_OPEN_KEY, open ? '1' : '0')
+    localStorage.setItem(STAGE_TAB_KEY, tab)
   } catch { /* 忽略 */ }
 }
 

@@ -7,7 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { MarketDataService, NewsAggregator } from '@dshtrading/api'
-import { OPTIONS_DATA_ENV, shanghaiCalendarDate } from '@dshtrading/kit-cn'
+import { OPTIONS_DATA_ENV, resolvePredictionAutoAsOf, shanghaiCalendarDate } from '@dshtrading/kit-cn'
 import { createMemoryHoldingsStore } from '@dshtrading/holdings'
 import { createMemoryCustomStrategyStore } from '@dshtrading/strategies'
 import {
@@ -1186,24 +1186,37 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
     )).rejects.toMatchObject({ status: 400 })
   })
 
-  it('GET /options/overview：聚合现货/日K/底仓/持仓，默认 strength 排序；SYNTH 不进表', async () => {
+  it('GET /options/overview：只读 overview.json + 底仓/持仓，不打行情/IV 网关；SYNTH 不进表', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-ov-file-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const getTicker = vi.fn(async (symbol: string) => ({ symbol, price: 9, timestamp: 1 }))
+    const getImpliedVol = vi.fn(async () => {
+      throw new Error('overview must not hit implied_vol')
+    })
     const getVolAnalytics = vi.fn(async () => ({ iv_percentile: { w252: 0.8 } }))
-    const klines = Array.from({ length: 20 }, (_, i) => ({
-      openTime: 1 + i,
-      open: 2 + i * 0.01,
-      high: 2.1 + i * 0.01,
-      low: 1.9,
-      close: 2 + i * 0.02,
-      volume: i < 15 ? 100 : 40,
-      closeTime: Date.UTC(2026, 8, i + 1, 7),
-    }))
+    await writeFile(path.join(dir, 'overview.json'), `${JSON.stringify({
+      asOf: '2026-09-12T03:00:00.000Z',
+      rows: [{
+        underlying: '510050',
+        name: '华夏上证50ETF',
+        exchange: 'SSE',
+        last: 2.91,
+        atmIv: 0.2,
+        ivPercentile: 0.8,
+        days: [
+          { date: '2026-09-08', changePct: 0.1, volumeSurge: false },
+          { date: '2026-09-09', changePct: 0.2, volumeSurge: false },
+          { date: '2026-09-10', changePct: 0.3, volumeSurge: false },
+          { date: '2026-09-11', changePct: 0.4, volumeSurge: false },
+          { date: '2026-09-12', changePct: 0.5, volumeSurge: true },
+        ],
+      }],
+    })}\n`, 'utf8')
     const base = linkedHost({ holdings: [{ symbol: '510050.SH', size: 20000 }] })
     const bridge = new TradingBridge({
       ...base,
-      getMarketService: () => fakeService({
-        getTicker: async (symbol) => ({ symbol, price: 2.91, changePercent: 0.4, timestamp: 1 }),
-        getKlines: async () => klines,
-      }),
+      getMarketService: () => fakeService({ getTicker }),
       getCnOptions: () => ({
         ...base.getCnOptions!(),
         listUnderlyings: async () => [
@@ -1211,6 +1224,7 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
           { underlying: '159915', exchange: 'SZSE', name: '创业板ETF易方达', multiplier: 10000, tickSize: 0.0001, quotesSource: 'szse_static_only' },
           { underlying: '910050', exchange: 'SYNTH', name: 'synth50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'synth' },
         ],
+        getImpliedVol,
         getVolAnalytics,
       }),
       getCnOptionsTrade: () => ({
@@ -1221,31 +1235,80 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
         ]),
       }),
     })
-    const { payload } = await dispatchBridgeRequest(bridge, 'GET', '/options/overview', new URLSearchParams())
-    const overview = (payload as { overview: { rows: Array<Record<string, unknown>>; sort: string; scanAllPrompt: string } }).overview
-    expect(overview.sort).toBe('strength')
-    expect(overview.rows.map((row) => row.underlying)).toEqual(['510050', '159915'])
-    expect(overview.rows[0]).toMatchObject({
-      last: 2.91,
-      heldQty: 20000,
-      optionQty: 2,
-      spotSymbol: '510050.SH',
-    })
-    expect(overview.rows[0]?.days).toHaveLength(5)
-    expect(overview.rows[0]?.scanPrompt).toContain('not investment advice')
-    expect(overview.rows[0]?.atmIv).toBeCloseTo(0.2, 5)
-    expect(overview.rows[0]?.ivRegime).toBe('unknown')
-    expect(overview.scanAllPrompt).toContain('510050')
-    expect(getVolAnalytics).not.toHaveBeenCalled()
+    try {
+      const { payload } = await dispatchBridgeRequest(bridge, 'GET', '/options/overview', new URLSearchParams())
+      const overview = (payload as { overview: { rows: Array<Record<string, unknown>>; sort: string; scanAllPrompt: string; asOf: string } }).overview
+      expect(overview.sort).toBe('strength')
+      expect(overview.asOf).toBe('2026-09-12T03:00:00.000Z')
+      expect(overview.rows.map((row) => row.underlying)).toEqual(['510050', '159915'])
+      expect(overview.rows[0]).toMatchObject({
+        last: 2.91,
+        heldQty: 20000,
+        optionQty: 2,
+        spotSymbol: '510050.SH',
+        atmIv: 0.2,
+        ivPercentile: 0.8,
+        ivRegime: 'rich',
+      })
+      expect(overview.rows[0]?.days).toHaveLength(5)
+      expect(overview.rows[1]).toMatchObject({ underlying: '159915', days: [] })
+      expect(overview.rows[0]?.scanPrompt).toContain('not investment advice')
+      expect(overview.scanAllPrompt).toContain('510050')
+      expect(getTicker).not.toHaveBeenCalled()
+      expect(getImpliedVol).not.toHaveBeenCalled()
+      expect(getVolAnalytics).not.toHaveBeenCalled()
 
-    const withIv = await dispatchBridgeRequest(
-      bridge, 'GET', '/options/overview', new URLSearchParams({ includeIv: '1', sort: 'iv' }),
-    )
-    const ivOverview = (withIv.payload as { overview: { sort: string; rows: Array<{ ivPercentile?: number; ivRegime?: string }> } }).overview
-    expect(ivOverview.sort).toBe('iv')
-    expect(ivOverview.rows[0]?.ivPercentile).toBe(0.8)
-    expect(ivOverview.rows[0]?.ivRegime).toBe('rich')
-    expect(getVolAnalytics).toHaveBeenCalled()
+      const withIv = await dispatchBridgeRequest(
+        bridge, 'GET', '/options/overview', new URLSearchParams({ includeIv: '1', sort: 'iv' }),
+      )
+      const ivOverview = (withIv.payload as { overview: { sort: string; rows: Array<{ ivPercentile?: number; ivRegime?: string }> } }).overview
+      expect(ivOverview.sort).toBe('iv')
+      expect(ivOverview.rows[0]?.ivPercentile).toBe(0.8)
+      expect(getVolAnalytics).not.toHaveBeenCalled()
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
+  })
+
+  it('snapshotBarFacts：活牌采集后覆写 overview.json', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-ov-facts-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const klines = Array.from({ length: 20 }, (_, i) => ({
+      openTime: 1 + i,
+      open: 2 + i * 0.01,
+      high: 2.1 + i * 0.01,
+      low: 1.9,
+      close: 2 + i * 0.02,
+      volume: i < 15 ? 100 : 40,
+      closeTime: Date.UTC(2026, 8, i + 1, 7),
+    }))
+    const base = linkedHost({})
+    const bridge = new TradingBridge({
+      ...base,
+      getMarketService: () => fakeService({
+        getTicker: async (symbol) => ({ symbol, price: 2.91, changePercent: 0.4, timestamp: 1 }),
+        getKlines: async () => klines,
+      }),
+      getCnOptions: () => ({
+        ...base.getCnOptions!(),
+        listUnderlyings: async () => [
+          { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
+        ],
+      }),
+    })
+    try {
+      const facts = await bridge.snapshotBarFacts(['510050'])
+      expect(facts[0]?.underlying).toBe('510050')
+      const raw = JSON.parse(await readFile(path.join(dir, 'overview.json'), 'utf8')) as {
+        rows: Array<{ underlying: string; last?: number }>
+      }
+      expect(raw.rows[0]).toMatchObject({ underlying: '510050', last: 2.91 })
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
   })
 
   it('GET /options/overview：挂当天最新推荐到 strategy；无账本不写该键', async () => {
@@ -1574,6 +1637,75 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
         expect(JSON.parse(await readFile(path.join(dir, 'paper', 'positions.json'), 'utf8'))).toEqual([])
       })
       expect(placeOptionOrder).not.toHaveBeenCalled()
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
+  })
+})
+
+describe('TradingBridge 预测 T-1 自动回填', () => {
+  it('GET /options/predictions/track 先按 T-1 回填；手工 outcome 不覆盖', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-pred-bridge-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const today = shanghaiCalendarDate(Date.now())
+    const tMinus1 = resolvePredictionAutoAsOf(today)
+    const tMinus2 = resolvePredictionAutoAsOf(tMinus1)
+    await writeFile(path.join(dir, 'predictions.jsonl'), `${JSON.stringify({
+      id: `510050-${tMinus1}`,
+      underlying: '510050',
+      asOfDate: tMinus2,
+      targetDate: tMinus1,
+      marketExpectation: 'small_up',
+      volExpectation: 'up',
+      confidence: 0.5,
+      factors: [],
+      thesis: '待回填',
+      evaluationMethod: '默认',
+      createdAt: `${tMinus2}T08:00:00.000Z`,
+    })}\n${JSON.stringify({
+      id: `510300-${tMinus1}`,
+      underlying: '510300',
+      asOfDate: tMinus2,
+      targetDate: tMinus1,
+      marketExpectation: 'consolidation',
+      volExpectation: 'down',
+      confidence: 0.5,
+      factors: [],
+      thesis: '手工',
+      evaluationMethod: '默认',
+      createdAt: `${tMinus2}T08:00:00.000Z`,
+      outcome: {
+        realizedMarket: 'consolidation',
+        realizedVol: 'down',
+        marketReturnPct: 0.1,
+        volChange: -0.01,
+        hitMarket: true,
+        hitVol: true,
+        score: 1,
+        retrospect: '手工改动',
+        knowledgeNotes: '',
+        settledAt: `${tMinus1}T08:00:00.000Z`,
+      },
+    })}\n`, 'utf8')
+    const prevClose = Date.parse(`${tMinus2}T15:00:00+08:00`)
+    const dayClose = Date.parse(`${tMinus1}T15:00:00+08:00`)
+    const bridge = new TradingBridge(fakeHost({
+      tradingCnMarketData: fakeService({
+        getKlines: async () => [
+          { openTime: prevClose - 1, open: 3, high: 3, low: 3, close: 3, volume: 100, closeTime: prevClose },
+          { openTime: dayClose - 1, open: 3, high: 3.03, low: 3, close: 3.024, volume: 110, closeTime: dayClose },
+        ],
+      }),
+    }))
+    try {
+      const { payload } = await dispatchBridgeRequest(
+        bridge, 'GET', '/options/predictions/track', new URLSearchParams(),
+      )
+      const track = (payload as { track: { predictions: Array<{ id: string; outcome?: { realizedMarket: string; retrospect?: string } }> } }).track
+      expect(track.predictions.find((row) => row.id === `510050-${tMinus1}`)?.outcome?.realizedMarket).toBe('small_up')
+      expect(track.predictions.find((row) => row.id === `510300-${tMinus1}`)?.outcome?.retrospect).toBe('手工改动')
     } finally {
       if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
       else process.env[OPTIONS_DATA_ENV] = prev

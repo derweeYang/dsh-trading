@@ -54,6 +54,7 @@ export const OPTION_BAR_AGENT_PROMPT = [
   'Read knowledge_search first (tag ETF期权). Then options overview (sort=strength, includeIv=1) and GET /options/cycles/loop (or cn_get_option_intraday_box).',
   'Templates must come from forecast.candidates. Prefill legs via cn_get_option_strategy only.',
   'Use only the ContextPacket. Do not recompute IV, HV, boxes, or volume ratios. Quote ivRegime / divergence / invalidIf verbatim. If ivRegime=unknown, do not claim percentile.',
+  'If a row has dayPrior, cite it as a same-day directional prior (not a box). Templates still come from candidates. dayPrior is not a hard gate and must not invent an opportunity.',
   'First call cn_put_option_bar_recommendation with one JSON object for this bucket (opportunity closed set + edge + logic + playbook).',
   'Then reply in six sections: opportunity+edge; regime thesis; why this template; strike vs box; invalidIf (copy JSON); playbook or no_trade.',
   'If the previous bucket has a score, open with one sentence: whether the last opportunity was falsified.',
@@ -133,6 +134,39 @@ export function packetsPath(root: string, date: string): string {
 
 export function ivDailyPath(root: string): string {
   return path.join(root, 'iv-daily.jsonl')
+}
+
+/** 总览慢数据快照：5 分钟桶 `snapshotBarFacts` 覆写；GET /options/overview 只读此文件。 */
+export function overviewSnapshotPath(root: string): string {
+  return path.join(root, 'overview.json')
+}
+
+export interface OptionOverviewSnapshotFile {
+  readonly asOf: string
+  readonly rows: readonly unknown[]
+}
+
+export async function loadOverviewSnapshot(root: string): Promise<OptionOverviewSnapshotFile | undefined> {
+  try {
+    const text = await readFile(overviewSnapshotPath(root), 'utf8')
+    const parsed = JSON.parse(text) as unknown
+    if (parsed === null || typeof parsed !== 'object') return undefined
+    const rec = parsed as { asOf?: unknown; rows?: unknown }
+    if (typeof rec.asOf !== 'string' || rec.asOf.trim() === '' || !Array.isArray(rec.rows)) return undefined
+    return { asOf: rec.asOf, rows: rec.rows }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+export async function writeOverviewSnapshot(
+  root: string,
+  snapshot: OptionOverviewSnapshotFile,
+): Promise<void> {
+  const file = overviewSnapshotPath(root)
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, `${JSON.stringify({ asOf: snapshot.asOf, rows: snapshot.rows })}\n`, 'utf8')
 }
 
 export const IV_PERCENTILE_WINDOW = 60
@@ -352,6 +386,7 @@ export function buildBarContextPacket(input: {
       ...(facts?.volumeRatio === undefined ? {} : { volumeRatio: facts.volumeRatio }),
       ...(facts?.divergence === undefined ? {} : { divergence: facts.divergence }),
       ...(facts?.heldQty === undefined ? {} : { heldQty: facts.heldQty }),
+      ...(facts?.dayPrior === undefined ? {} : { dayPrior: facts.dayPrior }),
     })
   }
   return { bucketStart: input.bucketStart, asOf: input.asOf, rows }

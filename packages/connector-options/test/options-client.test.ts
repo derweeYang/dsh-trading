@@ -41,9 +41,12 @@ describe('normalizeCnUnderlying', () => {
 
   it('静态名册覆盖沪深注册标的', () => {
     expect(isKnownUnderlying('510050')).toBe(true)
-    expect(isKnownUnderlying('510300')).toBe(true)
+    expect(isKnownUnderlying('588080')).toBe(true)
     expect(isKnownUnderlying('159915')).toBe(true)
     expect(isKnownUnderlying('910050')).toBe(true)
+    // 2026-09-13 起 510300/510500 移出标的名册
+    expect(isKnownUnderlying('510300')).toBe(false)
+    expect(isKnownUnderlying('510500')).toBe(false)
     expect(isKnownUnderlying('600519')).toBe(false)
   })
 

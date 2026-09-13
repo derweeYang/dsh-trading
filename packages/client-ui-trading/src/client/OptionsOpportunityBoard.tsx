@@ -27,6 +27,7 @@ import {
   sortByOpportunity,
   type InsightTranslate,
 } from './option-insight.ts'
+import { scanLabelKey, scanPhaseOf, type ScanFeedback, type ScanPhase } from './scan-feedback.ts'
 import { IV_REGIME_KEY } from './option-vocabulary.ts'
 import css from './options-overview.module.css'
 
@@ -42,6 +43,11 @@ export interface OptionsOpportunityBoardProps {
   onPickRow: (row: OptionOverviewRow) => void
   /** 问 AI：预填 composer（未注入 fillComposer 时不传 → 按钮不渲染）。 */
   onAskAi?: ((row: OptionOverviewRow) => void) | undefined
+  /**
+   * 扫描结果三态（2026-09-11）：只预填不发送，成功时页面本无别的变化——
+   * 不给回执就会被当成「点了没反应」。按 underlying 取本卡的状态。
+   */
+  scanFeedback?: ScanFeedback | null | undefined
   /** 折叠阈值：超过该数只展示前 N 张，其余折叠。 */
   visibleLimit?: number
 }
@@ -94,13 +100,14 @@ function Metric({ label, value, color, warn }: {
   )
 }
 
-function Card({ row, rank, t, colorMode, onPickRow, onAskAi }: {
+function Card({ row, rank, t, colorMode, onPickRow, onAskAi, askAiPhase }: {
   row: OptionOverviewRow
   rank: number | undefined
   t: OpportunityTranslate
   colorMode: ColorMode
   onPickRow: (row: OptionOverviewRow) => void
   onAskAi: ((row: OptionOverviewRow) => void) | undefined
+  askAiPhase: ScanPhase | null
 }): React.JSX.Element {
   const risks = deriveRisks(row)
   /** WB-10：宿主制度标签（strategy 投影优先，无 packet 回落行上）；缺席则不出这一项。 */
@@ -242,9 +249,11 @@ function Card({ row, rank, t, colorMode, onPickRow, onAskAi }: {
           <button
             type="button"
             className={css.ghostBtn}
+            data-scan-state={askAiPhase ?? undefined}
+            disabled={askAiPhase === 'filling'}
             onClick={(event) => { event.stopPropagation(); onAskAi(row) }}
           >
-            {t('options.overview.card.askAi')}
+            {t(scanLabelKey('options.overview.card.askAi', askAiPhase))}
           </button>
         )}
       </div>
@@ -253,7 +262,7 @@ function Card({ row, rank, t, colorMode, onPickRow, onAskAi }: {
 }
 
 export function OptionsOpportunityBoard({
-  t, colorMode, rows, ranks, onPickRow, onAskAi, visibleLimit = 3,
+  t, colorMode, rows, ranks, onPickRow, onAskAi, scanFeedback, visibleLimit = 3,
 }: OptionsOpportunityBoardProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const ordered = sortByOpportunity(rows)
@@ -278,6 +287,7 @@ export function OptionsOpportunityBoard({
             colorMode={colorMode}
             onPickRow={onPickRow}
             onAskAi={onAskAi}
+            askAiPhase={scanPhaseOf(scanFeedback, row.underlying)}
           />
         ))}
       </div>

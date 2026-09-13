@@ -187,6 +187,46 @@
   color: #d92d20;
 }
 
+/* 可用性禁用态（P0-1）：入口在服务整个缺席时不可点，视觉上明确「不是忘了点、是点不了」。 */
+.button[data-unavailable='true'],
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.button[data-unavailable='true']:hover,
+.button:disabled:hover {
+  background: transparent;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+.button[data-unavailable='true']:hover svg,
+.button:disabled:hover svg {
+  transform: none;
+}
+
+/* 只读降级横幅（P0-1）：amber 提示底 + 辅助小字，压在不抢任务列表的位置。 */
+.tasksReadonly {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 10px;
+  padding: 7px 9px;
+  border-radius: var(--dsw-futu-radius-md, 6px);
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.tasksReadonlyReason {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  word-break: break-word;
+}
+
 .tasksEmpty {
   text-align: center;
   padding: 28px 8px;

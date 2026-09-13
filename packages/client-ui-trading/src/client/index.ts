@@ -20,11 +20,13 @@ import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { IndicatorRegistry } from '@dshtrading/indicators'
 import type { Instrument, MarketId } from './types.ts'
 import { validateCustomIndicatorAsync } from '@dshtrading/indicators'
-import { createSelectionStore, createWatchlistStore } from './store.ts'
+import { createWatchlistStore, selectionStore } from './store.ts'
 import { createChartStateStore } from './chart-state.ts'
 import { indicators, markCustomIndicator, unmarkCustomIndicator } from './indicator-registry.ts'
 import { stageViews } from './stage-views.ts'
 import { OptionsOverviewMiddleView } from './OptionsOverviewMiddleView.tsx'
+import { OptionsPredictionMiddleView } from './OptionsPredictionMiddleView.tsx'
+import { OptionsStageMiddleView } from './OptionsStageMiddleView.tsx'
 import { createTradingBridgeService } from './api.ts'
 import { fillComposerWithQuote, guardComposerTarget, type FillComposerFn, type ConversationDraftFace } from './fill-composer.ts'
 import { OrderCard, WatchlistChipCard } from './toolview.tsx'
@@ -34,7 +36,8 @@ import { HomeHistory } from './HomeHistory.tsx'
 import { SessionRail } from './SessionRail.tsx'
 import { ChatResizeHandle } from './ChatResizeHandle.tsx'
 import { foldStore, marketFoldStore } from './fold-store.ts'
-import { deleteCustomIndicator, fetchCustomIndicators, subscribeTradingEvents } from './api.ts'
+import { deleteCustomIndicator, fetchCustomIndicators, OPEN_SETTINGS_EVENT, requestOpenSettings, subscribeTradingEvents } from './api.ts'
+import { openSettingsViaStableChannels } from './open-settings.ts'
 import { wireHostWatchlistSync } from './host-watchlist-sync.ts'
 import { wireHostChartSync } from './host-chart-sync.ts'
 import './tokens.css'
@@ -66,7 +69,7 @@ export function apply(ctx: ClientContext): void {
   ctx.locale.bind(NS)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-trading-market: dictionaries')
 
-  const selection = createSelectionStore()
+  const selection = selectionStore
   const watchlists = createWatchlistStore()
   const chart = createChartStateStore(indicators)
   const sessions = ctx.sessions as unknown as ISessions
@@ -94,14 +97,60 @@ export function apply(ctx: ClientContext): void {
     }, text, image)
   }
   fillComposer.captureTarget = () => guardComposerTarget(sessions, fillComposer)
+  /** 轻量宿主内 toast：宿主稳定入口缺失时给可见反馈（不静默失效）。 */
+  function showShellToast(message: string): void {
+    const id = 'dshtrading-shell-toast'
+    let el = document.getElementById(id)
+    if (el === null) {
+      el = document.createElement('div')
+      el.id = id
+      el.setAttribute('role', 'status')
+      el.style.cssText = [
+        'position:fixed', 'left:50%', 'bottom:24px', 'transform:translateX(-50%)',
+        'z-index:2147483647', 'max-width:80vw', 'padding:8px 14px', 'border-radius:8px',
+        'font:13px/1.5 system-ui,sans-serif', 'color:#fff', 'background:rgba(20,22,28,0.92)',
+        'box-shadow:0 4px 16px rgba(0,0,0,0.3)', 'pointer-events:none', 'opacity:0',
+        'transition:opacity .2s ease',
+      ].join(';')
+      document.body.appendChild(el)
+    }
+    el.textContent = message
+    requestAnimationFrame(() => { el !== null && (el.style.opacity = '1') })
+    window.clearTimeout((el as unknown as { _t?: number })._t)
+    ;(el as unknown as { _t?: number })._t = window.setTimeout(() => {
+      if (el !== null) el.style.opacity = '0'
+    }, 2600)
+  }
+
+  // 3.0 起设置唯一稳定入口在左侧自选面板底部（MarketDock 两态）。
+  //
+  // 打开路径按稳定性降序（P0-2，2026-09-12）：**宿主服务 → 契约 window 事件 → DOM 触发器**。
+  // 前两条是 B2 落地的稳定通道（node 半 POST /shell/open-settings 会去调宿主的
+  // settings.open / ui.openSettings；dshtrading:open-settings 是跨半登记的契约事件名）。
+  // DOM 触发器是上游仍缺 API 时的兜底——宿主 DOM 一变即失效（实测点设置反而折叠过侧栏），
+  // 故只在稳定通道全部无法处理时才走。
+  const openSettingsByDom = (): void => {
+    const selectors = [
+      "button[title*='设置'], button[title*='Settings'], button[aria-label*='设置'], button[aria-label*='Settings']", // i18n-allow: match host settings trigger by localized title (设置/Settings)
+      "div:has(> [data-shell-overlay]) > div:nth-child(1) [aria-haspopup='dialog']",
+      "[aria-haspopup='dialog']",
+    ]
+    for (const sel of selectors) {
+      const trigger = document.querySelector<HTMLElement>(sel)
+      if (trigger !== null && typeof trigger.click === 'function') {
+        trigger.click()
+        return
+      }
+    }
+    showShellToast('设置入口暂不可用，请通过宿主菜单打开') // i18n-allow: last-resort fallback toast when host settings entry is unavailable; zh-only UI
+  }
+
   const openSettings = (): void => {
-    // 官方设置触发器在退役侧栏列内（整列移出视口保持挂载）；触发器是
-    // 侧栏里唯一的 [aria-haspopup=dialog]，程序化 click 走官方打开逻辑，
-    // 弹层 position:fixed 盖满视口不受列位置影响。
-    // 3.0 起唯一入口在左侧自选面板底部（MarketDock 两态：展开底栏/折叠竖条）。
-    document
-      .querySelector<HTMLElement>("div:has(> [data-shell-overlay]) > div:nth-child(1) [aria-haspopup='dialog']")
-      ?.click()
+    void openSettingsViaStableChannels({
+      requestHost: requestOpenSettings,
+      dispatchContractEvent: () => !window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { cancelable: true })),
+      clickDomTrigger: openSettingsByDom,
+    })
   }
   const chatFolded = foldStore()
   const marketFolded = marketFoldStore()
@@ -126,6 +175,16 @@ export function apply(ctx: ClientContext): void {
   // 期权总览升格为 MiddleStage 顶部 tab（2026-09-09 redesign）：与行情/策略/知识库
   // 平级，order 10 紧跟行情。薄壳自取数，不依赖单标的上下文。
   stageViews.register({ id: 'options-overview', titleKey: 'stage.optionsOverview', order: 10, render: OptionsOverviewMiddleView })
+
+  // 期权 T+1 预测模块（2026-09-12）：盘势/波动预期 + 跟踪回溯 + 经验沉淀，与总览
+  // 平级的中栏 tab（order 11）。自取数薄壳，数据走本地 JSONL 桥缝，网关未起可用。
+  stageViews.register({ id: 'options-prediction', titleKey: 'stage.optionsPrediction', order: 11, render: OptionsPredictionMiddleView })
+
+  // 期权 T 板升格为 MiddleStage 直达 tab（2026-09-12 / P1-1）：与行情/总览/预测
+  // 平级（order 12），点 tab 即渲染 OptionsStage（原只在 QuoteStage 期权透镜内、
+  // 需先绕到总览卡片「进 T 板」）。自取数薄壳，当前标的非 7 只 ETF 期权合格标的时
+  // 给空态提示（不走 T 板）。
+  stageViews.register({ id: 'options-stage', titleKey: 'stage.optionsStage', order: 12, render: OptionsStageMiddleView })
 
   // quote 视图是 registry 的内建种子条目（stage-views.ts 工厂内写入）——tab 条
   // 从名册统一渲染，MiddleStage 对 quote 走 QuoteStage 直引面。

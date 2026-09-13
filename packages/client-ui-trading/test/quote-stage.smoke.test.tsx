@@ -29,10 +29,16 @@ vi.mock('../src/client/TvChart.tsx', () => ({
 }))
 
 import { QuoteStage } from '../src/client/QuoteStage.tsx'
-import { optionsCycleLoopStore, optionsOverviewStore } from '../src/client/stage-actions.ts'
+import {
+  consumeQuoteLensRequest,
+  optionsCycleLoopStore,
+  optionsOverviewStore,
+  requestQuoteLens,
+} from '../src/client/stage-actions.ts'
 import type { OptionCycleLoop } from '@dshtrading/api'
 import type { SelectionState } from '../src/client/store.ts'
 import type { ChartState } from '../src/client/chart-state.ts'
+import type { Instrument } from '../src/client/types.ts'
 import type { MarketLocaleKey } from '../src/client/contract.ts'
 
 /** key 直出翻译（断言用 key 而非文案，与词典解耦）。 */
@@ -49,6 +55,9 @@ afterEach(() => {
   // 共享聚合快照复位（模块级单例，跨测试污染会互相「看见」对方的 loop/overview）
   optionsCycleLoopStore.set({ loop: null, loaded: false, failure: null })
   optionsOverviewStore.set(null)
+  // 持久化偏好复位（P1-3 起 stageTab 落 localStorage；跨用例泄漏会让本用例挂载即命中
+  // 上一个用例停留的页签，多拉一次对应数据）
+  localStorage.clear()
 })
 
 /** 5 分钟闭环 fixture（redesign 后 QuoteStage 从共享 store 读，不再自己 fetch）。 */
@@ -71,6 +80,22 @@ const LOOP: OptionCycleLoop = {
 
 function quoteStageProps(symbol = '600519') {
   const selection: SelectionState = { instrument: { market: 'cn', symbol } }
+  const chart: ChartState = { instances: [] }
+  return {
+    t,
+    useSelection: <T,>(sel: (state: SelectionState) => T): T => sel(selection),
+    useChart: <T,>(sel: (state: ChartState) => T): T => sel(chart),
+    toggleIndicator: () => {},
+    setIndicatorParams: () => {},
+    setIndicatorVisible: () => {},
+    removeIndicator: () => {},
+    deleteIndicator: async () => true,
+  }
+}
+
+/** 直接控制全局选择态的 props 变体（空态 ⇄ 有标的 的分支切换用）。 */
+function quoteStagePropsFor(instrument: Instrument | null) {
+  const selection: SelectionState = { instrument }
   const chart: ChartState = { instances: [] }
   return {
     t,
@@ -271,6 +296,19 @@ describe('QuoteStage「现货 ⇄ 期权」双透镜冒烟（阶段 3 交易面�
     }))
   }
 
+  it('空态 → 有标的：hooks 数量恒定（落在 early return 之后会炸 React #310）', async () => {
+    // 2026-09-11 实测回归：T 板扫描回执照的 useState/useEffect 曾写在
+    // `if (market === undefined || symbol === undefined) return 空态` 之后，
+    // 空态切到有标的的那一刻 hook 数量变化 → React #310 → 整个中栏 slot 崩。
+    stubOptionsBridge()
+    const { container, rerender } = render(<QuoteStage {...quoteStagePropsFor(null)} />)
+    expect(container.textContent).toContain('quote.empty')
+    rerender(<QuoteStage {...quoteStagePropsFor({ market: 'cn', symbol: '510050' })} />)
+    await waitFor(() => { expect(container.textContent).toContain('510050') })
+    // 期权透镜入口也跟着回来（有标的才出现）
+    await waitFor(() => { expect(container.querySelector('[aria-label="spot or options lens"]')).toBeTruthy() })
+  })
+
   it('期权透镜落地页 = T 板（redesign：总览升格中栏顶部 tab）+ 底仓徽章 + 箱体条', async () => {
     stubOptionsBridge()
     optionsCycleLoopStore.set({ loop: LOOP, loaded: true, failure: null })
@@ -298,6 +336,39 @@ describe('QuoteStage「现货 ⇄ 期权」双透镜冒烟（阶段 3 交易面�
     // 切回现货透镜：期权透镜卸载
     fireEvent.click(getByText('lens.spot'))
     await waitFor(() => { expect(container.querySelector('[data-dshtrading-options-stage]')).toBeNull() })
+  })
+
+  it('「进 T 板」落期权透镜（2026-09-11）：请求在挂载前写入 → 直接落 T 板，且消费即清', async () => {
+    stubOptionsBridge()
+    optionsCycleLoopStore.set({ loop: LOOP, loaded: true, failure: null })
+    // 总览点卡：先写一次性透镜请求，再切视图（QuoteStage 此刻尚未挂载）
+    requestQuoteLens('options')
+    const { container, queryByText } = render(<QuoteStage {...quoteStageProps('510050')} />)
+    // 不点「期权」页签，落地页就已经是 T 板（合约面），不是标的 K 线
+    await waitFor(() => { expect(container.querySelector('[data-dshtrading-options-stage]')).toBeTruthy() })
+    expect(queryByText('quote.tab.chart')).toBeNull()
+    // 一次性：消费即清，重新挂载不会复活陈旧意图
+    expect(consumeQuoteLensRequest()).toBeNull()
+  })
+
+  it('T 板「AI 扫描」快照缺席不再静默空操作（2026-09-11）：回落最小 prompt + 回执照', async () => {
+    stubOptionsBridge()
+    optionsCycleLoopStore.set({ loop: LOOP, loaded: true, failure: null })
+    // 未进过「期权总览」→ optionsOverviewStore 仍为 null（快照缺席）
+    optionsOverviewStore.set(null)
+    const fillComposer = vi.fn(async () => {})
+    const { getByText, queryByText } = render(
+      <QuoteStage {...quoteStageProps('510050')} fillComposer={fillComposer} />,
+    )
+    fireEvent.click(await waitFor(() => getByText('lens.options')))
+    await waitFor(() => { expect(queryByText('options.overview.scanRow')).toBeTruthy() })
+    fireEvent.click(getByText('options.overview.scanRow'))
+    // 过去这条分支什么都不做（快照缺席 → return）——现在必须真的预填
+    await waitFor(() => { expect(fillComposer).toHaveBeenCalledTimes(1) })
+    // 回落 prompt 只带标的身份（数值交给 Agent 现取），不是 scanPrompt
+    expect(fillComposer.mock.calls[0]?.[0]).toContain('options.scan.fallbackPrompt')
+    // 回执照：成功态换标签
+    await waitFor(() => { expect(getByText('options.scan.filled')).toBeTruthy() })
   })
 
   it('非注册标的（个股）：透镜不渲染（redesign：总览走中栏顶部 tab，不依赖标的上下文）', async () => {

@@ -22,8 +22,17 @@ import { holdingsPanelStore, setHoldingsPanelOpen } from './holdings-store.ts'
 import { IconClock, IconFoldPanel, IconNewSession, IconWallet } from './icons.tsx'
 import { ScheduledTasksPanel } from './ScheduledTasksPanel.tsx'
 import { HoldingsPanel } from './HoldingsPanel.tsx'
+import { fetchTasksAvailability, type TasksAvailability } from './tasks-api.ts'
+import { usePoll } from './usePoll.ts'
 import type { FillComposerFn } from './fill-composer.ts'
 import css from './session-rail.module.css'
+
+/**
+ * 可用性探测周期（P0-1）：只在定时任务面板**收起**时跑——面板打开时它自己带
+ * reload 轮询，这里再探一次是重复请求。锁冲突可能由另一个宿主随时释放/获取，
+ * 30s 足够跟上，又不会给本地桥添负担。
+ */
+const TASKS_AVAILABILITY_POLL_MS = 30_000
 
 export interface SessionRailInjected {
   startNewSession(): void
@@ -68,6 +77,25 @@ export function SessionRail({ t, useFolded, startNewSession, toggleFold, openSes
     if (holdingsOpen) setTasksOpen(false)
   }, [holdingsOpen])
 
+  /**
+   * 定时任务可用性（P0-1）：`null` = 未知（**未探测到 / 探测失败**）。
+   *
+   * 未知一律按可用处理（fail-open）——把入口禁掉比让用户开出一个空面板更糟；探测失败
+   * 通常意味着旧 node 半没有这条路由，不是服务真的不可用。
+   */
+  const [tasksAvailability, setTasksAvailability] = useState<TasksAvailability | null>(null)
+
+  usePoll(async () => {
+    if (tasksOpen) return
+    try {
+      setTasksAvailability(await fetchTasksAvailability())
+    } catch {
+      setTasksAvailability(null)
+    }
+  }, TASKS_AVAILABILITY_POLL_MS, [tasksOpen])
+
+  const tasksUnavailable = tasksAvailability !== null && !tasksAvailability.available
+
   const toggleTasks = (next: boolean): void => {
     setTasksOpen(next)
     if (next) setHoldingsPanelOpen(false)
@@ -97,12 +125,16 @@ export function SessionRail({ t, useFolded, startNewSession, toggleFold, openSes
       {/* 功能页签扩展位：分隔线下方（注释见 2.9 定稿）；激活时与对话列同容器
           切换（见文件头注），复用 .button 样式保持竖条节奏。 */}
       <div className={css.divider} aria-hidden="true" />
+      {/* 服务整个不在时禁用入口 + 用 title 说明原因（P0-1）：原先按钮永远可点，
+          点开却是一句「定时任务服务不可用」的红字——把失败提前到入口上。 */}
       <button
         type="button"
         className={css.button}
         aria-pressed={tasksOpen}
-        aria-label={t('tasks.open')}
-        title={t('tasks.open')}
+        aria-label={tasksUnavailable ? t('tasks.unavailable') : t('tasks.open')}
+        title={tasksUnavailable ? t('tasks.unavailable') : t('tasks.open')}
+        data-unavailable={tasksUnavailable ? 'true' : undefined}
+        disabled={tasksUnavailable}
         onClick={() => { toggleTasks(!tasksOpen) }}
       >
         <IconClock size={16} />

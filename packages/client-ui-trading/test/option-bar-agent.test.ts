@@ -152,6 +152,12 @@ describe('OptionBarAgentHost', () => {
         volumeRatio: 0.8,
         divergence: 'weak_rally',
         atmIv: 0.21,
+        dayPrior: {
+          targetDate: '2026-09-08',
+          marketExpectation: 'small_up',
+          volExpectation: 'up',
+          confidence: 0.58,
+        },
       }],
       runner: () => ({
         launch: async (input: { prompt: string }) => {
@@ -203,6 +209,9 @@ describe('OptionBarAgentHost', () => {
     expect(prompt).toContain('"ivRegime":"unknown"')
     expect(prompt).toContain('"volumeRatio":0.8')
     expect(prompt).not.toContain('"volumeRatio":2.2')
+    expect(prompt).toContain('dayPrior')
+    expect(prompt).toContain('small_up')
+    expect(prompt).toContain('not a hard gate')
     const recs = await readJsonl<OptionBarRecommendation>(recommendationsPath(dir, '2026-09-08'))
     expect(recs).toEqual([])
     const packets = await readJsonl(path.join(dir, 'packets', '2026-09-08.jsonl'))

@@ -163,13 +163,15 @@ def test_batch_all_returns_every_registered_underlying(tmp_path, monkeypatch):
     codes = [item["underlying"] for item in result["underlyings"]]
     assert "510050" in codes
     assert "159922" in codes
-    assert result["rows"] == len(result["underlyings"]) >= 9
+    # 2026-09-13 起 510300/510500 移出名册：akshare 注册标的 9 → 7
+    assert "510300" not in codes
+    assert result["rows"] == len(result["underlyings"]) >= 7
     assert result["failures"] == []
 
 
 def test_batch_partial_failure_keeps_successes(tmp_path, monkeypatch):
     def fake_fetch(underlying: str, adjust: str) -> pd.DataFrame:
-        if underlying == "510300":
+        if underlying == "588000":
             raise OptionsError("NETWORK", "eastmoney timed out")
         return _hist_frame()
 
@@ -180,8 +182,7 @@ def test_batch_partial_failure_keeps_successes(tmp_path, monkeypatch):
     )
     assert any(item["underlying"] == "510050" for item in result["underlyings"])
     assert any(
-        fail["underlying"] == "510300" and fail["code"] == "NETWORK"
-        for fail in result["failures"]
+        fail["underlying"] == "588000" and fail["code"] == "NETWORK" for fail in result["failures"]
     )
     assert result["rows"] == len(result["underlyings"])
 

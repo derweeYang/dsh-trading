@@ -17,11 +17,11 @@
 | GET | `/dshtrading/api/options/chain?underlying=&expiryMonth=&source=` | T 型报价（阶段 4 起桥侧回填 `spot`） |
 | GET | `/dshtrading/api/options/implied-vol?underlying=&expiryMonth=&rate=&source=&priceField=` | 链截面 IV |
 | GET | `/dshtrading/api/options/vol-analytics?underlying=&expiryMonths=&asOf=&rate=&dividendYield=&source=` | 波动率分析（期限结构/skew/IV 分位/HV，透传） |
-| GET | `/dshtrading/api/options/overview?source=&sort=strength\|iv\|holdings&includeIv=0\|1` | 九标的总览（C1：现货/T-5/底仓/持仓聚合；`includeIv=1` 才打网关；行带 `ivRegime`） |
+| GET | `/dshtrading/api/options/overview?source=&sort=strength\|iv\|holdings&includeIv=0\|1` | 七标的总览（C1：读 `overview.json` + 账本；不打活牌；`includeIv` 仅兼容查询串） |
 | GET | `/dshtrading/api/options/bar-packet` | 当天最新 ContextPacket（定时桶宿主打标；无文件则只有 `{ ok:true }`） |
 | GET | `/dshtrading/api/options/intraday-box?underlying=&horizon=5&asOf=` | 1 分钟 → 5 分钟箱体（L2；现货 1m K，不打期权网关） |
 | GET | `/dshtrading/api/options/cycles?underlying=&limit=` | 5 分钟闭环历史（先 forecast，下一桶补 score） |
-| GET | `/dshtrading/api/options/cycles/loop` | 九标的最新周期 + 命中率（页面可视化 SSOT） |
+| GET | `/dshtrading/api/options/cycles/loop` | 七标的最新周期 + 命中率（页面可视化 SSOT） |
 | GET | `/dshtrading/api/options/paper/account` | 本地纸账户、持仓与按最新价计算的权益 |
 | GET | `/dshtrading/api/options/paper/fills?limit=` | 当日纸账户成交（默认 48 条，最新在前） |
 | POST | `/dshtrading/api/options/cycles/tick` | 对齐当前上海 5 分钟桶（幂等；宿主 30s 心跳已在跑） |
@@ -120,7 +120,7 @@ GET /options/vol-analytics?underlying=510050&expiryMonths=2609,2612&rate=0.02&so
   `iv_percentile`；显示前对缺键容错。
 - 显式给出但非法的数值（如 `rate=abc`）→ 400，不静默换默认值。
 
-### overview（九标的总览，C1/C2）
+### overview（七标的总览，C1/C2）
 
 ```json
 GET /options/overview?sort=strength&includeIv=0
@@ -160,15 +160,15 @@ GET /options/overview?sort=strength&includeIv=0
 }
 ```
 
-- 名册来自 `listUnderlyings`；**SYNTH 行不进表**。现货 / 日 K 走 `tradingCnMarketData`，
-  单行失败键缺席，不整页失败。未挂 `connector-options` → `TRADING_NOT_IMPLEMENTED`。
+- 名册来自 `listUnderlyings`；**SYNTH 行不进表**。量价 / ATM IV 读
+  `data/options/overview.json`（5 分钟桶 `snapshotBarFacts` 覆写）；无快照则
+  `days=[]`、行情键缺席，不整页失败。未挂 `connector-options` → `TRADING_NOT_IMPLEMENTED`。
 - `sort`：`strength`（默认，5 日动量 × 量能比）、`iv`（`ivPercentile`，缺席回落 `atmIv`）、`holdings`
   （`heldQty` 再 `optionQty`）。
-- 默认回填近月 `atmIv`（`implied_vol`，进程内 5 分钟缓存）；`includeIv=1` 才打 `vol_analytics` 分位。
+- `atmIv` / `days` / `last` 来自快照；`ivPercentile` 来自快照或 `iv-daily.jsonl` 本机分位。
+  GET 不打 `implied_vol` / `vol_analytics` / ticker / 日 K。`includeIv` 查询参数保留兼容，不再触发网关。
   同行写 `ivRegime`（近/次月 ATM ≥ 1.15 → `event_front`；否则分位 ≥0.8 `rich` / ≤0.2 `cheap`；否则 `atmIv` 对 `hv20`）。
-  `nextAtmIv` 为次月 ATM。`hv20` 来自近 21 根日 K。  `iv-daily.jsonl` 优先从已落盘 packets 回填；历史空洞用 `replay_atm_iv`（iquant 合约日线 + 本库 BSM，`scripts/seed-iv-daily.mjs`）补缺失的 date+underlying，已有行不覆盖。活牌 `implied_vol` 仍拒绝 asOf。满 60 日后补本机分位。
-  **不要把 `atmIv` 当成分位。** 回放覆盖受「清单近月 + maxTermDays」限制，摘牌月补不回来。任一路失败该行键缺席，不整页失败。
-  盘后标的现货走日 K 收盘（与 iquant `ticker` 同一回落），合约价走 T 板已有的日 K 回落。
+  **不要把 `atmIv` 当成分位。**
 - `days` 最多 5 格：`changePct` 做色深，`volumeSurge`（当日量 / 5 日均量 > 1.5）做边框。
 - `scanPrompt` / `scanAllPrompt` 给 C2：`fillComposer` 原样预填。文案含
   「technical analysis / not investment advice / do not place live orders」。

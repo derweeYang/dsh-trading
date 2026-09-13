@@ -14,7 +14,7 @@
  * - Issue #24：提供 /knowledge/cards 端点（GET），供前端读取沉淀的知识卡片。
  * - Issue #65：提供 /holdings 七个端点 + /fx 端点（统一资产台账，契约 §3/§4）。
  */
-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
+import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink, OptionPrediction, OptionPredictionAutoSettleResult, OptionPredictionBoard, OptionPredictionTrack, OptionPredictionDraft, OptionPredictionSettle, PredictionKnowledgeItem, MarketExpectation, VolExpectation, PredictionBias } from '@dshtrading/api'
 import {
   OVERVIEW_KLINE_LIMIT,
   applyTicker,
@@ -24,6 +24,9 @@ import {
   composeScanPrompt,
   extractAtmIv,
   extractIvPercentile,
+  hydrateOverviewRow,
+  parseOverviewSnapshotRow,
+  persistableOverviewRow,
   sortOverviewRows,
   spotSymbolOf,
 } from './option-overview.ts'
@@ -34,11 +37,17 @@ import {
   collectIntradayBox,
   CYCLE_HORIZON_MS,
   cycleId,
+  etfSpotSymbol,
   fetchCnFundamentalsPackage,
   atmIvPercentile,
   ivDailyPath,
+  klinesToPredictionBars,
+  dayPriorOf,
+  resolvePredictionAutoAsOf,
   loadLatestPacket,
   loadLatestRecommendation,
+  loadOverviewSnapshot,
+  writeOverviewSnapshot,
   loadPaperState,
   OptionCycleBook,
   OPTION_MULTIPLIER,
@@ -81,6 +90,7 @@ import type { Holding, HoldingCurrency, NewHolding, NewHoldingInput } from '@dsh
 import { createMemoryHoldingsStore } from '@dshtrading/holdings'
 import type { FxFetchLike } from '@dshtrading/holdings/fx'
 import { createFxService } from '@dshtrading/holdings/fx'
+import { PredictionStore } from './prediction-store.ts'
 
 /** 本桥支持的市场（与连接器服务键一一对应）。 */
 export type MarketId = 'cn'
@@ -683,6 +693,8 @@ export class TradingBridge {
   readonly #cycles = new OptionCycleBook()
   /** 每条 upsert 后可选落盘；失败不得打断 tick。 */
   onCycleWrite?: (cycle: OptionCycle) => Promise<void>
+  /** T+1 预测模块持久化（前端可运行的数据缝；不依赖期权网关）。 */
+  readonly #predictions = new PredictionStore()
 
   constructor(private readonly host: BridgeHost) {}
 
@@ -1091,32 +1103,41 @@ export class TradingBridge {
       .filter((row) => row.exchange !== 'SYNTH' && wanted.has(row.underlying))
     const ivHistory = await readJsonl<OptionBarDailyIv>(ivDailyPath(optionsDataRoot()))
     const built = await Promise.all(roster.map((row) => this.#overviewRow(row, undefined, false, undefined, ivHistory)))
-    return built.map((row) => ({
-      underlying: row.underlying,
-      ...(row.return5d === undefined ? {} : { return5d: row.return5d }),
-      ...(row.volumeRatio === undefined ? {} : { volumeRatio: row.volumeRatio }),
-      ...(row.divergence === undefined ? {} : { divergence: row.divergence }),
-      ...(row.heldQty === undefined ? {} : { heldQty: row.heldQty }),
-      ...(row.atmIv === undefined ? {} : { atmIv: row.atmIv }),
-      ...(row.nextAtmIv === undefined ? {} : { nextAtmIv: row.nextAtmIv }),
-      ...(row.hv20 === undefined ? {} : { hv20: row.hv20 }),
-      ...(row.ivPercentile === undefined ? {} : { ivPercentile: row.ivPercentile }),
-    }))
+    await writeOverviewSnapshot(optionsDataRoot(), {
+      asOf: new Date().toISOString(),
+      rows: built.map(persistableOverviewRow),
+    })
+    const sessionDate = shanghaiCalendarDate(Date.now())
+    const listed = await this.#predictions.track()
+    return built.map((row) => {
+      const dayPrior = dayPriorOf(listed.predictions, row.underlying, sessionDate)
+      return {
+        underlying: row.underlying,
+        ...(row.return5d === undefined ? {} : { return5d: row.return5d }),
+        ...(row.volumeRatio === undefined ? {} : { volumeRatio: row.volumeRatio }),
+        ...(row.divergence === undefined ? {} : { divergence: row.divergence }),
+        ...(row.heldQty === undefined ? {} : { heldQty: row.heldQty }),
+        ...(row.atmIv === undefined ? {} : { atmIv: row.atmIv }),
+        ...(row.nextAtmIv === undefined ? {} : { nextAtmIv: row.nextAtmIv }),
+        ...(row.hv20 === undefined ? {} : { hv20: row.hv20 }),
+        ...(row.ivPercentile === undefined ? {} : { ivPercentile: row.ivPercentile }),
+        ...(dayPrior === undefined ? {} : { dayPrior }),
+      }
+    })
   }
 
   /**
-   * C1 九标的总览：名册 + 现货 ticker/日 K + 底仓 + 期权持仓聚合。
-   * 默认回填近月 ATM IV（implied_vol，5 分钟缓存）；includeIv=1 才打 vol_analytics 分位。
-   * 任一路失败按行缺席，不整页失败。
+   * C1 七标的总览：只读 overview.json（5 分钟桶 snapshotBarFacts 覆写）+
+   * iv-daily / recommendations / packet。不打 ticker、日 K、implied_vol、vol_analytics。
+   * includeIv 保留查询参数兼容；分位只从快照或 iv-daily 算。无快照则名册骨架、days 空。
    */
   async optionOverview(
     source?: string,
     sortRaw?: string,
-    includeIvRaw?: string,
+    _includeIvRaw?: string,
   ): Promise<OptionOverviewWire> {
     const typed = source === 'synth' || source === 'akshare' || source === 'iquant' ? source : undefined
     const sort: OptionOverviewSort = sortRaw === 'iv' || sortRaw === 'holdings' ? sortRaw : 'strength'
-    const includeIv = includeIvRaw === '1' || includeIvRaw === 'true'
     const roster = await this.#withHeldQty(await this.requireCnOptions().listUnderlyings(typed))
     const rows = roster.filter((row) => row.exchange !== 'SYNTH')
     let positions: readonly OptionPosition[] = []
@@ -1129,20 +1150,40 @@ export class TradingBridge {
     for (const pos of positions) {
       qtyByUnderlying.set(pos.underlying, (qtyByUnderlying.get(pos.underlying) ?? 0) + Math.abs(pos.quantity))
     }
-    const ivHistory = await readJsonl<OptionBarDailyIv>(ivDailyPath(optionsDataRoot()))
-    const built = await Promise.all(rows.map((row) => this.#overviewRow(row, qtyByUnderlying.get(row.underlying), includeIv, typed, ivHistory)))
+    const root = optionsDataRoot()
+    const ivHistory = await readJsonl<OptionBarDailyIv>(ivDailyPath(root))
+    const snapshot = await loadOverviewSnapshot(root)
+    const byUnderlying = new Map<string, ReturnType<typeof parseOverviewSnapshotRow>>()
+    for (const raw of snapshot?.rows ?? []) {
+      const parsed = parseOverviewSnapshotRow(raw)
+      if (parsed !== undefined) byUnderlying.set(parsed.underlying, parsed)
+    }
+    const sessionDate = shanghaiCalendarDate(Date.now())
+    const listed = await this.#predictions.track()
+    const priors: Record<string, ReturnType<typeof dayPriorOf>> = {}
+    const built = rows.map((row) => {
+      const dayPrior = dayPriorOf(listed.predictions, row.underlying, sessionDate)
+      if (dayPrior !== undefined) priors[row.underlying] = dayPrior
+      return hydrateOverviewRow({
+        roster: row,
+        ...(byUnderlying.get(row.underlying) === undefined ? {} : { snapshot: byUnderlying.get(row.underlying) }),
+        ...(qtyByUnderlying.get(row.underlying) === undefined ? {} : { optionQty: qtyByUnderlying.get(row.underlying) }),
+        ivHistory,
+        ...(dayPrior === undefined ? {} : { dayPrior }),
+      })
+    })
     const sorted = sortOverviewRows(built, sort)
-    const rec = await loadLatestRecommendation(optionsDataRoot(), Date.now())
-    const packet = await loadLatestPacket(optionsDataRoot(), Date.now())
+    const rec = await loadLatestRecommendation(root, Date.now())
+    const packet = await loadLatestPacket(root, Date.now())
     const withStrategy = attachOverviewStrategies(sorted, rec, packet)
     return {
       ok: true,
       overview: {
         source: typed ?? 'iquant',
         sort,
-        asOf: new Date().toISOString(),
+        asOf: snapshot?.asOf ?? new Date().toISOString(),
         rows: withStrategy,
-        scanAllPrompt: composeScanAllPrompt(withStrategy),
+        scanAllPrompt: composeScanAllPrompt(withStrategy, priors),
       },
     }
   }
@@ -1364,6 +1405,214 @@ export class TradingBridge {
   async optionCycleLoop(): Promise<OptionCycleLoopWire> {
     const roster = (await this.requireCnOptions().listUnderlyings()).filter((row) => row.exchange !== 'SYNTH')
     return { ok: true, loop: this.#cycles.loop(roster.map((row) => row.underlying)) }
+  }
+
+  /* ── T+1 预测模块（盘势/波动预期 + 跟踪回溯 + 经验沉淀；2026-09-12）──────
+   * 预测是用户/Agent 结构化录入，纯本地 JSONL，不依赖期权网关；故此处不调
+   * requireCnOptions()，网关未起也能完整使用。评分在 settle 时由本桥权威计算。 */
+
+  /** 校验并归一化新建预测请求体（缺键 / 非法枚举 / 越界即 400）。 */
+  private static parsePredictionDraft(body: unknown): OptionPredictionDraft {
+    if (typeof body !== 'object' || body === null) throw new BridgeProtocolError(400, 'predictions: body must be an object')
+    const b = body as Record<string, unknown>
+    const underlying = typeof b.underlying === 'string' ? b.underlying.trim() : ''
+    if (underlying === '') throw new BridgeProtocolError(400, 'predictions: underlying is required')
+    const targetDate = typeof b.targetDate === 'string' ? b.targetDate.trim() : ''
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) throw new BridgeProtocolError(400, 'predictions: targetDate must be YYYY-MM-DD')
+    const marketExpectation = b.marketExpectation
+    const MARKET: readonly MarketExpectation[] = ['big_up', 'small_up', 'big_down', 'small_down', 'breakout', 'consolidation']
+    if (typeof marketExpectation !== 'string' || !MARKET.includes(marketExpectation as MarketExpectation)) {
+      throw new BridgeProtocolError(400, 'predictions: marketExpectation must be one of big_up/small_up/big_down/small_down/breakout/consolidation')
+    }
+    const volExpectation = b.volExpectation
+    const VOL: readonly VolExpectation[] = ['up', 'down']
+    if (typeof volExpectation !== 'string' || !VOL.includes(volExpectation as VolExpectation)) {
+      throw new BridgeProtocolError(400, 'predictions: volExpectation must be up or down')
+    }
+    const confidence = Number(b.confidence)
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      throw new BridgeProtocolError(400, 'predictions: confidence must be a number in [0, 1]')
+    }
+    const factorsRaw = Array.isArray(b.factors) ? b.factors : []
+    const factors = factorsRaw.map((item, index) => {
+      if (typeof item !== 'object' || item === null) throw new BridgeProtocolError(400, `predictions: factors[${index}] must be an object`)
+      const f = item as Record<string, unknown>
+      const BIAS: readonly PredictionBias[] = ['bull', 'bear', 'neutral']
+      const bias = f.bias
+      if (typeof bias !== 'string' || !BIAS.includes(bias as PredictionBias)) {
+        throw new BridgeProtocolError(400, `predictions: factors[${index}].bias must be bull/bear/neutral`)
+      }
+      const label = typeof f.label === 'string' ? f.label.trim() : ''
+      const evidence = typeof f.evidence === 'string' ? f.evidence.trim() : ''
+      if (label === '' || evidence === '') throw new BridgeProtocolError(400, `predictions: factors[${index}].label/evidence required`)
+      const weight = f.weight === undefined ? undefined : Number(f.weight)
+      if (weight !== undefined && (!Number.isFinite(weight) || weight < 0 || weight > 1)) {
+        throw new BridgeProtocolError(400, `predictions: factors[${index}].weight must be in [0, 1]`)
+      }
+      const id = typeof f.id === 'string' && f.id !== '' ? f.id : `f${index}`
+      return {
+        id,
+        label,
+        bias: bias as PredictionBias,
+        ...(weight === undefined ? {} : { weight }),
+        evidence,
+      }
+    })
+    const thesis = typeof b.thesis === 'string' ? b.thesis.trim() : ''
+    if (thesis === '') throw new BridgeProtocolError(400, 'predictions: thesis is required')
+    const evaluationMethod = typeof b.evaluationMethod === 'string' ? b.evaluationMethod.trim() : ''
+    if (evaluationMethod === '') throw new BridgeProtocolError(400, 'predictions: evaluationMethod is required')
+    return {
+      underlying,
+      ...(typeof b.underlyingName === 'string' && b.underlyingName.trim() !== '' ? { underlyingName: b.underlyingName.trim() } : {}),
+      targetDate,
+      marketExpectation: marketExpectation as MarketExpectation,
+      volExpectation: volExpectation as VolExpectation,
+      confidence,
+      factors,
+      thesis,
+      evaluationMethod,
+    }
+  }
+
+  /** 校验并归一化回填请求体（只校验原始实盘字段；命中/评分由 settle 计算）。 */
+  private static parsePredictionSettle(body: unknown): OptionPredictionSettle {
+    if (typeof body !== 'object' || body === null) throw new BridgeProtocolError(400, 'predictions/settle: body must be an object')
+    const b = body as Record<string, unknown>
+    const id = typeof b.id === 'string' ? b.id.trim() : ''
+    if (id === '') throw new BridgeProtocolError(400, 'predictions/settle: id is required')
+    const MARKET: readonly MarketExpectation[] = ['big_up', 'small_up', 'big_down', 'small_down', 'breakout', 'consolidation']
+    const realizedMarket = b.realizedMarket
+    if (typeof realizedMarket !== 'string' || (!MARKET.includes(realizedMarket as MarketExpectation) && realizedMarket !== 'na')) {
+      throw new BridgeProtocolError(400, 'predictions/settle: realizedMarket must be a MarketExpectation or na')
+    }
+    const VOL: readonly VolExpectation[] = ['up', 'down']
+    const realizedVol = b.realizedVol
+    if (typeof realizedVol !== 'string' || (!VOL.includes(realizedVol as VolExpectation) && realizedVol !== 'na')) {
+      throw new BridgeProtocolError(400, 'predictions/settle: realizedVol must be up/down or na')
+    }
+    const marketReturnPct = Number(b.marketReturnPct)
+    if (!Number.isFinite(marketReturnPct)) throw new BridgeProtocolError(400, 'predictions/settle: marketReturnPct must be a number')
+    const volChange = Number(b.volChange)
+    if (!Number.isFinite(volChange)) throw new BridgeProtocolError(400, 'predictions/settle: volChange must be a number')
+    const retrospect = typeof b.retrospect === 'string' ? b.retrospect.trim() : ''
+    const knowledgeNotes = typeof b.knowledgeNotes === 'string' ? b.knowledgeNotes.trim() : ''
+    return {
+      id,
+      realizedMarket: realizedMarket as MarketExpectation | 'na',
+      realizedVol: realizedVol as VolExpectation | 'na',
+      marketReturnPct,
+      volChange,
+      retrospect,
+      knowledgeNotes,
+    }
+  }
+
+  async optionPredictions(underlyingRaw?: string, asOfRaw?: string): Promise<{ ok: true; board: OptionPredictionBoard }> {
+    const underlying = underlyingRaw?.trim() === '' ? undefined : underlyingRaw?.trim()
+    const asOf = asOfRaw?.trim() === '' ? undefined : asOfRaw?.trim()
+    await this.#backfillPredictionsTMinus1()
+    const board = await this.#predictions.board(underlying, asOf)
+    return { ok: true, board }
+  }
+
+  async optionPredictionTrack(underlyingRaw?: string, limitRaw?: string): Promise<{ ok: true; track: OptionPredictionTrack }> {
+    const underlying = underlyingRaw?.trim() === '' ? undefined : underlyingRaw?.trim()
+    const limit = limitRaw === undefined || limitRaw.trim() === '' ? undefined : Number(limitRaw)
+    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+      throw new BridgeProtocolError(400, 'predictions/track: limit must be a positive integer')
+    }
+    await this.#backfillPredictionsTMinus1()
+    const track = await this.#predictions.track(underlying, limit)
+    return { ok: true, track }
+  }
+
+  async optionPredictionKnowledge(underlyingRaw?: string): Promise<{ ok: true; knowledge: readonly PredictionKnowledgeItem[] }> {
+    const underlying = underlyingRaw?.trim() === '' ? undefined : underlyingRaw?.trim()
+    const knowledge = await this.#predictions.knowledge(underlying)
+    return { ok: true, knowledge }
+  }
+
+  async createOptionPrediction(body: unknown): Promise<{ ok: true; prediction: OptionPrediction }> {
+    const draft = TradingBridge.parsePredictionDraft(body)
+    const prediction = await this.#predictions.create(draft)
+    return { ok: true, prediction }
+  }
+
+  async settleOptionPrediction(body: unknown): Promise<{ ok: true; prediction: OptionPrediction }> {
+    const input = TradingBridge.parsePredictionSettle(body)
+    const prediction = await this.#predictions.settle(input)
+    return { ok: true, prediction }
+  }
+
+  /**
+   * 用 CN 现货日 K + iv-daily 回填 realized*，再走权威 settle。
+   * 不调期权网关；无日 K / 无 IV 时对应维写 na。
+   */
+  async autoSettleOptionPredictions(body: unknown): Promise<
+    { ok: true; prediction: OptionPrediction } | { ok: true; result: OptionPredictionAutoSettleResult }
+  > {
+    if (typeof body !== 'object' || body === null) {
+      throw new BridgeProtocolError(400, 'predictions/settle-auto: body must be an object')
+    }
+    const b = body as Record<string, unknown>
+    const id = typeof b.id === 'string' ? b.id.trim() : ''
+    const asOfRaw = typeof b.asOf === 'string' ? b.asOf.trim() : ''
+    if (asOfRaw !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(asOfRaw)) {
+      throw new BridgeProtocolError(400, 'predictions/settle-auto: asOf must be YYYY-MM-DD')
+    }
+    const asOf = asOfRaw !== '' ? asOfRaw : await this.#predictionAutoAsOf()
+    const retrospect = typeof b.retrospect === 'string' ? b.retrospect.trim() : undefined
+    const knowledgeNotes = typeof b.knowledgeNotes === 'string' ? b.knowledgeNotes.trim() : undefined
+    const load = async (prediction: OptionPrediction) => {
+      const symbol = etfSpotSymbol(prediction.underlying)
+      const market = this.host.getMarketService('cn')
+      let bars: ReturnType<typeof klinesToPredictionBars> = []
+      if (symbol !== undefined && market !== undefined) {
+        try {
+          bars = klinesToPredictionBars(await market.getKlines(symbol, '1d', 80))
+        } catch {
+          bars = []
+        }
+      }
+      const ivSeries = (await readJsonl<OptionBarDailyIv>(ivDailyPath(optionsDataRoot())))
+        .filter((row) => row.underlying === prediction.underlying)
+      return {
+        bars,
+        ivSeries,
+        ...(retrospect !== undefined && retrospect !== '' ? { retrospect } : {}),
+        ...(knowledgeNotes !== undefined && knowledgeNotes !== '' ? { knowledgeNotes } : {}),
+      }
+    }
+    if (id !== '') {
+      const listed = (await this.#predictions.track()).predictions
+      const current = listed.find((row) => row.id === id)
+      if (current === undefined) throw new BridgeProtocolError(400, `predictions/settle-auto: not found ${id}`)
+      return { ok: true, prediction: await this.#predictions.autoSettle(id, await load(current)) }
+    }
+    return { ok: true, result: await this.#predictions.settleDue(asOf, load) }
+  }
+
+  /** 看板/跟踪默认先按 T-1 自动回填；已手工 settle 的条目 settleDue 会跳过。 */
+  async #backfillPredictionsTMinus1(): Promise<void> {
+    try {
+      await this.autoSettleOptionPredictions({})
+    } catch {
+      // 缺日 K / 无 CN 市场时保持 pending，不挡跟踪页
+    }
+  }
+
+  async #predictionAutoAsOf(): Promise<string> {
+    const today = shanghaiCalendarDate(Date.now())
+    const market = this.host.getMarketService('cn')
+    if (market === undefined) return resolvePredictionAutoAsOf(today)
+    try {
+      const bars = klinesToPredictionBars(await market.getKlines('510050.SH', '1d', 20))
+      const last = bars.filter((row) => row.date < today).at(-1)?.date
+      return resolvePredictionAutoAsOf(today, last)
+    } catch {
+      return resolvePredictionAutoAsOf(today)
+    }
   }
 
   async optionPaperAccount(): Promise<OptionPaperAccountWire> {
@@ -2522,6 +2771,30 @@ export async function dispatchBridgeRequest(
       case '/options/bar-packet': {
         return { status: 200, payload: await bridge.optionBarPacket() }
       }
+      case '/options/predictions': {
+        return {
+          status: 200,
+          payload: await bridge.optionPredictions(
+            search.get('underlying') ?? undefined,
+            search.get('asOf') ?? undefined,
+          ),
+        }
+      }
+      case '/options/predictions/track': {
+        return {
+          status: 200,
+          payload: await bridge.optionPredictionTrack(
+            search.get('underlying') ?? undefined,
+            search.get('limit') ?? undefined,
+          ),
+        }
+      }
+      case '/options/predictions/knowledge': {
+        return {
+          status: 200,
+          payload: await bridge.optionPredictionKnowledge(search.get('underlying') ?? undefined),
+        }
+      }
       case '/orderbook': {
         const market = search.get('market') ?? ''
         const symbol = search.get('symbol') ?? ''
@@ -2705,6 +2978,15 @@ export async function dispatchBridgeRequest(
     }
     if (pathname === '/options/order') {
       return { status: 200, payload: await bridge.placeOptionOrderFromGui(body as GuiOptionOrderBody) }
+    }
+    if (pathname === '/options/predictions') {
+      return { status: 200, payload: await bridge.createOptionPrediction(body) }
+    }
+    if (pathname === '/options/predictions/settle') {
+      return { status: 200, payload: await bridge.settleOptionPrediction(body) }
+    }
+    if (pathname === '/options/predictions/settle-auto') {
+      return { status: 200, payload: await bridge.autoSettleOptionPredictions(body) }
     }
     throw new BridgeProtocolError(404, `no such endpoint: ${pathname}`)
   }

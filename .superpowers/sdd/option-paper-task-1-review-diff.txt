@@ -1,0 +1,119 @@
+﻿ packages/api/src/index.ts | 70 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 70 insertions(+)
+95e3dd3 feat(api): add option paper account types
+diff --git a/packages/api/src/index.ts b/packages/api/src/index.ts
+index 9c40316..9df27ac 100644
+--- a/packages/api/src/index.ts
++++ b/packages/api/src/index.ts
+@@ -629,20 +629,21 @@ export type OptionBarSkipReason = 'session' | 'calibrated' | 'overlap' | 'launch
+ export type OptionIvRegime = 'rich' | 'cheap' | 'event_front' | 'skew_put' | 'skew_call' | 'unknown'
+ 
+ export interface OptionBarPick {
+   readonly underlying: string
+   readonly regime: OptionIntradayRegime
+   readonly template: OptionIntradayCandidate['template']
+   readonly cycleId: string
+   readonly legs?: readonly unknown[]
+   /** 蹇呴』涓庤妗?ContextPacket 鍚岃涓€鑷达紱绂佹妯″瀷鏀规爣銆?*/
+   readonly ivRegime?: OptionIvRegime
++  readonly maxContracts?: number
+ }
+ 
+ /** 瀹氭椂妗舵敞鍏ョ殑娉㈠姩鐜?閲忎环浜嬪疄锛堝涓绘墦鏍囷紱妯″瀷鍙寮曠敤锛夈€?*/
+ export interface OptionBarFact {
+   readonly underlying: string
+   readonly return5d?: number
+   /** 5 鏃ュ潎閲?/ 20 鏃ュ潎閲忥紙鎬昏鍙ｅ緞锛屼笉鏄浣?1 鍒嗛挓閲忔瘮锛夈€?*/
+   readonly volumeRatio?: number
+   readonly divergence?: 'weak_rally' | 'accelerating_sell'
+   readonly heldQty?: number
+@@ -695,20 +696,89 @@ export interface OptionBarRecommendation {
+   readonly edge: string
+   readonly logic: string
+   readonly playbook: string
+   readonly invalidIf: string
+   readonly picks: readonly OptionBarPick[]
+   readonly noTrade: boolean
+   readonly skipReason?: OptionBarSkipReason
+   readonly previousScore?: { readonly cycleId: string; readonly verdict: OptionCycleVerdict }
+ }
+ 
++export const OPTION_PAPER_INITIAL_CASH = 100_000
++export const OPTION_MULTIPLIER = 10_000
++
++export type PaperFillSkip =
++  | 'duplicate_bucket'
++  | 'no_quote'
++  | 'no_forecast'
++  | 'no_cash'
++  | 'bad_template'
++  | 'one_fill'
++
++export type PaperFillReason = 'signal' | 'invalidIf' | 'close5' | 'session' | 'skipped'
++
++export interface PaperLegFill {
++  readonly code: string
++  readonly side: 'buy' | 'sell'
++  readonly qty: number
++  readonly fillPrice: number
++}
++
++export interface PaperFill {
++  readonly id: string
++  readonly bucketStart: string
++  readonly asOf: string
++  readonly underlying?: string
++  readonly template?: string
++  readonly offset: 'open' | 'close'
++  readonly qty: number
++  readonly legs: readonly PaperLegFill[]
++  readonly premiumCny: number
++  readonly marginCny: number
++  readonly cashAfter: number
++  readonly reason: PaperFillReason
++  readonly skip?: PaperFillSkip
++}
++
++export interface PaperPosition {
++  readonly id: string
++  readonly underlying: string
++  readonly template: string
++  readonly openedBucketStart: string
++  readonly invalidIf: string
++  readonly qty: number
++  readonly marginCny: number
++  readonly boxLow?: number
++  readonly boxHigh?: number
++  readonly legs: readonly PaperLegFill[]
++}
++
++export interface PaperAccount {
++  readonly currency: 'CNY'
++  readonly initialCash: number
++  readonly cash: number
++  readonly realizedPnl: number
++  readonly updatedAt: string
++}
++
++export interface OptionPaperAccountWire {
++  readonly ok: true
++  readonly account: PaperAccount
++  readonly equity: number
++  readonly positions: readonly PaperPosition[]
++}
++
++export interface OptionPaperFillsWire {
++  readonly ok: true
++  readonly fills: readonly PaperFill[]
++}
++
+ /** 鑲＄エ甯傚満鏍囩殑鍩烘湰闈笌璐㈠姟浼板€煎揩鐓э紙CN锛夈€?*/
+ export interface StockFundamentals {
+   /** 鏍囩殑瑙勮寖绗﹀彿锛堝 600519.SH锛夈€?*/
+   readonly symbol: string
+   /** 鍏徃/鏍囩殑鍚嶇О銆?*/
+   readonly name?: string
+   /** 鎬诲競鍊硷紙鏈綅甯佽浠凤級銆?*/
+   readonly marketCap?: number
+   /** 娴侀€氬競鍊硷紙A 鑲?娓偂閫傜敤锛夈€?*/
+   readonly floatMarketCap?: number

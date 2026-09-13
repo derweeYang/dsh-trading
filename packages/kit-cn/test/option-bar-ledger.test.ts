@@ -7,6 +7,7 @@ import { OptionCycleBook } from '../src/option-cycles.ts'
 import {
   appendJsonlLine,
   attachOverviewStrategies,
+  OPTION_BAR_AGENT_PROMPT,
   buildBarContextPacket,
   decideBarAgent,
   latestRecommendation,
@@ -24,6 +25,9 @@ import {
   opportunityAllowed,
   optionSessionsPath,
   optionsDataRoot,
+  overviewSnapshotPath,
+  loadOverviewSnapshot,
+  writeOverviewSnapshot,
   packetsPath,
   readJsonl,
   tagIvRegime,
@@ -79,6 +83,22 @@ describe('optionsDataRoot', () => {
   it('默认仓库 data/options；环境变量覆盖', () => {
     expect(optionsDataRoot({}, '/repo')).toBe(path.resolve('/repo', 'data', 'options'))
     expect(optionsDataRoot({ DSH_TRADING_OPTIONS_DATA: 'D:/tmp/opt' }, '/repo')).toBe(path.resolve('D:/tmp/opt'))
+  })
+})
+
+describe('overview snapshot', () => {
+  it('缺文件 → undefined；写入后原样读回', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-ov-snap-'))
+    expect(await loadOverviewSnapshot(dir)).toBeUndefined()
+    await writeOverviewSnapshot(dir, {
+      asOf: '2026-09-12T03:00:00.000Z',
+      rows: [{ underlying: '510050', last: 2.91 }],
+    })
+    expect(overviewSnapshotPath(dir)).toBe(path.join(dir, 'overview.json'))
+    await expect(loadOverviewSnapshot(dir)).resolves.toEqual({
+      asOf: '2026-09-12T03:00:00.000Z',
+      rows: [{ underlying: '510050', last: 2.91 }],
+    })
   })
 })
 
@@ -205,6 +225,13 @@ describe('opportunityAllowed / normalizeRecommendation', () => {
   })
 })
 
+describe('OPTION_BAR_AGENT_PROMPT', () => {
+  it('要求模型引用 dayPrior，且不得当硬闸', () => {
+    expect(OPTION_BAR_AGENT_PROMPT).toContain('dayPrior')
+    expect(OPTION_BAR_AGENT_PROMPT).toContain('not a hard gate')
+  })
+})
+
 describe('tagIvRegime / buildBarContextPacket', () => {
   it('分位与 IV/HV 打标；只有 atmIv 则为 unknown', () => {
     expect(tagIvRegime({ ivPercentile: 0.85 })).toBe('rich')
@@ -230,7 +257,19 @@ describe('tagIvRegime / buildBarContextPacket', () => {
         }],
       },
       factsByUnderlying: {
-        '510050': { underlying: '510050', return5d: 1.2, volumeRatio: 0.8, divergence: 'weak_rally', atmIv: 0.21 },
+        '510050': {
+          underlying: '510050',
+          return5d: 1.2,
+          volumeRatio: 0.8,
+          divergence: 'weak_rally',
+          atmIv: 0.21,
+          dayPrior: {
+            targetDate: '2026-09-08',
+            marketExpectation: 'small_up',
+            volExpectation: 'up',
+            confidence: 0.58,
+          },
+        },
       },
     })
     expect(packet.rows[0]).toMatchObject({
@@ -241,6 +280,7 @@ describe('tagIvRegime / buildBarContextPacket', () => {
       volumeRatio: 0.8,
       divergence: 'weak_rally',
       atmIv: 0.21,
+      dayPrior: { marketExpectation: 'small_up', volExpectation: 'up' },
     })
     expect(packet.rows[0]?.volumeRatio).not.toBe(2.2)
   })

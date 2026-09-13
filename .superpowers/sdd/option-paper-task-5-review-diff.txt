@@ -1,0 +1,436 @@
+﻿b7abcd6 feat(client-ui-trading): expose option paper account bridge
+ .gitignore                                     |   1 +
+ data/options/README.md                         |   1 +
+ docs/options-bridge.md                         |   3 +
+ packages/client-ui-trading/src/bridge.ts       | 120 ++++++++++++++++++++++++-
+ packages/client-ui-trading/test/bridge.test.ts | 103 ++++++++++++++++++++-
+ 5 files changed, 226 insertions(+), 2 deletions(-)
+diff --git a/.gitignore b/.gitignore
+index 47cd8fd..4c64a33 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -15,9 +15,10 @@ __pycache__/
+ # git worktree isolated workspaces
+ worktrees/
+ 
+ # ETF option bar agent ledgers (keep README / seed)
+ data/options/cycles/
+ data/options/recommendations/
+ data/options/reviews/
+ data/options/packets/
++data/options/paper/
+ data/options/iv-daily.jsonl
+diff --git a/data/options/README.md b/data/options/README.md
+index efe7048..02c6a11 100644
+--- a/data/options/README.md
++++ b/data/options/README.md
+@@ -2,16 +2,17 @@
+ 
+ 鏈洰褰曟槸鏈熸潈鏅鸿兘浣撶殑椤圭洰鍐呮暟鎹潰銆傝鏍艰 `docs/specs/2026-09-08-option-bar-agent.md`銆? 
+ | 瀛愮洰褰?| 鍐呭 |
+ |---|---|
+ | `cycles/YYYY-MM-DD.jsonl` | L0 姣忔爣鐨勬瘡妗朵竴琛岋紙forecast锛屼笅涓€妗跺啀杩藉姞甯?score 鐨勫悓琛岋級 |
+ | `recommendations/YYYY-MM-DD.jsonl` | 姣忔《涓€鏉℃帹鑽愭垨璺宠繃妗?|
+ | `packets/YYYY-MM-DD.jsonl` | 姣忔《涓€鍖?ContextPacket锛堝涓绘墦鏍囷紱钀界洏鏍￠獙鐢級 |
++| `paper/` | 鏈湴绾歌处鎴凤細璐︽埛銆佹寔浠撲笌鎸夋棩鎴愪氦 JSONL锛堣繍琛屾椂鐢熸垚锛屼笉鍏ュ簱锛?|
+ | `iv-daily.jsonl` | 鏃ョ粓 ATM IV / HV20锛坅ppend-only锛涙弧 60 鐐瑰悗缁欐湰鏈哄垎浣嶏級 |
+ | `reviews/YYYY-MM-DD.md` | 褰撴棩棣栨杩涘叆 `close5` 鐨勭‘瀹氭€у鐩?|
+ | `seed-cards.json` | 鍒濆鍖栫煡璇嗗崱鐗囪崏绋匡紱`source.url` 蹇呴』鏄?`manual:鈥 鍘婚噸閿紙`file:` 杩囦笉浜嗘牎楠岋級 |
+ 
+ 瑕嗙洊璺緞锛氱幆澧冨彉閲?`DSH_TRADING_OPTIONS_DATA`銆? 
+ 鎶曞奖杩涙湰鏈?DSH 搴擄紙`~/.dsh/knowledge/cards.json`锛夛細
+ 
+diff --git a/docs/options-bridge.md b/docs/options-bridge.md
+index 7934822..7f63bcc 100644
+--- a/docs/options-bridge.md
++++ b/docs/options-bridge.md
+@@ -17,17 +17,20 @@
+ | GET | `/dshtrading/api/options/chain?underlying=&expiryMonth=&source=` | T 鍨嬫姤浠凤紙闃舵 4 璧锋ˉ渚у洖濉?`spot`锛?|
+ | GET | `/dshtrading/api/options/implied-vol?underlying=&expiryMonth=&rate=&source=&priceField=` | 閾炬埅闈?IV |
+ | GET | `/dshtrading/api/options/vol-analytics?underlying=&expiryMonths=&asOf=&rate=&dividendYield=&source=` | 娉㈠姩鐜囧垎鏋愶紙鏈熼檺缁撴瀯/skew/IV 鍒嗕綅/HV锛岄€忎紶锛?|
+ | GET | `/dshtrading/api/options/overview?source=&sort=strength\|iv\|holdings&includeIv=0\|1` | 涔濇爣鐨勬€昏锛圕1锛氱幇璐?T-5/搴曚粨/鎸佷粨鑱氬悎锛沗includeIv=1` 鎵嶆墦缃戝叧锛涜甯?`ivRegime`锛?|
+ | GET | `/dshtrading/api/options/bar-packet` | 褰撳ぉ鏈€鏂?ContextPacket锛堝畾鏃舵《瀹夸富鎵撴爣锛涙棤鏂囦欢鍒欏彧鏈?`{ ok:true }`锛?|
+ | GET | `/dshtrading/api/options/intraday-box?underlying=&horizon=5&asOf=` | 1 鍒嗛挓 鈫?5 鍒嗛挓绠变綋锛圠2锛涚幇璐?1m K锛屼笉鎵撴湡鏉冪綉鍏筹級 |
+ | GET | `/dshtrading/api/options/cycles?underlying=&limit=` | 5 鍒嗛挓闂幆鍘嗗彶锛堝厛 forecast锛屼笅涓€妗惰ˉ score锛?|
+ | GET | `/dshtrading/api/options/cycles/loop` | 涔濇爣鐨勬渶鏂板懆鏈?+ 鍛戒腑鐜囷紙椤甸潰鍙鍖?SSOT锛?|
++| GET | `/dshtrading/api/options/paper/account` | 鏈湴绾歌处鎴枫€佹寔浠撲笌鎸夋渶鏂颁环璁＄畻鐨勬潈鐩?|
++| GET | `/dshtrading/api/options/paper/fills?limit=` | 褰撴棩绾歌处鎴锋垚浜わ紙榛樿 48 鏉★紝鏈€鏂板湪鍓嶏級 |
+ | POST | `/dshtrading/api/options/cycles/tick` | 瀵归綈褰撳墠涓婃捣 5 鍒嗛挓妗讹紙骞傜瓑锛涘涓?30s 蹇冭烦宸插湪璺戯級 |
++| POST | `/dshtrading/api/options/paper/reset` | 閲嶇疆绾歌处鎴风幇閲戜笌鎸佷粨锛堜繚鐣欏巻鍙叉垚浜ゆ枃浠讹級 |
+ | POST | `/dshtrading/api/options/strategy` | 澶氳吙妯℃澘 / 淇濊瘉閲戯紙JSON body锛涢樁娈?4 璧锋敮鎸?`holdingQty`锛?|
+ | POST | `/dshtrading/api/options/order` | 鏈熸潈涓嬪崟锛堥樁娈?3 浜ゆ槗闈級 |
+ | DELETE | `/dshtrading/api/options/order?id=` | 鏈熸潈鎾ゅ崟锛堥樁娈?3锛?|
+ | GET | `/dshtrading/api/options/positions` | 鏈熸潈鎸佷粨锛堥樁娈?3锛屽彧璇伙級 |
+ 
+ `underlying` 鎺ュ彈 `510050.SH`銆乣510050`銆乣510050C2609M02850`銆? `expiryMonth` 涓?`YYMM`锛堝 `2609`锛夈€傞粯璁?`source=iquant`锛岃蛋鍥戒俊 iQuant锛? 鏍囩殑鐜拌揣甯傚満 `SH`/`SZ`锛?*鏈熸潈鍚堢害甯傚満 `SHO`/`SZO`**锛堢煭鐮?`100xxxxx.SHO` /
+diff --git a/packages/client-ui-trading/src/bridge.ts b/packages/client-ui-trading/src/bridge.ts
+index dd23bba..eb2990c 100644
+--- a/packages/client-ui-trading/src/bridge.ts
++++ b/packages/client-ui-trading/src/bridge.ts
+@@ -9,17 +9,17 @@
+  *   锛圙UI 鐑垏鎹紝鏃?watch 鏃犻噸鍚級锛涙敞鍐岃〃缂哄腑鎴栨棤瀵瑰簲娉ㄥ唽椤规椂鍥為€€鏃х殑甯傚満閿?  *   鐩磋锛堣€侀儴缃?杩炴帴鍣ㄦ湭鍗囩骇锛夈€俻reset 骞抽潰涓嶇粡鏈ˉ锛堜細璇濋殧绂伙級銆?  * - 涓氬姟閿欒涓€寰?HTTP 200 + { ok:false, code, message }锛堥敊璇瘝姹囨部鐢?  *   TradingErrorCode 鎯緥锛夛紱浠呭崗璁眰閿欒鐢?4xx銆?  * - Issue #19锛氭彁渚?/indicators/custom 绔偣锛圙ET/DELETE锛夛紝渚涘墠绔悓姝ヨ嚜瀹氫箟鎸囨爣銆?  * - Issue #24锛氭彁渚?/knowledge/cards 绔偣锛圙ET锛夛紝渚涘墠绔鍙栨矇娣€鐨勭煡璇嗗崱鐗囥€?  * - Issue #65锛氭彁渚?/holdings 涓冧釜绔偣 + /fx 绔偣锛堢粺涓€璧勪骇鍙拌处锛屽绾?搂3/搂4锛夈€?  */
+-import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
++import type { AccountBalance, CnOptionsService, CnOptionsTradeService, FundamentalsPackage, Interval, KernelReport, Kline, MarketDataService, NewsAggregator, NewsItem, OptionBarContextPacket, OptionBarDailyIv, OptionBarFact, OptionChain, OptionCycle, OptionCycleLoop, OptionExpiryCalendar, OptionImpliedVolResult, OptionIntradayBox, OptionOrder, OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionPaperAccountWire, OptionPaperFillsWire, OptionPosition, OptionStrategyRequest, OptionStrategyResult, OptionUnderlying, OptionVolAnalyticsQuery, Order, Orderbook, Position, StockFundamentals, Ticker, TradeFill, TradeService, TradeTick, UnderlyingLink } from '@dshtrading/api'
+ import {
+   OVERVIEW_KLINE_LIMIT,
+   applyTicker,
+   buildOverviewMetrics,
+   hv20FromKlines,
+   composeScanAllPrompt,
+   composeScanPrompt,
+   extractAtmIv,
+@@ -34,25 +34,32 @@ import {
+   collectIntradayBox,
+   CYCLE_HORIZON_MS,
+   cycleId,
+   fetchCnFundamentalsPackage,
+   atmIvPercentile,
+   ivDailyPath,
+   loadLatestPacket,
+   loadLatestRecommendation,
++  loadPaperState,
+   OptionCycleBook,
++  OPTION_MULTIPLIER,
+   readJsonl,
++  resetPaperState,
++  sessionFlag,
+   tagIvRegime,
+   optionsDataRoot,
++  quoteFillPrice,
+   realizedInWindow,
+   replayCyclesIntoBook,
+   scorePreviousCycle,
+   selectBoxTargets,
++  shanghaiCalendarDate,
+   shanghaiBucketStartMs,
++  tryPaperManage,
+ } from '@dshtrading/kit-cn'
+ import type { ChartActivationStore, CustomIndicatorRecord, CustomIndicatorStore, IndicatorInstance } from '@dshtrading/indicators'
+ import { clampActivationParams, createMemoryChartActivationStore, createMemoryCustomIndicatorStore, resolveIndicatorSpec, sanitizeInstance, symbolScopeKey, withHiddenScopes } from '@dshtrading/indicators'
+ import type { KnowledgeCard, KnowledgeCardStore } from '@dshtrading/knowledge'
+ import { createMemoryKnowledgeCardStore } from '@dshtrading/knowledge'
+ import type { CustomStrategyRecord, CustomStrategyStore } from '@dshtrading/strategies'
+ import {
+   createMemoryCustomStrategyStore,
+@@ -1353,16 +1360,83 @@ export class TradingBridge {
+     return { ok: true, cycles: this.#cycles.list(underlying, limit) }
+   }
+ 
+   async optionCycleLoop(): Promise<OptionCycleLoopWire> {
+     const roster = (await this.requireCnOptions().listUnderlyings()).filter((row) => row.exchange !== 'SYNTH')
+     return { ok: true, loop: this.#cycles.loop(roster.map((row) => row.underlying)) }
+   }
+ 
++  async optionPaperAccount(): Promise<OptionPaperAccountWire> {
++    const nowMs = Date.now()
++    const nowIso = new Date(nowMs).toISOString()
++    const state = await loadPaperState(optionsDataRoot(), shanghaiCalendarDate(nowMs), nowIso)
++    const getMark = this.#paperMarkLookup()
++    const mtmRows = await Promise.all(state.positions.flatMap((position) => (
++      position.legs.map(async (leg) => {
++        const mark = await getMark(leg.code, leg.side)
++        const price = mark ?? leg.fillPrice
++        return (leg.side === 'buy' ? 1 : -1)
++          * (price - leg.fillPrice)
++          * leg.qty
++          * OPTION_MULTIPLIER
++      })
++    )))
++    const marginCny = state.positions.reduce((total, position) => total + position.marginCny, 0)
++    return {
++      ok: true,
++      account: state.account,
++      equity: state.account.cash + marginCny + mtmRows.reduce((total, value) => total + value, 0),
++      positions: state.positions,
++    }
++  }
++
++  async optionPaperFills(limitRaw?: string): Promise<OptionPaperFillsWire> {
++    const limit = limitRaw === undefined || limitRaw.trim() === '' ? 48 : Number(limitRaw)
++    if (!Number.isInteger(limit) || limit <= 0) {
++      throw new BridgeProtocolError(400, 'options paper fills: limit must be a positive integer')
++    }
++    const nowMs = Date.now()
++    const state = await loadPaperState(
++      optionsDataRoot(),
++      shanghaiCalendarDate(nowMs),
++      new Date(nowMs).toISOString(),
++    )
++    return { ok: true, fills: state.fills.slice(-limit).reverse() }
++  }
++
++  async resetOptionPaper(): Promise<OptionPaperAccountWire> {
++    const nowMs = Date.now()
++    const nowIso = new Date(nowMs).toISOString()
++    await resetPaperState(optionsDataRoot(), nowIso)
++    return await this.optionPaperAccount()
++  }
++
++  #paperMarkLookup(): (code: string, side: 'buy' | 'sell') => Promise<number | undefined> {
++    const service = this.host.getCnOptions?.()
++    const chains = new Map<string, Promise<OptionChain | undefined>>()
++    return async (code) => {
++      if (service === undefined) return undefined
++      const parsed = code.toUpperCase().match(/^(\d{6})[CP](\d{4})/)
++      if (parsed === null) return undefined
++      const [, underlying, expiryMonth] = parsed
++      const key = `${underlying}:${expiryMonth}`
++      let pending = chains.get(key)
++      if (pending === undefined) {
++        pending = service.getOptionChain({ underlying: underlying!, expiryMonth: expiryMonth! })
++          .catch(() => undefined)
++        chains.set(key, pending)
++      }
++      const chain = await pending
++      const row = [...(chain?.calls ?? []), ...(chain?.puts ?? [])]
++        .find((candidate) => candidate.code.toUpperCase() === code.toUpperCase())
++      return row === undefined ? undefined : quoteFillPrice(row, 'buy')
++    }
++  }
++
+   /**
+    * 5 鍒嗛挓妗讹細缁欎笂涓€妗惰ˉ鍒嗭紝鍐嶅湪 regular 浼氳瘽寮€鏂伴鎶ャ€傚悓妗跺箓绛夈€?    * 瀹夸富 30s 蹇冭烦璋冪敤锛汸OST 渚涘洖鏀?/ 鍗曟祴銆?    */
+   async optionCycleTick(asOfRaw?: string): Promise<OptionCycleTickWire> {
+     let nowMs = Date.now()
+     if (asOfRaw !== undefined && asOfRaw.trim() !== '') {
+       const parsed = Date.parse(asOfRaw)
+@@ -1409,16 +1483,51 @@ export class TradingBridge {
+         underlying: row.underlying,
+         bucketStart: new Date(bucket).toISOString(),
+         asOf: new Date(nowMs).toISOString(),
+         forecast,
+         calibration,
+       })
+       ticked = true
+     }
++    const date = shanghaiCalendarDate(nowMs)
++    const rowByUnderlying = new Map(box.rows.map((row) => [row.underlying, row]))
++    const getMark = this.#paperMarkLookup()
++    void tryPaperManage({
++      root: optionsDataRoot(),
++      date,
++      nowMs,
++      nowIso: new Date(nowMs).toISOString(),
++      session: sessionFlag(nowMs),
++      calendarDate: date,
++      getMark,
++      getLastClose: async (underlying) => {
++        const row = rowByUnderlying.get(underlying)
++        if (row?.last !== undefined && Number.isFinite(row.last)) {
++          return {
++            lastClose: row.last,
++            ...(row.volumeRatio === undefined ? {} : { volumeRatio: row.volumeRatio }),
++          }
++        }
++        if (market === undefined || row?.spotSymbol === undefined) return undefined
++        try {
++          const klines = await market.getKlines(row.spotSymbol, '1m', 5)
++          const lastClose = klines.at(-1)?.close
++          if (lastClose === undefined || !Number.isFinite(lastClose)) return undefined
++          return {
++            lastClose,
++            ...(row.volumeRatio === undefined ? {} : { volumeRatio: row.volumeRatio }),
++          }
++        } catch {
++          return undefined
++        }
++      },
++    }).catch((error) => {
++      console.error('[dsh-trading/options-paper] manage failed:', error)
++    })
+     return {
+       ok: true,
+       ticked,
+       asOf: new Date(nowMs).toISOString(),
+       loop: this.#cycles.loop(roster.map((row) => row.underlying)),
+     }
+   }
+ 
+@@ -2370,16 +2479,22 @@ export async function dispatchBridgeRequest(
+             search.get('dividendYield'),
+             search.get('source') ?? undefined,
+           ),
+         }
+       }
+       case '/options/positions': {
+         return { status: 200, payload: await bridge.optionPositions() }
+       }
++      case '/options/paper/account': {
++        return { status: 200, payload: await bridge.optionPaperAccount() }
++      }
++      case '/options/paper/fills': {
++        return { status: 200, payload: await bridge.optionPaperFills(search.get('limit') ?? undefined) }
++      }
+       case '/options/overview': {
+         return {
+           status: 200,
+           payload: await bridge.optionOverview(
+             search.get('source') ?? undefined,
+             search.get('sort') ?? undefined,
+             search.get('includeIv') ?? undefined,
+           ),
+@@ -2580,16 +2695,19 @@ export async function dispatchBridgeRequest(
+       return { status: 200, payload: await bridge.discardHoldings(body) }
+     }
+     if (pathname === '/options/cycles/tick') {
+       const asOf = typeof body === 'object' && body !== null && typeof (body as { asOf?: unknown }).asOf === 'string'
+         ? (body as { asOf: string }).asOf
+         : undefined
+       return { status: 200, payload: await bridge.optionCycleTick(asOf) }
+     }
++    if (pathname === '/options/paper/reset') {
++      return { status: 200, payload: await bridge.resetOptionPaper() }
++    }
+     if (pathname === '/options/strategy') {
+       return { status: 200, payload: await bridge.optionStrategy(body) }
+     }
+     if (pathname === '/options/order') {
+       return { status: 200, payload: await bridge.placeOptionOrderFromGui(body as GuiOptionOrderBody) }
+     }
+     throw new BridgeProtocolError(404, `no such endpoint: ${pathname}`)
+   }
+diff --git a/packages/client-ui-trading/test/bridge.test.ts b/packages/client-ui-trading/test/bridge.test.ts
+index 16761bb..87d8323 100644
+--- a/packages/client-ui-trading/test/bridge.test.ts
++++ b/packages/client-ui-trading/test/bridge.test.ts
+@@ -1,13 +1,13 @@
+ /**
+  * 琛屾儏妗ュ崟娴嬶細甯傚満娓呭崟銆佹壒閲忔姤浠凤紙閫?symbol 鐙珛鎴愯触 + 灏侀《锛夈€並绾块€忎紶涓?  * 鍙傛暟鏍￠獙銆佽姹傚垎鍙戣矾鐢变笌鍗忚閿欒銆傚涓婚潰鍏ㄩ儴鐢ㄥ亣浠讹紙涓嶈Е缃戯級銆?  */
+-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
++import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+ import os from 'node:os'
+ import path from 'node:path'
+ import { describe, expect, it, vi } from 'vitest'
+ import type { MarketDataService, NewsAggregator } from '@dshtrading/api'
+ import { OPTIONS_DATA_ENV, shanghaiCalendarDate } from '@dshtrading/kit-cn'
+ import { createMemoryHoldingsStore } from '@dshtrading/holdings'
+ import { createMemoryCustomStrategyStore } from '@dshtrading/strategies'
+ import {
+@@ -625,16 +625,63 @@ describe('errorPayload', () => {
+   it('甯?code 鐨?Error 鎻愬彇璇嶆眹锛屾櫘閫?Error 钀?TRADING_UNKNOWN锛岄潪 Error 瀛楃涓插寲', () => {
+     expect(errorPayload(Object.assign(new Error('x'), { code: 'TRADING_NETWORK' })))
+       .toEqual({ code: 'TRADING_NETWORK', message: 'x' })
+     expect(errorPayload(new Error('y')).code).toBe('TRADING_UNKNOWN')
+     expect(errorPayload('boom')).toEqual({ code: 'TRADING_UNKNOWN', message: 'boom' })
+   })
+ })
+ 
++describe('TradingBridge option paper account', () => {
++  it('GET account, GET fills, and POST reset use the configured data root', async () => {
++    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-bridge-'))
++    const prev = process.env[OPTIONS_DATA_ENV]
++    process.env[OPTIONS_DATA_ENV] = dir
++    const date = shanghaiCalendarDate(Date.now())
++    await mkdir(path.join(dir, 'paper', 'fills'), { recursive: true })
++    await writeFile(path.join(dir, 'paper', 'fills', `${date}.jsonl`), [
++      JSON.stringify({ id: 'old', bucketStart: 'a', asOf: 'a', offset: 'open', qty: 0, legs: [], premiumCny: 0, marginCny: 0, cashAfter: 100000, reason: 'skipped', skip: 'no_quote' }),
++      JSON.stringify({ id: 'new', bucketStart: 'b', asOf: 'b', offset: 'open', qty: 0, legs: [], premiumCny: 0, marginCny: 0, cashAfter: 100000, reason: 'skipped', skip: 'no_quote' }),
++    ].join('\n') + '\n', 'utf8')
++    const bridge = new TradingBridge(fakeHost({}))
++    try {
++      const account = await dispatchBridgeRequest(
++        bridge, 'GET', '/options/paper/account', new URLSearchParams(),
++      )
++      expect(account.payload).toMatchObject({
++        ok: true,
++        account: { initialCash: 100000, cash: 100000 },
++        equity: 100000,
++        positions: [],
++      })
++
++      const fills = await dispatchBridgeRequest(
++        bridge, 'GET', '/options/paper/fills', new URLSearchParams({ limit: '1' }),
++      )
++      expect(fills.payload).toMatchObject({ ok: true, fills: [{ id: 'new' }] })
++      await expect(dispatchBridgeRequest(
++        bridge, 'GET', '/options/paper/fills', new URLSearchParams({ limit: '0' }),
++      )).rejects.toMatchObject({ status: 400 })
++
++      const reset = await dispatchBridgeRequest(
++        bridge, 'POST', '/options/paper/reset', new URLSearchParams(),
++      )
++      expect(reset.payload).toMatchObject({
++        ok: true,
++        account: { initialCash: 100000, cash: 100000 },
++        equity: 100000,
++        positions: [],
++      })
++    } finally {
++      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
++      else process.env[OPTIONS_DATA_ENV] = prev
++    }
++  })
++})
++
+ 
+ describe('TradingBridge CN ETF options', () => {
+   it('鏈寕 tradingCnOptions 鈫?TRADING_NOT_IMPLEMENTED', async () => {
+     const bridge = new TradingBridge(fakeHost({ tradingCnMarketData: fakeService() }))
+     await expect(dispatchBridgeRequest(bridge, 'GET', '/options/chain', new URLSearchParams({
+       underlying: '510050.SH',
+       expiryMonth: '2609',
+     }))).rejects.toMatchObject({ code: 'TRADING_NOT_IMPLEMENTED' })
+@@ -1349,9 +1396,63 @@ describe('TradingBridge CN ETF options 浜掕仈锛堥樁娈?4锛歴pot 鍥炲～ / resolve
+     const cycles = (payload as { cycles: Array<{ score?: { verdict: string }; bucketStart: string }> }).cycles
+     expect(cycles.length).toBeGreaterThanOrEqual(2)
+     const scored = cycles.find((row) => row.score !== undefined)
+     expect(scored?.score?.verdict).toBe('hit')
+ 
+     const loop = await dispatchBridgeRequest(bridge, 'GET', '/options/cycles/loop', new URLSearchParams())
+     expect((loop.payload as { loop: { rows: Array<{ underlying: string }> } }).loop.rows[0]?.underlying).toBe('510050')
+   })
++
++  it('POST /options/cycles/tick锛歝lose5 绠＄悊绾歌处鎴蜂絾涓嶈蛋涓嬪崟鏈嶅姟', async () => {
++    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-tick-'))
++    const prev = process.env[OPTIONS_DATA_ENV]
++    process.env[OPTIONS_DATA_ENV] = dir
++    const asOf = '2026-09-08T06:56:00.000Z'
++    const date = shanghaiCalendarDate(Date.parse(asOf))
++    await mkdir(path.join(dir, 'paper'), { recursive: true })
++    await writeFile(path.join(dir, 'paper', 'account.json'), `${JSON.stringify({
++      currency: 'CNY', initialCash: 100000, cash: 99000, realizedPnl: 0, updatedAt: asOf,
++    })}\n`, 'utf8')
++    await writeFile(path.join(dir, 'paper', 'positions.json'), `${JSON.stringify([{
++      id: '510050:bucket',
++      underlying: '510050',
++      template: 'vertical',
++      openedBucketStart: '2026-09-08T06:50:00.000Z',
++      invalidIf: '1-minute close outside box',
++      qty: 1,
++      marginCny: 1000,
++      legs: [{ code: '510050C2609M02850', side: 'sell', qty: 1, fillPrice: 0.08 }],
++    }])}\n`, 'utf8')
++    const placeOptionOrder = vi.fn(async () => {
++      throw new Error('paper manage must never place orders')
++    })
++    const base = linkedHost()
++    const bridge = new TradingBridge({
++      ...base,
++      getCnOptions: () => ({
++        ...base.getCnOptions!(),
++        getOptionChain: async () => ({
++          underlying: '510050', expiryMonth: '2609', source: 'synth',
++          calls: [{ code: '510050C2609M02850', strike: 2.85, last: 0.07 }],
++          puts: [],
++        }),
++      }),
++      getCnOptionsTrade: () => ({
++        placeOptionOrder,
++        cancelOptionOrder: async () => {},
++        listOptionPositions: async () => [],
++      }),
++    })
++    try {
++      await dispatchBridgeRequest(
++        bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf },
++      )
++      await vi.waitFor(async () => {
++        expect(JSON.parse(await readFile(path.join(dir, 'paper', 'positions.json'), 'utf8'))).toEqual([])
++      })
++      expect(placeOptionOrder).not.toHaveBeenCalled()
++    } finally {
++      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
++      else process.env[OPTIONS_DATA_ENV] = prev
++    }
++  })
+ })

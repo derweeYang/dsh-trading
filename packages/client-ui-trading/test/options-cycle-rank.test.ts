@@ -67,7 +67,7 @@ describe('cycleTierOf', () => {
 })
 
 describe('rankCycleRows', () => {
-  it('九标的：最强 → 最弱 → 中位排前三，其余按机会与原始顺序', () => {
+  it('多标的：最强 → 最弱 → 中位排前三，其余按机会与原始顺序', () => {
     const rows = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'].map(code => makeRow(code))
     // 累计：i 最高（最强），a 最低（最弱），e 正中位
     const cum5d = { a: -3, b: -1, c: 2, d: 0.5, e: 1, f: 3, g: -0.5, h: 4, i: 6 }

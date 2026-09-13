@@ -7,6 +7,7 @@ import {
   composeScanPrompt,
   extractAtmIv,
   extractIvPercentile,
+  hydrateOverviewRow,
   hv20FromKlines,
   sortOverviewRows,
   spotSymbolOf,
@@ -158,6 +159,19 @@ describe('composeScanPrompt', () => {
     expect(text).toContain('do not place live orders')
     expect(text).toContain('cn_get_option_intraday_box')
     expect(text).toContain('option-intraday-workflow')
+    const withPrior = composeScanPrompt({
+      underlying: '510050',
+      name: '华夏上证50ETF',
+      dayPrior: {
+        targetDate: '2026-09-14',
+        marketExpectation: 'small_up',
+        volExpectation: 'up',
+        confidence: 0.58,
+      },
+    })
+    expect(withPrior).toContain('Day prior')
+    expect(withPrior).toContain('small_up')
+    expect(withPrior).toContain('not a box or hard gate')
     const all = composeScanAllPrompt([
       rowish('510050', 1),
       rowish('510300', -0.5),
@@ -165,6 +179,52 @@ describe('composeScanPrompt', () => {
     expect(all).toContain('510050 5d=1.0%')
     expect(all).toContain('not investment advice')
     expect(all).toContain('cn_get_option_intraday_box')
+    expect(composeScanAllPrompt([rowish('510050', 1)], {
+      '510050': { targetDate: '2026-09-14', marketExpectation: 'small_up', volExpectation: 'down', confidence: 0.5 },
+    })).toContain('prior=small_up/down')
+  })
+})
+
+describe('hydrateOverviewRow', () => {
+  it('无快照 → days 空，不编造 last；有快照则带回 last/IV 并拼 scanPrompt', () => {
+    const roster = {
+      underlying: '510050',
+      exchange: 'SSE' as const,
+      name: '华夏上证50ETF',
+      multiplier: 10000,
+      tickSize: 0.0001,
+      quotesSource: 'sse_board',
+      heldQty: 20000,
+    }
+    const empty = hydrateOverviewRow({ roster, ivHistory: [] })
+    expect(empty.days).toEqual([])
+    expect(empty.last).toBeUndefined()
+    expect(empty.atmIv).toBeUndefined()
+    expect(empty.heldQty).toBe(20000)
+    expect(empty.scanPrompt).toContain('not investment advice')
+
+    const hydrated = hydrateOverviewRow({
+      roster,
+      optionQty: 2,
+      snapshot: {
+        underlying: '510050',
+        name: 'old',
+        exchange: 'SSE',
+        days: [{ date: '2026-09-11', changePct: 1, volumeSurge: false }],
+        last: 2.91,
+        return5d: 1.2,
+        atmIv: 0.2,
+        hv20: 0.15,
+      },
+      ivHistory: [],
+    })
+    expect(hydrated.last).toBe(2.91)
+    expect(hydrated.days).toHaveLength(1)
+    expect(hydrated.atmIv).toBe(0.2)
+    expect(hydrated.optionQty).toBe(2)
+    expect(hydrated.name).toBe('华夏上证50ETF')
+    expect(hydrated.scanPrompt).toContain('Spot 2.91')
+    expect(hydrated.ivRegime).toBe('rich')
   })
 })
 

@@ -24,6 +24,38 @@ export interface StageActions {
   switchToOverview?: () => void
 }
 
+/** 行情中栏的双透镜（现货 ⇄ 期权）；期权透镜即 T 板 / 合约面。 */
+export type QuoteLens = 'spot' | 'options'
+
+/**
+ * 「进 T 板」的目标透镜请求（2026-09-11）：总览点卡要求的是**合约面**，而
+ * QuoteStage 的 `lens` 是组件内 state、初始恒 'spot'——总览 ↔ 行情是互斥挂载
+ * （同刻只挂一个视图），跨视图的意图带不过去，于是过去点「进 T 板」落在标的
+ * K 线上。这里用一个一次性请求承接：总览写入，QuoteStage 挂载即消费并清空，
+ * 不在换标的时复活陈旧意图。
+ */
+let pendingQuoteLens: QuoteLens | null = null
+const quoteLensListeners = new Set<(lens: QuoteLens) => void>()
+
+/** 请求目标透镜（写入待消费值 + 通知已挂载的行情视图）。 */
+export function requestQuoteLens(lens: QuoteLens): void {
+  pendingQuoteLens = lens
+  for (const listener of quoteLensListeners) listener(lens)
+}
+
+/** 取走待消费请求（取走即清，幂等：二次调用得 null）。 */
+export function consumeQuoteLensRequest(): QuoteLens | null {
+  const lens = pendingQuoteLens
+  pendingQuoteLens = null
+  return lens
+}
+
+/** 订阅后续请求：行情视图已挂载时也要跟着切透镜。 */
+export function subscribeQuoteLens(listener: (lens: QuoteLens) => void): () => void {
+  quoteLensListeners.add(listener)
+  return () => { quoteLensListeners.delete(listener) }
+}
+
 /** 模块级可变容器：MiddleStage 挂载时 setStageActions 写入，薄壳读取。 */
 export const stageActions: { current: StageActions } = { current: {} }
 

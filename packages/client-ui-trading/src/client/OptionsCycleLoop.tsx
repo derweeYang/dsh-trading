@@ -3,7 +3,7 @@
  *
  * **页面不算箱体、不打分**——宿主 node 半每 30s 已在对齐上海 5 分钟桶
  * （`POST /options/cycles/tick` 幂等）。本组件只做两件事：
- * 1. 展示 `GET /options/cycles/loop`（九标的最新周期 + 命中率）；
+ * 1. 展示 `GET /options/cycles/loop`（七标的最新周期 + 命中率）；
  * 2. 点某标的再拉 `GET /options/cycles?limit=24` 画该标的周期历史。
  *
  * 时间关系（决定卡片怎么画，别搞反）：
@@ -52,6 +52,11 @@ export interface OptionsCycleLoopProps {
   cum5d?: Readonly<Record<string, number>> | undefined
   /** 展开历史条数（交接单定 24）。 */
   historyLimit?: number
+  /**
+   * 页面级空态聚合（P2-8，2026-09-12）：总览与闭环**两条数据源都没数据**时，由中栏薄壳
+   * 统一出一条通知，本节不再自报（否则同页叠两个同样的灰字框）。缺省 false = 各节自报。
+   */
+  suppressNotice?: boolean | undefined
 }
 
 const DEFAULT_HISTORY_LIMIT = 24
@@ -70,13 +75,13 @@ function hitRateWidth(hitRate: number | undefined): string | undefined {
 }
 
 export function OptionsCycleLoop({
-  t, loop, failure, loaded, packet, names, cum5d, historyLimit = DEFAULT_HISTORY_LIMIT,
+  t, loop, failure, loaded, packet, names, cum5d, historyLimit = DEFAULT_HISTORY_LIMIT, suppressNotice = false,
 }: OptionsCycleLoopProps): React.JSX.Element {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [history, setHistory] = useState<readonly OptionCycle[]>([])
   const [historyFailure, setHistoryFailure] = useState<{ code: string; message: string } | null>(null)
 
-  // 展开才拉历史（一次性；九标的各自常驻轮询会打爆桥）。
+  // 展开才拉历史（一次性；七标的各自常驻轮询会打爆桥）。
   useEffect(() => {
     if (expanded === null) {
       setHistory([])
@@ -104,6 +109,21 @@ export function OptionsCycleLoop({
   const packetByUnderlying = packet == null
     ? undefined
     : new Map(packet.rows.map((r) => [r.underlying, r]))
+
+  /**
+   * 分诊：失败 → 加载中 → 未提供 → 空集（有值即渲染通知；无值 ⇒ 有数据走卡片分支）。
+   * P2-8：页面级聚合接管时（suppressNotice）恒为 null，且不进入卡片分支——本节整块让位
+   * 给中栏薄壳的页面级空态，避免同页叠两个同样的灰字框。
+   */
+  const notice = suppressNotice
+    ? null
+    : failure !== null
+      ? `${failure.code}: ${failure.message}`
+      : !loaded
+        ? t('options.cycle.loading')
+        : loop === null
+          ? t('options.cycle.unavailable')
+          : loop.rows.length === 0 ? t('options.cycle.empty') : null
 
   return (
     <div className={css.root} data-dshtrading-options-cycle-loop="">
@@ -133,15 +153,13 @@ export function OptionsCycleLoop({
         </div>
       )}
 
-      {failure !== null
-        ? <div className={css.notice}>{failure.code}: {failure.message}</div>
-        : !loaded
-          ? <div className={css.notice}>{t('options.cycle.loading')}</div>
-          : loop === null
-            ? <div className={css.notice}>{t('options.cycle.unavailable')}</div>
-            : loop.rows.length === 0
-              ? <div className={css.notice}>{t('options.cycle.empty')}</div>
-              : (
+      {/* 分诊：失败 → 加载中 → 未提供 → 空集 → 卡片。P2-8：页面级聚合接管时
+          （suppressNotice）统一出口在中栏薄壳，本节只让位不自报。 */}
+      {notice !== null
+        ? <div className={css.notice}>{notice}</div>
+        : suppressNotice
+          ? null
+          : (
                 <div className={css.cards}>
                   {ranked.map(({ row, tier }) => (
                     <CycleCard

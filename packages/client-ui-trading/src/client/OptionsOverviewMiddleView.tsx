@@ -1,5 +1,5 @@
 /**
- * 期权总览顶部视图（2026-09-09 redesign）：把九标的聚合总览从单标的 QuoteStage
+ * 期权总览顶部视图（2026-09-09 redesign）：把七标的聚合总览从单标的 QuoteStage
  * 期权透镜下「升格」为 MiddleStage 与行情/策略/知识库平级的第 4 个 tab。
  *
  * 本组件是**自取数薄壳**：持有 overview / cycleLoop 快照与排序态，每 60s / 30s
@@ -10,20 +10,46 @@
  * 跨导航：点行进 T 板 / 扫描预填走 stageActions（MiddleStage 挂载时写入）。
  * 本页技术与行情分析面，不构成投资建议。
  */
-import { useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionCycleLoop, OptionBarContextPacket } from '@dshtrading/api'
 import { fetchOptionsOverview, fetchOptionsCycleLoop, fetchOptionsBarPacket, fetchOptionsResolve } from './api.ts'
 import { colorModeStore } from './color-mode.ts'
 import { OptionsOverview } from './OptionsOverview.tsx'
 import { OptionsCycleLoop } from './OptionsCycleLoop.tsx'
 import { cumulativeReturn } from './option-insight.ts'
-import { stageActions, optionsOverviewStore, optionsCycleLoopStore } from './stage-actions.ts'
+import {
+  stageActions,
+  optionsOverviewStore,
+  optionsCycleLoopStore,
+  requestQuoteLens,
+} from './stage-actions.ts'
+import {
+  aggregateOptionsSources,
+  firstOptionsSourceFailure,
+  type OptionsSourcePhase,
+  type OptionsSourceProbe,
+} from './options-sources.ts'
+import type { MarketLocaleKey } from './contract.ts'
+import {
+  describeScanFailure,
+  SCAN_ALL,
+  SCAN_FILLED_HOLD_MS,
+  type ScanFeedback,
+} from './scan-feedback.ts'
 import { usePoll } from './usePoll.ts'
 import type { StageViewProps } from './stage-views.ts'
 import css from './options-overview-middle.module.css'
 
 const OPTIONS_OVERVIEW_POLL_MS = 60000
 const OPTIONS_CYCLE_LOOP_POLL_MS = 30000
+
+/** 聚合态 → 页面级通知文案键（'data' = 不聚合，不进此表）。 */
+const SOURCES_NOTICE_KEY: Record<Exclude<OptionsSourcePhase, 'data'>, MarketLocaleKey> = {
+  loading: 'options.sources.loading',
+  failed: 'options.sources.failed',
+  unavailable: 'options.sources.unavailable',
+  empty: 'options.sources.empty',
+}
 
 export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Element {
   const colorMode = useSyncExternalStore(colorModeStore.subscribe, colorModeStore.getSnapshot)
@@ -106,6 +132,11 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
   const actions = stageActions.current
   const fill = actions.fillComposer
 
+  /**
+   * 「进 T 板」：切到该 ETF 现货后进**期权透镜**（合约面 / T 板），不是标的 K 线。
+   * 先写一次性透镜请求再切视图——QuoteStage 是切视图时新挂载的，state 初值
+   * 只在挂载那一刻能读到该请求（顺序颠倒就会落回 'spot'）。
+   */
   const onPickRow = (row: OptionOverviewRow): void => {
     // 解构为 const 局部：闭包内 narrowing 才能保持（对象属性会被 TS 视为可变）。
     const { selectInstrument, switchToQuote } = actions
@@ -113,17 +144,46 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
     void fetchOptionsResolve(row.spotSymbol ?? row.underlying).then((res) => {
       const spot = res.ok ? res.data.link?.spotSymbol : undefined
       if (spot === undefined) return
+      requestQuoteLens('options')
       selectInstrument({ market: 'cn', symbol: spot, name: row.name })
       switchToQuote()
     })
   }
 
+  /**
+   * 扫描 = 预填 composer（只填不发）。过去 `void fill(...)` 把 reject 全丢掉，
+   * 按钮也没有任何状态变化 → 用户无法区分「已填入、去输入框按发送」与「根本没填上」。
+   * 这里把结果落成 feedback：按钮换标签，失败原因上浮（2026-09-11）。
+   */
+  const [scan, setScan] = useState<ScanFeedback | null>(null)
+  const runScan = (target: string, prompt: string): void => {
+    if (fill === undefined) return
+    setScan({ phase: 'filling', target })
+    void fill(prompt).then(() => {
+      setScan({ phase: 'filled', target })
+    }).catch((error: unknown) => {
+      const failure = describeScanFailure(error)
+      setScan({
+        phase: 'error',
+        target,
+        failure: failure.failure,
+        ...(failure.detail === undefined ? {} : { detail: failure.detail }),
+      })
+    })
+  }
+  // 成功回执到点回落空闲态；失败态保留到下一次点击（要让人看得见）。
+  useEffect(() => {
+    if (scan?.phase !== 'filled') return
+    const timer = setTimeout(() => { setScan(null) }, SCAN_FILLED_HOLD_MS)
+    return () => { clearTimeout(timer) }
+  }, [scan])
+
   const onScanAll = fill === undefined || overview === null
     ? undefined
-    : (): void => { void fill(overview.scanAllPrompt) }
+    : (): void => { runScan(SCAN_ALL, overview.scanAllPrompt) }
   const onScanRow = fill === undefined
     ? undefined
-    : (row: OptionOverviewRow): void => { void fill(row.scanPrompt) }
+    : (row: OptionOverviewRow): void => { runScan(row.underlying, row.scanPrompt) }
 
   /**
    * WB-11 修复「点 IV 分位没反应」的真根因：sortRef 只在初始化读过 sort，之后
@@ -137,8 +197,45 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
     setSortPending(true)
   }
 
+  /**
+   * P2-8 页面级空态聚合：本页两条数据源（① 七标的聚合总览 / ② 5 分钟闭环）各自有
+   * 失败 / 加载 / 未提供 / 空集四种非数据态，过去各出一个灰字框——网关未起时同页叠两个
+   * 同样的「code: message」。这里收敛成一条页面级通知，两条都没数据时由本节接管出口，
+   * 两个子节让位（suppressNotice）；任一条有数据则不聚合，各节自报以保留「哪一节坏了」。
+   */
+  const sourceProbes: OptionsSourceProbe[] = [
+    {
+      loaded: overviewLoaded,
+      failure: overviewFailure,
+      snapshot: overview !== null,
+      hasRows: (overview?.rows.length ?? 0) > 0,
+    },
+    {
+      loaded: cycleLoaded,
+      failure: cycleFailure,
+      snapshot: cycleLoop !== null,
+      hasRows: (cycleLoop?.rows.length ?? 0) > 0,
+    },
+  ]
+  const aggregate = aggregateOptionsSources(sourceProbes)
+  /** null = 不聚合（至少一条有数据）→ 各节自报。 */
+  const aggregateNoticeKey = aggregate === 'data' ? null : SOURCES_NOTICE_KEY[aggregate]
+  const aggregateFailure = aggregateNoticeKey === null ? null : firstOptionsSourceFailure(sourceProbes)
+  /** 需用户处置的两种态才给恢复提示（加载中/空集无需提示，避免噪音）。 */
+  const showRecoverHint = aggregate === 'failed' || aggregate === 'unavailable'
+
   return (
     <div className={css.root}>
+      {/* 页面级空态（P2-8）：全页只有这一条通知，替代过去两节各一个框 */}
+      {aggregateNoticeKey !== null && (
+        <div className={css.sourcesNotice} role="status" data-dshtrading-options-sources-notice="">
+          <span className={css.sourcesTitle}>{t(aggregateNoticeKey)}</span>
+          {aggregateFailure !== null && (
+            <span className={css.sourcesDetail}>{aggregateFailure.code}: {aggregateFailure.message}</span>
+          )}
+          {showRecoverHint && <span className={css.sourcesHint}>{t('options.sources.failedHint')}</span>}
+        </div>
+      )}
       <OptionsOverview
         t={t}
         colorMode={colorMode}
@@ -149,6 +246,8 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
         onSortChange={changeSort}
         sorting={sortPending}
         onPickRow={onPickRow}
+        scanFeedback={scan}
+        suppressNotice={aggregateNoticeKey !== null}
         {...(onScanAll !== undefined ? { onScanAll } : {})}
         {...(onScanRow !== undefined ? { onScanRow } : {})}
       />
@@ -158,6 +257,7 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
         failure={cycleFailure}
         loaded={cycleLoaded}
         packet={barPacket}
+        suppressNotice={aggregateNoticeKey !== null}
         names={overview?.rows.reduce<Record<string, string>>((map, row) => {
           map[row.underlying] = row.name
           return map

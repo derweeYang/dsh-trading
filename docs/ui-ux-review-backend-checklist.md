@@ -30,7 +30,22 @@
 - **要求**：ledger 锁按 profile 隔离或支持只读降级；非阻塞主流程。
 - **关联**：`packages/client-ui-trading/lib/tasks/ledger.js`。
 
-## 明确判定为「纯前端、本助手已处理/将处理」的项（不进后端）
-- 盘口缺数据降级（P0-3）、行情二级 tab 记忆（P1-3）、期权 T 板直达 tab（P1-1）、
-  下单入口增强（P1-2）、期权总览空态聚合（P2-8）、预测 track 轮询（P2-9）、
-  知识库/策略与标的关联（P1-4）。均无后端契约新增，桥面已具备。
+## 前端项状态（WorkBuddy 侧，与上列后端项解耦后逐个收口）
+
+后端 B1/B2 落地前被阻塞的两项，已随 B1/B2 完成而解除阻塞并收口：
+
+- ✅ **P0-1 定时任务入口可用性信号**：`SessionRail` 时钟按钮按
+  `GET /tasks/availability` 门控（`available:false` → 禁用 + title 说明原因）；
+  `ScheduledTasksPanel` 出只读横幅（`writable:false` = 另一宿主持锁）并禁用全部写动作。
+  探测**失败按未知处理（fail-open）**——旧 node 半无此路由是常态，不能据此把入口打死。
+- ✅ **P0-2 稳定「打开设置」通道**：浏览器半改为**宿主服务 → 契约 window 事件 → DOM 触发器**
+  三级降序（`src/client/open-settings.ts` 编排 + `api.ts:requestOpenSettings`，1.2s 超时护栏）。
+  DOM 触发器仅在上游仍缺 API 时兜底——这才是原先「有时点不开、甚至误折叠侧栏」的病根位置。
+
+其余纯前端项（无后端契约新增，桥面已具备）：
+
+- ✅ 盘口缺数据降级（P0-3）、行情二级 tab 记忆（P1-3）、期权 T 板直达 tab（P1-1）、
+  下单入口增强（P1-2）、期权总览空态聚合（P2-8）、预测 track 轮询（P2-9）。
+- ⏳ 知识库/策略与标的关联（P1-4）——涉及跨包（`client-ui-knowledge`/`client-ui-strategies`
+  由其它包注册视图），需先做联动评估再动。
+

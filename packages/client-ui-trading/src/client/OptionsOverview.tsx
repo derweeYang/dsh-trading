@@ -1,5 +1,5 @@
 /**
- * 九标的期权总览（2026-09-09 WB-1；WB-9 重构为「叠图 → 机会卡 → 明细表」三段）。
+ * 七标的的期权总览（2026-09-09 WB-1；WB-9 重构为「叠图 → 机会卡 → 明细表」三段）。
  *
  * 期权透镜的**落地页**——不再一进「期权」就画当前自选的 T 板。设计取舍：
  * - **只拉一条** `GET /options/overview`：桥已把现货/T-5/底仓/期权持仓聚合好；
@@ -31,6 +31,13 @@ import { Sparkline } from './Sparkline.tsx'
 import { OverlayTrendChart } from './OverlayTrendChart.tsx'
 import { OptionsOpportunityBoard } from './OptionsOpportunityBoard.tsx'
 import { rankByCumulative, effectiveIvRegime } from './option-insight.ts'
+import {
+  SCAN_ALL,
+  scanFailureText,
+  scanLabelKey,
+  scanPhaseOf,
+  type ScanFeedback,
+} from './scan-feedback.ts'
 import { IV_REGIME_KEY } from './option-vocabulary.ts'
 import css from './options-overview.module.css'
 
@@ -55,6 +62,16 @@ export interface OptionsOverviewProps {
   onScanAll?: (() => void) | undefined
   /** 行内「AI 扫描」→ 预填该标的 scanPrompt（未注入时不传）。 */
   onScanRow?: ((row: OptionOverviewRow) => void) | undefined
+  /**
+   * 扫描结果三态（2026-09-11）：预填成功时页面本无别的变化，不给回执＝点了没反应。
+   * 薄壳持有（唯一调用 fill 的地方），本组件只按 target 换按钮标签 + 露出失败原因。
+   */
+  scanFeedback?: ScanFeedback | null | undefined
+  /**
+   * 页面级空态聚合（P2-8，2026-09-12）：总览与 5 分钟闭环**两条数据源都没数据**时，由中栏
+   * 薄壳统一出一条通知，本节不再自报（否则同页叠两个同样的灰字框）。缺省 false = 各节自报。
+   */
+  suppressNotice?: boolean | undefined
 }
 
 /** 排序控件三项（iv 会打开网关，标签上不必提示——提示在 hint 里）。 */
@@ -152,15 +169,39 @@ function trendValues(days: readonly OptionOverviewDay[]): number[] {
 }
 
 export function OptionsOverview({
-  t, colorMode, overview, failure, loaded, sort, onSortChange, onPickRow, onScanAll, onScanRow, sorting,
+  t, colorMode, overview, failure, loaded, sort, onSortChange, onPickRow, onScanAll, onScanRow, scanFeedback, sorting, suppressNotice = false,
 }: OptionsOverviewProps): React.JSX.Element {
   const rows = overview?.rows ?? []
+  /** 顶栏「扫描标的」的按钮态；行内按钮各自按 underlying 取。 */
+  const scanAllPhase = scanPhaseOf(scanFeedback, SCAN_ALL)
+  /** 失败原因（已本地化）：失败态保留到下次点击，页面上必须看得见。 */
+  const scanError = scanFeedback?.phase === 'error'
+    ? scanFailureText(t, {
+      failure: scanFeedback.failure ?? 'unknown',
+      ...(scanFeedback.detail === undefined ? {} : { detail: scanFeedback.detail }),
+    })
+    : null
   /** 明细表默认展开（WB-1 验收基线：9 行 / T-5 / 排序），可折叠让位给机会卡。 */
   const [showTable, setShowTable] = useState(true)
   const ranks = new Map(rankByCumulative(rows).map(item => [item.row.underlying, item.rank]))
   /** 排序切 iv 后九路 vol_analytics 仍可能全缺席 → 如实提示，不让「没反应」背锅。 */
   const ivMissing = sort === 'iv' && rows.length > 0
     && rows.every(row => row.ivPercentile === undefined && row.atmIv === undefined)
+
+  /**
+   * 分诊：失败 → 加载中 → 未提供 → 空集（有值即渲染通知；无值 ⇒ 数据齐备走内容分支）。
+   * P2-8：页面级聚合接管时（suppressNotice）恒为 null，且内容分支也不进入——本节整块
+   * 让位给中栏薄壳的页面级空态，避免同页叠两个同样的灰字框。
+   */
+  const notice = suppressNotice
+    ? null
+    : failure !== null
+      ? `${failure.code}: ${failure.message}`
+      : !loaded
+        ? t('options.overview.loading')
+        : overview === null
+          ? t('options.overview.unavailable')
+          : rows.length === 0 ? t('options.overview.empty') : null
 
   return (
     <div className={css.root} data-dshtrading-options-overview="" data-sorting={sorting === true ? 'true' : undefined}>
@@ -193,27 +234,30 @@ export function OptionsOverview({
           <button
             type="button"
             className={css.scanAllBtn}
+            data-scan-state={scanAllPhase ?? undefined}
+            disabled={scanAllPhase === 'filling'}
             onClick={onScanAll}
           >
-            {t('options.overview.scanAll')}
+            {t(scanLabelKey('options.overview.scanAll', scanAllPhase))}
           </button>
         )}
       </div>
 
-      {/* 分诊：失败 → 加载中 → 不可用 → 空表 → 表格（不整页空白） */}
-      {failure !== null
-        ? <div className={css.notice}>{failure.code}: {failure.message}</div>
-        : !loaded
-          ? <div className={css.notice}>{t('options.overview.loading')}</div>
-          : overview === null
-            ? <div className={css.notice}>{t('options.overview.unavailable')}</div>
-              : rows.length === 0
-                ? <div className={css.notice}>{t('options.overview.empty')}</div>
-                : (
+      {/* 扫描失败原因：预填链路（无会话 / 输入框不可用 / 输入框忙）过去被 void 吞掉，
+          用户只看到「点了没反应」——这里把原因原文摆在页面顶部。 */}
+      {scanError !== null && <div className={css.scanError} role="alert">{scanError}</div>}
+
+      {/* 分诊：失败 → 加载中 → 不可用 → 空表 → 表格（不整页空白）。
+          P2-8：页面级聚合接管时（suppressNotice）统一出口在中栏薄壳，本节只让位不自报。 */}
+      {notice !== null
+        ? <div className={css.notice}>{notice}</div>
+        : suppressNotice
+          ? null
+          : (
                   <>
                     {/* IV 分位整体缺席（WB-11）：如实提示，不伪装成「点了没反应」 */}
                     {ivMissing && <div className={css.notice}>{t('options.overview.ivMissing')}</div>}
-                    {/* ① 九标的 5 日叠加走势：共用 Y 轴，线的相对位置即强弱序 */}
+                    {/* ① 七标的 5 日叠加走势：共用 Y 轴，线的相对位置即强弱序 */}
                     <OverlayTrendChart
                       t={t}
                       colorMode={colorMode}
@@ -360,17 +404,22 @@ export function OptionsOverview({
                                 })}
                               </span>
                             </td>
-                            {onScanRow !== undefined && (
-                              <td className={css.actionCell}>
-                                <button
-                                  type="button"
-                                  className={css.scanRowBtn}
-                                  onClick={(event) => { event.stopPropagation(); onScanRow(row) }}
-                                >
-                                  {t('options.overview.scanRow')}
-                                </button>
-                              </td>
-                            )}
+                            {onScanRow !== undefined && (() => {
+                              const phase = scanPhaseOf(scanFeedback, row.underlying)
+                              return (
+                                <td className={css.actionCell}>
+                                  <button
+                                    type="button"
+                                    className={css.scanRowBtn}
+                                    data-scan-state={phase ?? undefined}
+                                    disabled={phase === 'filling'}
+                                    onClick={(event) => { event.stopPropagation(); onScanRow(row) }}
+                                  >
+                                    {t(scanLabelKey('options.overview.scanRow', phase))}
+                                  </button>
+                                </td>
+                              )
+                            })()}
                           </tr>
                         )
                       })}

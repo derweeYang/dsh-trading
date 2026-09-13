@@ -22,3 +22,9 @@ data/options/reviews/
 data/options/packets/
 data/options/paper/
 data/options/iv-daily.jsonl
+
+# runtime prediction track ledger
+data/options/predictions.jsonl
+
+# local-run paper ledgers under client-ui package
+packages/client-ui-trading/data/

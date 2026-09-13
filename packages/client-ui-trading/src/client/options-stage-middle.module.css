@@ -1,0 +1,23 @@
+/* OptionsStageMiddleView 包裹层（2026-09-12）：期权 T 板中栏直达视图。
+   T 板本体样式在 options-stage.module.css；此处只负责中栏容器与空态提示。 */
+
+.root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 8px;
+}
+
+/* 未选中期权标的（7 只 ETF 之外）时的友好提示 */
+.hint {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}

@@ -12,7 +12,8 @@ import type { ComponentType } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { readJson, writeJson } from './store.ts'
 import { stageViews } from './stage-views.ts'
-import { setStageActions } from './stage-actions.ts'
+import { setStageActions, requestQuoteLens } from './stage-actions.ts'
+import { tradeDeskStore, toggleTradeDesk, writeTradeDeskOpen } from './trade-desk-store.ts'
 import { QuoteStage } from './QuoteStage.tsx'
 import type { FillComposerFn } from './fill-composer.ts'
 import type { MarketLocaleKey } from './contract.ts'
@@ -75,10 +76,29 @@ export function MiddleStage({ t, useSelection, useChart, toggleIndicator, setInd
   // （readStageView 净化 localStorage 脏值）。
   useSyncExternalStore(stageViews.subscribe, stageViews.getVersion)
   const [view, setView] = useState<string>(readStageView)
+  /** 交易台展开态（P1-2）：与 QuoteStage 共用 trade-desk-store 单例——任何 tab 都能看到
+   *  并开关交易台，解决「下单入口仅在行情页」。 */
+  const tradeDeskOpen = useSyncExternalStore(tradeDeskStore().subscribe, tradeDeskStore().getSnapshot)
 
   const switchView = (next: string): void => {
     setView(next)
     writeStageView(next)
+  }
+
+  /**
+   * 全局「交易台」入口（P1-2，2026-09-12）：任何 tab 常驻。
+   * 已在行情视图 → 取反开关；在其它 tab → 先写一次性**现货**透镜请求，再切行情视图，
+   * 并保证交易台展开。交易台渲染在行情视图的现货分支，而 QuoteStage 是切视图时新挂载的
+   * ——请求必须先于 switchView 写入（顺序颠倒会因挂载时机落错透镜，与 onPickRow 同款纪律）。
+   */
+  const onTradeDeskEntry = (): void => {
+    if (view === 'quote') {
+      toggleTradeDesk()
+      return
+    }
+    requestQuoteLens('spot')
+    writeTradeDeskOpen(true)
+    switchView('quote')
   }
 
   // 把 quote 视图专有动作桥接给插件面（期权总览薄壳）：挂载即写入，切走保留最新值。
@@ -94,20 +114,35 @@ export function MiddleStage({ t, useSelection, useChart, toggleIndicator, setInd
 
   return (
     <div className={css.root} data-dshtrading-middle-stage="">
-      <div className={css.tabs} role="tablist" aria-label="stage">
-        {stageViews.list().map(definition => (
-          <button
-            key={definition.id}
-            type="button"
-            role="tab"
-            aria-selected={definition.id === view}
-            className={css.tab}
-            data-active={definition.id === view ? 'true' : undefined}
-            onClick={() => { switchView(definition.id) }}
-          >
-            {t(definition.titleKey)}
-          </button>
-        ))}
+      <div className={css.tabs}>
+        <div className={css.tabList} role="tablist" aria-label="stage">
+          {stageViews.list().map(definition => (
+            <button
+              key={definition.id}
+              type="button"
+              role="tab"
+              aria-selected={definition.id === view}
+              className={css.tab}
+              data-active={definition.id === view ? 'true' : undefined}
+              onClick={() => { switchView(definition.id) }}
+            >
+              {t(definition.titleKey)}
+            </button>
+          ))}
+        </div>
+        {/* 下单入口增强（P1-2，2026-09-12）：全 tab 常驻交易台入口。过去交易台开关只在
+            行情工具栏里，期权总览/预测/策略/知识库等 tab 都拿不到下单入口。此为动作按钮
+            而非 tab，故放在 tablist 之外，避免污染 tab 语义。 */}
+        <button
+          type="button"
+          className={css.tradeEntry}
+          data-active={tradeDeskOpen ? 'true' : undefined}
+          aria-pressed={tradeDeskOpen}
+          title={t('stage.tradeDesk')}
+          onClick={onTradeDeskEntry}
+        >
+          {t('stage.tradeDesk')}
+        </button>
       </div>
       {/* 视图互斥挂载：切走即卸载（图表重建成本 < 双图常驻的内存/重绘成本）。
           prop 面沿用 QuotePane→QuoteStage 的 inject 传递约定（cast 收敛在边界）。
@@ -120,7 +155,10 @@ export function MiddleStage({ t, useSelection, useChart, toggleIndicator, setInd
           const definition = stageViews.get(view)
           if (definition === undefined) return null
           const View = definition.render
-          return <View t={t} view={view} />
+          // 标的面（P1-4，2026-09-12）：插件视图此前只拿 t/view，无从知道用户选了哪个标的
+          // ——策略视图因此恒显示硬编码的 600519。这里按 StageViewProps 下传（该字段可选，
+          // 视图不声明即忽略；老壳不下传时视图走自身缺省，见 stage-views.ts 的说明）。
+          return <View t={t} view={view} useSelection={useSelection} />
         })()
       )}
     </div>

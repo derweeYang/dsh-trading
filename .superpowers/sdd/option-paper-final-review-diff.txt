@@ -1,0 +1,31 @@
+﻿176b18c docs: mark option paper account implemented
+7456086 fix(client-ui-trading): paper invalidIf uses 1m close
+b7abcd6 feat(client-ui-trading): expose option paper account bridge
+bf7fbcb feat(kit-cn): open paper book after option bar recommendation
+0dda9cf fix(kit-cn): isolate option paper IO per pick and position
+efef1ae feat(kit-cn): persist option paper account files
+e2a1b2c fix(kit-cn): paper fill price uses last then prevSettle
+61900fb feat(kit-cn): add option paper engine
+95e3dd3 feat(api): add option paper account types
+ .../feature/2026-09-10-option-paper-account.md     |  38 ++
+ .gitignore                                         |   1 +
+ .superpowers/sdd/option-paper-task-2-report.md     |  56 ++
+ .superpowers/sdd/option-paper-task-3-report.md     |  62 ++
+ .superpowers/sdd/option-paper-task-4-report.md     |  39 ++
+ .superpowers/sdd/option-paper-task-5-report.md     |  56 ++
+ data/options/README.md                             |   1 +
+ docs/options-bridge.md                             |   3 +
+ .../2026-09-10-option-paper-account-design.md      | 146 +++++
+ packages/api/src/index.ts                          |  70 +++
+ packages/client-ui-trading/src/bridge.ts           | 114 +++-
+ packages/client-ui-trading/src/index.ts            |   1 +
+ packages/client-ui-trading/src/option-bar-agent.ts |  38 +-
+ packages/client-ui-trading/test/bridge.test.ts     | 175 +++++-
+ .../test/option-bar-agent.test.ts                  |   3 +-
+ packages/kit-cn/src/index.ts                       |  28 +
+ packages/kit-cn/src/option-bar-ledger.ts           |  12 +
+ packages/kit-cn/src/option-paper.ts                | 625 +++++++++++++++++++++
+ packages/kit-cn/src/options-tools.ts               |  26 +-
+ packages/kit-cn/test/option-paper.test.ts          | 384 +++++++++++++
+ packages/kit-cn/test/options-tools.test.ts         |  61 +-
+ 21 files changed, 1932 insertions(+), 7 deletions(-)

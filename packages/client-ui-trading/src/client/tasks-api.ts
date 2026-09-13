@@ -18,6 +18,21 @@ export interface TasksMeta {
   agentPresets: Array<{ id: string }>
 }
 
+/**
+ * 定时任务服务可用性（P0-1，2026-09-12）。
+ *
+ * `available:false` = 服务整个不在（入口应禁用）；`available:true, writable:false` =
+ * ledger 被另一存活宿主持锁、降级只读（入口可开，但面板要标只读并禁改动）；
+ * `mode:'exclusive'` + `writable:true` = 全功能。
+ */
+export interface TasksAvailability {
+  available: boolean
+  writable: boolean
+  mode: 'exclusive' | 'readonly' | 'unavailable'
+  reason?: string
+  holderPid?: number
+}
+
 /** 与 api.ts getJson 同款错误语义（桥业务错误信封 HTTP 200 + {ok:false}）。 */
 async function tasksJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -42,6 +57,15 @@ export async function fetchTasksSnapshot(): Promise<TasksSnapshot> {
 /** 元数据面：确认门基准 + 工作区名册 + agent 预设名册。 */
 export async function fetchTasksMeta(): Promise<TasksMeta> {
   return tasksJson<TasksMeta>('/dshtrading/api/tasks/meta', { headers: { accept: 'application/json' } })
+}
+
+/**
+ * 可用性面（P0-1）：锁冲突时服务仍活着（只读），只有服务完全缺席才 503。
+ * 调用方必须能容忍本调用失败（旧 node 半无此路由）——可用性只是辅助信号，
+ * 拿不到时应按「未知」处理，不能据此把入口或面板打成不可用。
+ */
+export async function fetchTasksAvailability(): Promise<TasksAvailability> {
+  return tasksJson<TasksAvailability>('/dshtrading/api/tasks/availability', { headers: { accept: 'application/json' } })
 }
 
 /** 提交一个动作（自动生成 requestId），返回确认后的新快照。 */

@@ -15,3 +15,36 @@
 .root[data-sorting='true'] {
   opacity: 0.55;
 }
+
+/* 页面级数据源空态（P2-8）：两条数据源都没数据时整页只出这一条，
+   替代过去总览节与闭环节各出一个灰字框的叠字。 */
+.sourcesNotice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  padding: 24px 16px;
+  border: 1px dashed var(--dsw-futu-border-default, #e3e6ea);
+  border-radius: var(--dsw-futu-radius-md, 8px);
+  background: var(--dsw-futu-bg-subtle, #f4f6f8);
+  text-align: center;
+}
+
+.sourcesTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+.sourcesHint {
+  font-size: 12px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+/* 桥回执原文（code: message）：保留可诊断性，但压到辅助层级。 */
+.sourcesDetail {
+  font-family: var(--dsw-futu-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  word-break: break-all;
+}

@@ -436,7 +436,7 @@ export interface OptionOverviewDay {
 }
 
 /**
- * 9 标的期权总览一行（桥侧聚合，不打期权网关除非 includeIv）。
+ * 9 标的期权总览一行（桥侧读 overview.json + 账本，不打活牌网关）。
  * 行情/IV 缺席时对应键缺席，UI 按行容错，不整页失败。
  */
 export interface OptionOverviewRow {
@@ -461,7 +461,7 @@ export interface OptionOverviewRow {
   readonly optionQty?: number
   /** ATM IV 分位 0–1（includeIv=1 且 vol_analytics 有可回放分位时）。iQuant 活牌无历史路径，此键常缺席。 */
   readonly ivPercentile?: number
-  /** 近月 ATM 隐含波动率（0–1 年化）。总览默认从 implied_vol 回填，不打 vol_analytics。 */
+  /** 近月 ATM 隐含波动率（0–1 年化）。总览从 overview.json / iv-daily 读，不现场 implied_vol。 */
   readonly atmIv?: number
   /** 次月 ATM IV（年化）。与 atmIv 比，近/次 ≥ 1.15 → ivRegime=event_front。 */
   readonly nextAtmIv?: number
@@ -640,6 +640,14 @@ export interface OptionBarPick {
 }
 
 /** 定时桶注入的波动率/量价事实（宿主打标；模型只许引用）。 */
+/** 当日（或下一未到期日）T+1 预测投影；只作模型先验，不是箱体/推荐硬闸。 */
+export interface OptionBarDayPrior {
+  readonly targetDate: string
+  readonly marketExpectation: MarketExpectation
+  readonly volExpectation: VolExpectation
+  readonly confidence: number
+}
+
 export interface OptionBarFact {
   readonly underlying: string
   readonly return5d?: number
@@ -652,6 +660,7 @@ export interface OptionBarFact {
   readonly nextAtmIv?: number
   readonly hv20?: number
   readonly ivPercentile?: number
+  readonly dayPrior?: OptionBarDayPrior
 }
 
 export interface OptionBarContextRow {
@@ -671,6 +680,8 @@ export interface OptionBarContextRow {
   readonly volumeRatio?: number
   readonly divergence?: 'weak_rally' | 'accelerating_sell'
   readonly heldQty?: number
+  /** 日频预测先验；模型可引用，推荐硬闸不读此键。 */
+  readonly dayPrior?: OptionBarDayPrior
 }
 
 export interface OptionBarContextPacket {
@@ -733,6 +744,210 @@ export interface OptionBarSessionRecord {
   readonly settledAt?: string
   readonly outcome?: OptionBarSessionOutcome
   readonly error?: string
+}
+
+/* ────────────────────────────────────────────────────────────────────
+ * T+1 期权预测模块（盘势/波动预期 + 跟踪回溯 + 经验沉淀）
+ *
+ * 设计定位：结构化的「T+1 预测日志 → T+1 收盘回填实盘 → 命中评估 →
+ * 经验知识聚合」闭环。预测由用户/Agent 经编辑器录入（含结构化分析过程
+ * 与评估方法），而不是自动行情引擎——自动预测是后端 kit-cn 的未来扩展，
+ * 本契约是前后端稳定的桥 JSON 面。所有时间为 ISO（date 用 YYYY-MM-DD）。
+ * ──────────────────────────────────────────────────────────────────── */
+
+/** T+1 盘势预期（六分类，闭集）。 */
+export type MarketExpectation =
+  | 'big_up'        // 大涨
+  | 'small_up'      // 小涨
+  | 'big_down'      // 大跌
+  | 'small_down'    // 小跌
+  | 'breakout'      // 突破（放量脱离震荡区）
+  | 'consolidation' // 盘整
+
+/** T+1 波动预期（二分类，闭集）。 */
+export type VolExpectation =
+  | 'up'   // 波动增加
+  | 'down' // 波动减小
+
+/** 单因子对盘势方向的倾向（结构化分析过程的基本单元）。 */
+export type PredictionBias = 'bull' | 'bear' | 'neutral'
+
+/** 分析过程的一个因子：便于复盘追溯「当时凭什么这么判」。 */
+export interface PredictionFactor {
+  /** 稳定 id（前端生成，落盘后不变）。 */
+  readonly id: string
+  /** 因子名，如「IV 分位」「北向资金」「均线结构」「隐波期限结构」。 */
+  readonly label: string
+  /** 该因子对盘势方向的倾向。 */
+  readonly bias: PredictionBias
+  /** 权重 0–1（多因子加权；定性未量化时缺省）。 */
+  readonly weight?: number
+  /** 该因子的具体读数/证据（一句话，可含数值）。 */
+  readonly evidence: string
+}
+
+/** T+1 实盘结果：T+1 收盘后由回填接口写入。 */
+export interface PredictionOutcome {
+  /** 实际盘势分类（与 MarketExpectation 同域；无法判定时 'na'）。 */
+  readonly realizedMarket: MarketExpectation | 'na'
+  /** 实际波动方向（无法判定时 'na'）。 */
+  readonly realizedVol: VolExpectation | 'na'
+  /** 标的实际涨跌幅（%，收盘 vs 前收）。 */
+  readonly marketReturnPct: number
+  /** 实际波动率变化（小数：正=升、负=降；IV 或 HV 变化，口径见 evaluationMethod）。 */
+  readonly volChange: number
+  /** 盘势命中（realizedMarket 与 marketExpectation 同域且一致）。 */
+  readonly hitMarket: boolean
+  /** 波动命中（realizedVol 与 volExpectation 同域且一致）。 */
+  readonly hitVol: boolean
+  /** 综合评分 0–1（盘势与波动加权，由评估方法定义）。 */
+  readonly score: number
+  /** 复盘笔记：对照预报与实盘，错在哪/对在哪、为何。 */
+  readonly retrospect: string
+  /** 经验沉淀：可复用的结论，喂回下轮预测与知识库。 */
+  readonly knowledgeNotes: string
+  /** 回填时间戳（ISO）。 */
+  readonly settledAt: string
+}
+
+/** 一条 T+1 预测（按 underlying + targetDate 唯一）。 */
+export interface OptionPrediction {
+  /** 稳定 id（underlying + targetDate 派生或前端生成）。 */
+  readonly id: string
+  /** 6 位 ETF 代码（名册主键）。 */
+  readonly underlying: string
+  /** 标的名（名册回退代码）。 */
+  readonly underlyingName?: string
+  /** 预测作出日 T（YYYY-MM-DD）。 */
+  readonly asOfDate: string
+  /** 预测目标交易日 T+1（YYYY-MM-DD）。 */
+  readonly targetDate: string
+  readonly marketExpectation: MarketExpectation
+  readonly volExpectation: VolExpectation
+  /** 盘势置信度 0–1。 */
+  readonly confidence: number
+  /** 结构化分析过程（因子集合）。 */
+  readonly factors: readonly PredictionFactor[]
+  /** 分析结论摘要（自由文本）。 */
+  readonly thesis: string
+  /** 评估方法说明：如何判定盘势/波动命中（如「收盘涨跌幅 > +1% 判涨；IV 升破上轨判波动增」）。 */
+  readonly evaluationMethod: string
+  /** 作成时间戳（ISO）。 */
+  readonly createdAt: string
+  /** T+1 收盘后回填的实盘结果（未回填缺省）。 */
+  readonly outcome?: PredictionOutcome
+}
+
+/** 看板单行：某标的的最新一条 T+1 预测 + 累计命中。 */
+export interface OptionPredictionBoardRow {
+  readonly underlying: string
+  readonly underlyingName?: string
+  readonly latest?: OptionPrediction
+  /** 该标的盘势累计命中率（0–1；样本不足缺省）。 */
+  readonly marketHitRate?: number
+  /** 该标的波动累计命中率（0–1；样本不足缺省）。 */
+  readonly volHitRate?: number
+  /** 该标的历史预测总条数。 */
+  readonly total: number
+}
+
+/** 预测看板：每个标的的最新一条 T+1 预测。 */
+export interface OptionPredictionBoard {
+  /** 看板生成时刻（ISO）。 */
+  readonly asOf: string
+  readonly rows: readonly OptionPredictionBoardRow[]
+}
+
+/** 跟踪回溯统计矩阵单元。 */
+export interface PredictionMatrixCell {
+  readonly predicted: number
+  readonly hit: number
+}
+
+/** 跟踪回溯统计。 */
+export interface OptionPredictionStats {
+  readonly total: number
+  readonly scored: number
+  readonly marketHitRate: number
+  readonly volHitRate: number
+  readonly avgScore: number
+  /** 各盘势分类的预测次数 / 命中次数（key = MarketExpectation）。 */
+  readonly marketMatrix: Readonly<Record<string, PredictionMatrixCell>>
+  /** 各波动分类的预测次数 / 命中次数（key = VolExpectation）。 */
+  readonly volMatrix: Readonly<Record<string, PredictionMatrixCell>>
+}
+
+/** 经验沉淀条目（由 outcome.knowledgeNotes 聚合去重）。 */
+export interface PredictionKnowledgeItem {
+  readonly id: string
+  /** 经验标签，如「放量突破后次日易回踩」。 */
+  readonly lesson: string
+  /** 适用条件（什么行情/因子组合下适用）。 */
+  readonly condition: string
+  /** 来源预测 id 列表。 */
+  readonly sources: readonly string[]
+  /** 被引用次数（用于排序，越常用越靠前）。 */
+  readonly usage: number
+  /** 创建时间戳（ISO）。 */
+  readonly createdAt: string
+}
+
+/** 跟踪回溯视图：单标的（或全局）历史 + 统计 + 经验沉淀。 */
+export interface OptionPredictionTrack {
+  /** 限定标的（全局回溯时缺省）。 */
+  readonly underlying?: string
+  readonly predictions: readonly OptionPrediction[]
+  readonly stats: OptionPredictionStats
+  /** 经验沉淀汇总（聚合去重后的 lesson）。 */
+  readonly knowledge: readonly PredictionKnowledgeItem[]
+}
+
+/** 新建预测请求体（桥侧补全 id / createdAt / asOfDate）。 */
+export interface OptionPredictionDraft {
+  readonly underlying: string
+  readonly underlyingName?: string
+  readonly targetDate: string
+  readonly marketExpectation: MarketExpectation
+  readonly volExpectation: VolExpectation
+  readonly confidence: number
+  readonly factors: readonly PredictionFactor[]
+  readonly thesis: string
+  readonly evaluationMethod: string
+}
+
+/** 回填实盘结果请求体：只传原始实盘 + 复盘/经验，命中与评分由桥权威计算。 */
+export interface OptionPredictionSettle {
+  readonly id: string
+  /** 实际盘势分类（与 MarketExpectation 同域；无法判定时 'na'）。 */
+  readonly realizedMarket: MarketExpectation | 'na'
+  /** 实际波动方向（无法判定时 'na'）。 */
+  readonly realizedVol: VolExpectation | 'na'
+  /** 标的实际涨跌幅（%，收盘 vs 前收）。 */
+  readonly marketReturnPct: number
+  /** 实际波动率变化（小数：正=升、负=降）。 */
+  readonly volChange: number
+  /** 复盘笔记：对照预报与实盘，错在哪/对在哪、为何。 */
+  readonly retrospect?: string
+  /** 经验沉淀：可复用的结论，喂回下轮预测与知识库。 */
+  readonly knowledgeNotes?: string
+}
+
+/** 自动回填：缺 id 则按 asOf（上海日历日）批量处理到期未回填预测。 */
+export interface OptionPredictionAutoSettle {
+  readonly id?: string
+  readonly asOf?: string
+  readonly retrospect?: string
+  readonly knowledgeNotes?: string
+}
+
+export interface OptionPredictionAutoSettleSkip {
+  readonly id: string
+  readonly reason: string
+}
+
+export interface OptionPredictionAutoSettleResult {
+  readonly settled: readonly OptionPrediction[]
+  readonly skipped: readonly OptionPredictionAutoSettleSkip[]
 }
 
 export const OPTION_PAPER_INITIAL_CASH = 100_000

@@ -62,9 +62,11 @@ def test_reject_unknown_alias():
 
 
 def test_50etf_does_not_steal_500etf():
-    parsed = parse_option_name("500ETF购9月7000", market="SHO", as_of=date(2026, 9, 8))
-    assert parsed is not None
-    assert parsed.underlying == "510500"
+    # 2026-09-13 起 510500 别名下架：500ETF 解析不到 underlying，不入活跃链。
+    assert (
+        parse_option_name("500ETF购9月7000", market="SHO", as_of=date(2026, 9, 8))
+        is None
+    )
 
 
 def test_parse_star50_588080_by_guosen_alias():

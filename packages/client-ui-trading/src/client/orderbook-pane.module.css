@@ -45,9 +45,17 @@
   flex: none;
   font-size: 11.5px;
   color: var(--dsw-futu-text-muted, #8e95a3);
-  background: var(--dsw-futu-bg-subtle, #f5f6f8);
+  background: var(--dsw-futu-bg-subtle, rgba(127, 127, 127, 0.08));
+  border: 1px dashed var(--dsw-futu-border, rgba(127, 127, 127, 0.25));
   border-radius: 6px;
   padding: 8px 10px;
+}
+
+/* 完全降级（盘口 + 分笔都缺）：单行居中占位，不撑开空面板、不抢视觉。 */
+.degradedFull {
+  margin: 4px auto;
+  text-align: center;
+  max-width: 88%;
 }
 
 /* 力道比（内盘/外盘）：两段填充条 + 两端数值。 */
