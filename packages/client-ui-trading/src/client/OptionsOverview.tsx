@@ -30,6 +30,7 @@ import { directionColor, fmtCompact, fmtPercent, fmtPrice } from './format.ts'
 import { Sparkline } from './Sparkline.tsx'
 import { OverlayTrendChart } from './OverlayTrendChart.tsx'
 import { OptionsOpportunityBoard } from './OptionsOpportunityBoard.tsx'
+import { OptionsDetectedOpportunities, type OverviewDetectedShape } from './OptionsDetectedOpportunities.tsx'
 import { rankByCumulative, effectiveIvRegime } from './option-insight.ts'
 import {
   SCAN_ALL,
@@ -183,6 +184,8 @@ export function OptionsOverview({
     : null
   /** 明细表默认展开（WB-1 验收基线：9 行 / T-5 / 排序），可折叠让位给机会卡。 */
   const [showTable, setShowTable] = useState(true)
+  /** WB-14：后端聚合的检测账本机会（task #11 落地前 overview 上无此键，按 undefined 容错）。 */
+  const detected = (overview as OverviewDetectedShape | null)?.opportunities
   const ranks = new Map(rankByCumulative(rows).map(item => [item.row.underlying, item.rank]))
   /** 排序切 iv 后九路 vol_analytics 仍可能全缺席 → 如实提示，不让「没反应」背锅。 */
   const ivMissing = sort === 'iv' && rows.length > 0
@@ -273,6 +276,9 @@ export function OptionsOverview({
                       onPickRow={onPickRow}
                       onAskAi={onScanRow}
                     />
+                    {/* ②½ 检测到的期权机会（WB-14）：只读展示后端 overview.opportunities，
+                        后端未落地时 detected 为 undefined，组件整体不渲染（不整页空白）。 */}
+                    <OptionsDetectedOpportunities t={t} opportunities={detected} />
                     <button
                       type="button"
                       className={css.ghostBtn}

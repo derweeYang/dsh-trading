@@ -259,7 +259,8 @@ describe('cn_get_option_chain', () => {
       }),
     })
 
-    const fillsFile = path.join(dir, 'paper', 'fills', '2026-09-10.jsonl')
+    // 多账本布局：纸成交落在 paper/strategy/fills/（旧单账本布局由惰性迁移平移）。
+    const fillsFile = path.join(dir, 'paper', 'strategy', 'fills', '2026-09-10.jsonl')
     await vi.waitFor(async () => {
       const text = await readFile(fillsFile, 'utf8')
       expect(text).toContain('"reason":"signal"')
@@ -318,7 +319,7 @@ describe('cn_get_option_chain', () => {
       }),
     })
 
-    const fillsFile = path.join(dir, 'paper', 'fills', '2026-09-10.jsonl')
+    const fillsFile = path.join(dir, 'paper', 'strategy', 'fills', '2026-09-10.jsonl')
     await vi.waitFor(async () => {
       expect(await readFile(fillsFile, 'utf8')).toContain('"skip":"no_quote"')
     })

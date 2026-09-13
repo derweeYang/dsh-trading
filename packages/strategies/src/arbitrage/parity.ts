@@ -8,6 +8,7 @@
  */
 import type {
   ArbitrageChain,
+  ArbitrageDirection,
   ArbitrageLeg,
   ArbitrageOpportunity,
   ArbitrageQuoteRow,
@@ -116,6 +117,36 @@ export function parityMatrix(chain: ArbitrageChain, options: ParityOptions = {})
     })
   }
   return rows
+}
+
+/**
+ * 持仓监控用的同向签名边：按 direction 计算当前残余 edge（元/股，可正可负）。
+ * 与 scanParityArbitrage 同口径同号——executable 时为可执行边界，
+ * 无盘口时 execPrices 回退中间价（bid=ask=mid）两式自然退化为 ±deviation。
+ * 腿价缺失/无 spot/无到期 → undefined（调用方应 hold 等下轮）。
+ */
+export function paritySignedEdge(
+  chain: ArbitrageChain,
+  strike: number,
+  direction: Extract<ArbitrageDirection, 'buy_synthetic_sell_spot' | 'sell_synthetic_buy_spot'>,
+  options: ParityOptions = {},
+): { edgePerShare: number; executable: boolean } | undefined {
+  const rate = options.rate ?? 0.02
+  const q = options.dividendYield ?? 0
+  const asOf = options.asOf ?? chain.asOf
+  const T = yearsToExpiry(chain.expiryDate, asOf)
+  if (chain.spot === undefined || T === undefined) return undefined
+  const call = chain.calls.find((row) => row.strike === strike)
+  const put = chain.puts.find((row) => row.strike === strike)
+  if (call === undefined || put === undefined) return undefined
+
+  const cashForward = chain.spot * discountFactor(q, T) - strike * discountFactor(rate, T)
+  const cExec = execPrices(call)
+  const pExec = execPrices(put)
+  const edgePerShare = direction === 'sell_synthetic_buy_spot'
+    ? (cExec.bid - pExec.ask) - cashForward
+    : cashForward - (cExec.ask - pExec.bid)
+  return { edgePerShare, executable: cExec.executable && pExec.executable }
 }
 
 export function scanParityArbitrage(chain: ArbitrageChain, options: ParityOptions = {}): ArbitrageOpportunity[] {

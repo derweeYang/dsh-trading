@@ -23,6 +23,7 @@ import type {
   OptionIntradaySession,
   OptionIvRegime,
   OptionOverviewStrategy,
+  OptionPaperBookId,
 } from '@dshtrading/api'
 import { OptionCycleBook } from './option-cycles.js'
 import { sessionFlag } from './intraday-box.js'
@@ -104,16 +105,17 @@ export function cyclesPath(root: string, date: string): string {
   return path.join(root, 'cycles', `${date}.jsonl`)
 }
 
-export function paperAccountPath(root: string): string {
-  return path.join(root, 'paper', 'account.json')
+/** 纸账户多账本：paper/<book>/{account.json, positions.json, fills/<date>.jsonl}。 */
+export function paperAccountPath(root: string, book: OptionPaperBookId = 'strategy'): string {
+  return path.join(root, 'paper', book, 'account.json')
 }
 
-export function paperPositionsPath(root: string): string {
-  return path.join(root, 'paper', 'positions.json')
+export function paperPositionsPath(root: string, book: OptionPaperBookId = 'strategy'): string {
+  return path.join(root, 'paper', book, 'positions.json')
 }
 
-export function paperFillsPath(root: string, date: string): string {
-  return path.join(root, 'paper', 'fills', `${date}.jsonl`)
+export function paperFillsPath(root: string, book: OptionPaperBookId, date: string): string {
+  return path.join(root, 'paper', book, 'fills', `${date}.jsonl`)
 }
 
 export function recommendationsPath(root: string, date: string): string {

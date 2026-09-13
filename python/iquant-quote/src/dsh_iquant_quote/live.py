@@ -54,6 +54,21 @@ def expected_latest_open_ms(moment: datetime) -> int | None:
     return int((midnight + timedelta(minutes=minute_of_day)).timestamp() * 1000)
 
 
+def last_session_close_ms(moment: datetime) -> int:
+    """最近一个"已完成交易时段"的收盘 15:00（毫秒）：周末与盘前 1m 窗口的回退锚点。
+
+    只跳过周末，法定节假日落在工作日时无法识别——届时窗口头落空档 → SDK 空窗
+    NO_DATA（fail loud），与 _assert_klines_fresh 对节假日停更的处理口径一致。
+    """
+    day = moment.date()
+    while True:
+        day -= timedelta(days=1)
+        if day.weekday() < 5:
+            break
+    close = datetime(day.year, day.month, day.day, 15, 0, tzinfo=CST)
+    return int(close.timestamp() * 1000)
+
+
 def fourth_wednesday(year: int, month: int) -> date:
     """该月第四个周三（沪深 ETF 期权行权日）；与 connector-options expiryDateOf 同口径。"""
     import calendar
@@ -203,13 +218,41 @@ class LiveBackend:
         ):
             return cached[1]
         period_ms = 86_400_000 if interval == "1d" else 60_000
-        end_ms = int(self._now().timestamp() * 1000)
-        start_ms = end_ms - max(limit, 1) * period_ms * 2
-        bars = self.history_bars(market, code, start_ms, end_ms, limit, period_ms)
+        now = self._now()
+        end_ms = int(now.timestamp() * 1000)
+        if period_ms < DAY_MS:
+            # SDK 1m 历史窗口是天粒度且按"窗口头部 limit 根"截断（2026-09-13 实测：
+            # start 落在某天即从该天 09:31 起数；limit ≥ 窗口内总根数时全量交付，
+            # 单个交易日 ≈239 根）。周末/盘前按 now 回看只会空窗 NO_DATA，因此窗口
+            # 头锚定 anchor 所在交易日的 00:00——anchor 取"此刻应已存在的最新 1m bar"
+            # 位置（盘后回指 15:00），周末/盘前回退最近一个已完成交易时段的收盘；
+            # 按需多开几个交易日、limit 抬到全量容量迫使 SDK 整仓交付，返回前裁尾，
+            # 保证拿到的是最新 limit 根而非窗口头。
+            anchor = expected_latest_open_ms(now)
+            if anchor is None:
+                anchor = last_session_close_ms(now)
+            anchor_day = datetime.fromtimestamp(anchor / 1000, tz=CST).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            days_needed = -(
+                -max(limit, 1) // 200
+            )  # ceil；每交易日保守估 200 根可用 bar
+            start_ms = int(
+                (anchor_day - timedelta(days=days_needed - 1)).timestamp() * 1000
+            )
+            request_limit = days_needed * 250
+        else:
+            start_ms = end_ms - max(limit, 1) * period_ms * 2
+            request_limit = limit
+        bars = self.history_bars(
+            market, code, start_ms, end_ms, request_limit, period_ms
+        )
         if period_ms < DAY_MS:
             # 厂商本地历史库可能盘中停更（2026-09-11 510050 停在 10:30），
             # 停更数组整仓透传会把下游箱体钉死，陈旧数据宁可报错也不放行、更不回写缓存。
             self._assert_klines_fresh(bars, end_ms, market, code)
+            bars = sorted(bars, key=lambda bar: int(bar.get("openTime") or 0))
+            bars = bars[-max(limit, 1) :]
         self._klines_cache[key] = (today, bars)
         return bars
 

@@ -676,6 +676,37 @@ describe('TradingBridge option paper account', () => {
     }
   })
 
+  it('多账本：/options/paper/accounts 双账本一次返回；book 参数路由；非法 book 400', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-books-bridge-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    const bridge = new TradingBridge(fakeHost({}))
+    try {
+      const accounts = await dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/accounts', new URLSearchParams(),
+      )
+      expect(accounts.payload).toMatchObject({
+        ok: true,
+        books: [
+          { book: 'arbitrage', account: { initialCash: 100000, cash: 100000 }, equity: 100000, positions: [] },
+          { book: 'strategy', account: { initialCash: 100000, cash: 100000 }, equity: 100000, positions: [] },
+        ],
+      })
+
+      const arbFills = await dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/fills', new URLSearchParams({ book: 'arbitrage' }),
+      )
+      expect(arbFills.payload).toMatchObject({ ok: true, fills: [] })
+
+      await expect(dispatchBridgeRequest(
+        bridge, 'GET', '/options/paper/account', new URLSearchParams({ book: 'nope' }),
+      )).rejects.toMatchObject({ status: 400 })
+    } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
+  })
+
   it('keeps equity at initial cash when opening marks are unchanged', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-paper-equity-'))
     const prev = process.env[OPTIONS_DATA_ENV]
@@ -1690,7 +1721,8 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
       // （1m×5）真的被调用再核对持仓——「未变化」断言立即成立，直接断言 spy 会竞态。
       await vi.waitFor(async () => {
         expect(getKlines).toHaveBeenCalledWith('510050.SH', '1m', 5)
-        const positions = JSON.parse(await readFile(path.join(dir, 'paper', 'positions.json'), 'utf8'))
+        // 旧布局 fixture 经惰性迁移落到 paper/strategy/，管理断言读新位置。
+        const positions = JSON.parse(await readFile(path.join(dir, 'paper', 'strategy', 'positions.json'), 'utf8'))
         expect(positions).toEqual([plantedPosition])
       })
     } finally {
@@ -1744,10 +1776,111 @@ describe('TradingBridge CN ETF options 互联（阶段 4：spot 回填 / resolve
         bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf },
       )
       await vi.waitFor(async () => {
-        expect(JSON.parse(await readFile(path.join(dir, 'paper', 'positions.json'), 'utf8'))).toEqual([])
+        expect(JSON.parse(await readFile(path.join(dir, 'paper', 'strategy', 'positions.json'), 'utf8'))).toEqual([])
       })
       expect(placeOptionOrder).not.toHaveBeenCalled()
     } finally {
+      if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
+      else process.env[OPTIONS_DATA_ENV] = prev
+    }
+  })
+
+  it('POST /options/cycles/tick：套利账本 regular 对手价开仓 → close5 边收敛平仓（60s 链缓存越过）', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-arb-tick-'))
+    const prev = process.env[OPTIONS_DATA_ENV]
+    process.env[OPTIONS_DATA_ENV] = dir
+    // 2026-09-08 周二：03:00Z = BJT 11:00 regular；06:56Z = BJT 14:56 close5（只平不开，
+    // 收敛后的 0.00996 边仍过 0.005 扫描阈值，regular 会立即再开仓）。
+    const asOfOpen = '2026-09-08T03:00:00.000Z'
+    const asOfClose = '2026-09-08T06:56:00.000Z'
+    // C3 引擎测试同款链：C285 bid .048/ask .05、P285 bid .0184/ask .0204、spot 2.9
+    // → buy_synthetic_sell_spot 可执行边 ≈ 0.02072（2026-09-08 距到期 15 天，贴现略厚于
+    // C3 的 09-13 口径）；收敛链 C ask 提到 0.062 → 边 ≈ 0.00872 < openEdge/2 ≈ 0.01036。
+    const openedChain = {
+      underlying: '510050', expiryMonth: '2609', expiryDate: '2026-09-23', source: 'iquant',
+      snapshotAt: '2026-09-08T02:59:50.000Z', spot: 2.9,
+      calls: [{ code: '510050C2609M02850', strike: 2.85, last: 0.049, bid: 0.048, ask: 0.05 }],
+      puts: [{ code: '510050P2609M02850', strike: 2.85, last: 0.0194, bid: 0.0184, ask: 0.0204 }],
+    }
+    const convergedChain = {
+      ...openedChain,
+      snapshotAt: '2026-09-08T06:55:50.000Z',
+      calls: [{ code: '510050C2609M02850', strike: 2.85, last: 0.0615, bid: 0.061, ask: 0.062 }],
+    }
+    let chain = openedChain
+    const base = linkedHost()
+    const bridge = new TradingBridge({
+      ...base,
+      getMarketService: () => fakeService({
+        getTicker: async (symbol: string) => ({ symbol, price: 2.9, timestamp: 1 }),
+        getKlines: async () => [],
+      }),
+      getCnOptions: () => ({
+        ...base.getCnOptions!(),
+        listUnderlyings: async () => [
+          { underlying: '510050', exchange: 'SSE', name: '华夏上证50ETF', multiplier: 10000, tickSize: 0.0001, quotesSource: 'sse_board' },
+        ],
+        getOptionChain: async () => chain,
+        // 期权腿组合保证金 500 元/张（引擎再加卖空现货 50% 融券近似 14500）。
+        getStrategy: async () => ({
+          underlying: '510050', source: 'stub', spot: 2.9, multiplier: 10000,
+          legs: [], entry: { debitCredit: 0, note: 'stub' }, payoff: [],
+          greeks: { status: 'ok' as const, net: { delta: 0, gamma: 0, theta: 0, vega: 0 }, legs: [] },
+          margin: { perLeg: [], totalInitial: 500, totalMaintenance: 500, note: 'stub' },
+        }),
+      }),
+    })
+    // 链缓存 TTL 与 in-flight 闸都吃墙钟：只 fake Date，Promise/定时器保持真实。
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.parse(asOfOpen))
+      await dispatchBridgeRequest(
+        bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf: asOfOpen },
+      )
+      await vi.waitFor(async () => {
+        const positions = JSON.parse(await readFile(path.join(dir, 'paper', 'arbitrage', 'positions.json'), 'utf8'))
+        expect(positions).toHaveLength(1)
+        expect(positions[0]).toMatchObject({
+          id: 'arb:parity:510050:2609:2850',
+          book: 'arbitrage',
+          qty: 2,
+          direction: 'buy_synthetic_sell_spot',
+          strikes: [2.85],
+          expiryDate: '2026-09-23',
+        })
+        // 现货腿按份记账：2 张 × 10000 份，带全符号。
+        expect(positions[0].legs[2]).toMatchObject({
+          code: '510050', side: 'sell', qty: 20_000, asset: 'spot', spotSymbol: '510050.SH',
+        })
+      })
+      // cash = 100000 + 28684×2 − 15000×2 − 12.6（C3 引擎手算同款）。
+      const openedAccount = JSON.parse(await readFile(path.join(dir, 'paper', 'arbitrage', 'account.json'), 'utf8'))
+      expect(openedAccount.cash).toBeCloseTo(100_000 + 28_684 * 2 - 15_000 * 2 - 12.6, 8)
+      const openedFills = await readFile(path.join(dir, 'paper', 'arbitrage', 'fills', '2026-09-08.jsonl'), 'utf8')
+      expect(openedFills).toContain('"reason":"arb_open"')
+      // 等 fire-and-forget 周期收尾释放 in-flight 闸。
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      // 拨过 60s 链缓存 TTL；close5 只平不开。
+      vi.setSystemTime(Date.parse(asOfClose))
+      chain = convergedChain
+      await dispatchBridgeRequest(
+        bridge, 'POST', '/options/cycles/tick', new URLSearchParams(), { asOf: asOfClose },
+      )
+      await vi.waitFor(async () => {
+        expect(JSON.parse(await readFile(path.join(dir, 'paper', 'arbitrage', 'positions.json'), 'utf8'))).toEqual([])
+      })
+      const closedAccount = JSON.parse(await readFile(path.join(dir, 'paper', 'arbitrage', 'account.json'), 'utf8'))
+      // realizedPnl = 57368 + (0.061−0.0204)×2×10000 − 2.9×20000 − 双边费 25.2 = 154.8。
+      expect(closedAccount.realizedPnl).toBeCloseTo(154.8, 8)
+      const closedFills = await readFile(path.join(dir, 'paper', 'arbitrage', 'fills', '2026-09-08.jsonl'), 'utf8')
+      expect(closedFills).toContain('"reason":"arb_converge"')
+
+      // 策略账本同 tick 驱动但完全隔离：仍是 10 万初始。
+      const strategyAccount = JSON.parse(await readFile(path.join(dir, 'paper', 'strategy', 'account.json'), 'utf8'))
+      expect(strategyAccount.cash).toBe(100_000)
+    } finally {
+      vi.useRealTimers()
       if (prev === undefined) delete process.env[OPTIONS_DATA_ENV]
       else process.env[OPTIONS_DATA_ENV] = prev
     }

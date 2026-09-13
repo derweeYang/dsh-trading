@@ -717,3 +717,165 @@
 .actionCell {
   text-align: right;
 }
+
+/* ── WB-14 检测到的期权机会 ─────────────────────────────────────────── */
+
+.detected {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.detectedHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.detectedTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+.detectedHint {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.detectedCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 8px;
+}
+
+.detectedCard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  border-radius: var(--dsw-futu-radius-md, 6px);
+  padding: 8px 10px;
+  background: var(--dsw-futu-bg-surface, #fff);
+  min-width: 0;
+}
+
+.detectedCardHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.detectedLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+}
+
+.detectedBadge {
+  font-family: var(--dsw-futu-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.detectedBucket {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  font-variant-numeric: tabular-nums;
+}
+
+.detectedStatus {
+  font-size: 11px;
+  border-radius: var(--dsw-futu-radius-xs, 3px);
+  padding: 1px 6px;
+  border: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  color: var(--dsw-futu-text-secondary, #5f6672);
+}
+
+.detectedStatus[data-tone='edge'] {
+  background: var(--dsw-futu-accent-subtle, rgba(37, 99, 235, 0.08));
+  border-color: var(--dsw-futu-accent-border, rgba(37, 99, 235, 0.25));
+  color: var(--dsw-futu-accent-text, #2563eb);
+}
+
+.detectedStatus[data-tone='none'] {
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  border-color: transparent;
+}
+
+.detectedProse {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  white-space: pre-wrap;
+}
+
+.detectedPick {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-top: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+  padding-top: 5px;
+}
+
+.detectedPickHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.detectedCode {
+  font-family: var(--dsw-futu-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+}
+
+.detectedNum {
+  text-align: right;
+  color: var(--dsw-futu-text-primary, #1a1e24);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.detectedLegs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.detectedLegs th {
+  text-align: right;
+  padding: 3px 6px;
+  color: var(--dsw-futu-text-secondary, #5f6672);
+  font-weight: 600;
+  border-bottom: 1px solid var(--dsw-futu-border-default, #e3e6ea);
+  white-space: nowrap;
+}
+
+.detectedLegs th:first-child {
+  text-align: left;
+}
+
+.detectedLegs td {
+  padding: 3px 6px;
+}
+
+.detectedLegs td:first-child {
+  text-align: left;
+}
+
+.detectedDisclaimer {
+  font-size: 11px;
+  color: var(--dsw-futu-text-muted, #8e95a3);
+  border-top: 1px solid var(--dsw-futu-border-subtle, #edf0f3);
+  padding-top: 5px;
+}
