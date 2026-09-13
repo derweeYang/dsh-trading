@@ -38,7 +38,8 @@ type PaperLegs = PaperFill['legs']
 type SkipReason = NonNullable<PaperFill['skip']>
 const paperStateLocks = new Map<string, Promise<void>>()
 
-async function withPaperStateLock<T>(root: string, task: () => Promise<T>): Promise<T> {
+/** 同 root 账本操作串行化（按 root 排队、不可重入；套利引擎与策略账本共用）。 */
+export async function withPaperStateLock<T>(root: string, task: () => Promise<T>): Promise<T> {
   const previous = paperStateLocks.get(root) ?? Promise.resolve()
   let release!: () => void
   const current = new Promise<void>((resolve) => {
