@@ -839,6 +839,7 @@ export type MarketLocaleKey =
   | 'trade.summary.byCurrency'
   | 'trade.summary.unconverted'
   | 'trade.summary.unconvertedHint'
+  | 'trade.summary.optionBasisNote'
   | 'trade.summary.realizedPnl'
   | 'trade.summary.realizedHint'
   | 'trade.summary.floatingPnl'

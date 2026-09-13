@@ -38,7 +38,16 @@ vi.mock('../src/client/holdings-store.ts', () => {
     market: 'cn',
     account: 'A-live',
   }
-  const snapshot = { book: null, liveTagged: [liveRow], prices: {}, fx: null }
+  const importedRow = {
+    id: 'hd-1', symbol: '510050', side: 'long', size: 100, entryPrice: 2.8,
+    updatedAt: '2026-09-13T02:00:00.000Z', kind: 'stock', market: 'cn', account: '富途',
+  }
+  const snapshot = {
+    book: { holdings: [importedRow] },
+    liveTagged: [liveRow],
+    prices: { 'cn:510300': 3.9, 'cn:510050': 3 },
+    fx: { base: 'CNY', rates: { CNY: 1 }, asOf: 1, stale: false },
+  }
   return {
     holdingsDataStore: { subscribe: () => () => {}, getSnapshot: () => snapshot },
     holdingsBaseStore: { subscribe: () => () => {}, getSnapshot: () => 'CNY' },
@@ -81,6 +90,21 @@ function stubFetch(): string[] {
       })
     }
     if (url.includes('/options/paper/fills')) return json({ ok: true, fills: [] })
+    if (url.includes('/options/paper/desk')) {
+      // 桥按 `{ ok, desk }` 包一层（与 overview/barPacket 同构），不是裸 OptionPaperDesk。
+      return json({
+        ok: true,
+        desk: {
+          account: { ...ACCOUNT_BASE, id: 'strategy' },
+          equity: 100_000,
+          positions: [],
+          days: [],
+          dayCount: 0,
+          recentFills: [],
+          asOf: '2026-09-13T02:00:00.000Z',
+        },
+      })
+    }
     return json({ ok: false, code: 'TRADING_PROTOCOL', message: `unexpected ${url}` }, 404)
   }) as unknown as typeof globalThis.fetch
   return calls
@@ -154,6 +178,44 @@ describe('资产面板 —— 所有账户入口', () => {
     })
 
     expect(tabKeys(view.container as HTMLElement)[5]).toBe('trade.tab.optPaper')
+    expect(view.container.querySelectorAll('[data-opt-paper-book]')).toHaveLength(2)
+  })
+
+  it('汇总页签逐子账户列出：股票三源 + 期权双账本，总资产 = 各行之和', async () => {
+    // 三源都要有持仓——`byOrigin` 只含出现的来源，paper 空仓就没有这一行。
+    paperTradingStore.placeOrder({
+      symbol: '510050', side: 'buy', type: 'market', quantity: 100, currentPrice: 2.9, market: 'cn',
+    })
+    const view = renderPanel()
+    fireEvent.click(view.container.querySelectorAll('[role="tab"]')[1] as HTMLElement) // 汇总
+    await waitFor(() => {
+      expect(view.container.querySelectorAll('[data-sub-account]').length).toBe(5)
+    })
+
+    const rows = [...view.container.querySelectorAll('[data-sub-account]')]
+    expect(rows.map(el => el.getAttribute('data-sub-account'))).toEqual([
+      'stock:paper', 'stock:live', 'stock:imported', 'option:arbitrage', 'option:strategy',
+    ])
+    // 口径必须可见地区分：股票侧是持仓市值，期权账本是含现金的权益
+    expect(rows.map(el => el.getAttribute('data-basis')))
+      .toEqual(['holdings', 'holdings', 'holdings', 'equity', 'equity'])
+    expect(view.container.querySelector('[data-sub-account-basis-note]')).not.toBeNull()
+
+    // 核心口径：总资产 === Σ 每个子账户（读 data-amount，不解析格式化文案）
+    const total = Number(view.container.querySelector('[data-sub-account-total]')?.getAttribute('data-sub-account-total'))
+    const sum = rows.reduce((acc, el) => acc + Number(el.getAttribute('data-amount')), 0)
+    expect(sum).toBeCloseTo(total, 6)
+    // 两个期权账本各 10 万确实进了总资产（否则等于只有股票三源）
+    expect(total).toBeGreaterThanOrEqual(200_000)
+  })
+
+  it('期权账户页签同时给出双账本卡与执行台（desk 已自期权总览迁入）', async () => {
+    const view = renderPanel()
+    await openOptionTab(view)
+    await waitFor(() => {
+      expect(view.container.querySelector('[data-dshtrading-paper-desk]')).not.toBeNull()
+    })
+    // 账本卡与执行台同处一页：卡片答「有多少钱」，执行台答「执行链有没有断」
     expect(view.container.querySelectorAll('[data-opt-paper-book]')).toHaveLength(2)
   })
 

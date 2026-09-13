@@ -21,6 +21,7 @@ const API = vi.hoisted(() => ({
   overview: vi.fn(),
   cycle: vi.fn(),
   packet: vi.fn(),
+  desk: vi.fn(),
 }))
 
 vi.mock('../src/client/api.ts', async (importOriginal) => {
@@ -30,6 +31,7 @@ vi.mock('../src/client/api.ts', async (importOriginal) => {
     fetchOptionsOverview: API.overview,
     fetchOptionsCycleLoop: API.cycle,
     fetchOptionsBarPacket: API.packet,
+    fetchOptionsPaperDesk: API.desk,
   }
 })
 
@@ -58,6 +60,7 @@ beforeEach(() => {
   API.overview.mockResolvedValue(OVERVIEW_FAIL)
   API.cycle.mockResolvedValue(CYCLE_FAIL)
   API.packet.mockResolvedValue({ ok: false, code: 'NO_PACKET', message: 'no packet file' })
+  API.desk.mockResolvedValue({ ok: false, code: 'NO_DESK', message: 'desk not wired' })
 })
 
 afterEach(() => {
@@ -112,6 +115,20 @@ describe('OptionsOverviewMiddleView 空态聚合（P2-8）', () => {
     expect(getByText('options.sources.loading')).toBeTruthy()
     expect(container.textContent).not.toContain('options.cycle.loading')
     expect(container.textContent).not.toContain('options.overview.loading')
+  })
+
+  it('纸账户执行台已迁出到资产面板（WB-18）：本页不再渲染 desk，也不再刷该端点', async () => {
+    API.overview.mockResolvedValue({ ok: true, data: OVERVIEW })
+    const { container } = render(<OptionsOverviewMiddleView {...props} />)
+    await waitFor(() => {
+      expect(container.textContent).toContain('510050')
+    })
+
+    // 迁移而非复制：中栏无 desk 区（它在资产面板的期权账户页签）
+    expect(container.querySelector('[data-dshtrading-paper-desk]')).toBeNull()
+    expect(container.textContent).not.toContain('options.desk.title')
+    // 也不再为它单独轮询——中栏只剩总览与闭环两条数据源
+    expect(API.desk).not.toHaveBeenCalled()
   })
 })
 

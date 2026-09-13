@@ -796,6 +796,17 @@ body[data-ds-dark-theme] .root,
   color: var(--hp-amber);
 }
 
+/* 子账户口径脚注（2026-09-14）：期权账本按权益（含现金）计入，与股票侧持仓市值
+   不同质——必须显式说明，否则「总资产」会被读成一个可比的钱数。 */
+.subAccountNote {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--dsw-futu-border-subtle);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--dsw-futu-text-muted);
+}
+
 .sectionTitle {
   font-size: 10.5px;
   font-weight: 600;

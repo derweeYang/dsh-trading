@@ -11,11 +11,10 @@
  * 本页技术与行情分析面，不构成投资建议。
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import type { OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionCycleLoop, OptionBarContextPacket, OptionPaperDesk } from '@dshtrading/api'
-import { fetchOptionsOverview, fetchOptionsCycleLoop, fetchOptionsBarPacket, fetchOptionsPaperDesk, fetchOptionsResolve } from './api.ts'
+import type { OptionOverview, OptionOverviewRow, OptionOverviewSort, OptionCycleLoop, OptionBarContextPacket } from '@dshtrading/api'
+import { fetchOptionsOverview, fetchOptionsCycleLoop, fetchOptionsBarPacket, fetchOptionsResolve } from './api.ts'
 import { colorModeStore } from './color-mode.ts'
 import { OptionsOverview } from './OptionsOverview.tsx'
-import { OptionsPaperDesk } from './OptionsPaperDesk.tsx'
 import { OptionsCycleLoop } from './OptionsCycleLoop.tsx'
 import { cumulativeReturn } from './option-insight.ts'
 import {
@@ -43,7 +42,6 @@ import css from './options-overview-middle.module.css'
 
 const OPTIONS_OVERVIEW_POLL_MS = 60000
 const OPTIONS_CYCLE_LOOP_POLL_MS = 30000
-const OPTIONS_PAPER_DESK_POLL_MS = 30000
 
 /** 聚合态 → 页面级通知文案键（'data' = 不聚合，不进此表）。 */
 const SOURCES_NOTICE_KEY: Record<Exclude<OptionsSourcePhase, 'data'>, MarketLocaleKey> = {
@@ -64,10 +62,6 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
   const [cycleLoaded, setCycleLoaded] = useState(false)
   /** WB-12：当天最新定时桶 ContextPacket；无文件时桥返回无 `packet` 键 → 这里为 null（不渲染整条）。 */
   const [barPacket, setBarPacket] = useState<OptionBarContextPacket | null>(null)
-  /** 纸账户执行台：零成交/全 skip 是诊断载荷，取到后即使全 0 也渲染（不进 P2-8 聚合）。 */
-  const [desk, setDesk] = useState<OptionPaperDesk | null>(null)
-  const [deskFailure, setDeskFailure] = useState<{ code: string; message: string } | null>(null)
-  const [deskLoaded, setDeskLoaded] = useState(false)
 
   /** 排序切换期间丢弃旧应答（避免乱序覆盖）。 */
   const sortRef = useRef(sort)
@@ -136,21 +130,11 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
   }, OPTIONS_CYCLE_LOOP_POLL_MS, [])
 
   /**
-   * 纸账户执行台 30s 轮询（账本只在 5 分钟桶推进时变化）。desk 是第三条数据源
-   * 但**不进 sourceProbes**：P2-8 聚合保持「总览 + 闭环」双源语义，desk 自报
-   * 加载/失败态（空账本不是空数据，见 OptionsPaperDesk 注释）。
+   * 纸账户执行台（`GET /options/paper/desk`）**已迁出**到资产面板的期权账户
+   * 页签（2026-09-14 WB-18）——它回答的是「候选→成交→打分的执行链有没有断」，
+   * 属于账户诊断面而非标的总览，与资产面板的账本卡同处更顺；本页也不再为它
+   * 单独轮询（原先它是第三条数据源且不进 P2-8 聚合）。
    */
-  usePoll(async () => {
-    const res = await fetchOptionsPaperDesk()
-    if (res.ok) {
-      setDesk(res.data)
-      setDeskFailure(null)
-    } else {
-      setDesk(null)
-      setDeskFailure({ code: res.code, message: res.message })
-    }
-    setDeskLoaded(true)
-  }, OPTIONS_PAPER_DESK_POLL_MS, [])
 
   const actions = stageActions.current
   const fill = actions.fillComposer
@@ -273,13 +257,6 @@ export function OptionsOverviewMiddleView({ t }: StageViewProps): React.JSX.Elem
         suppressNotice={aggregateNoticeKey !== null}
         {...(onScanAll !== undefined ? { onScanAll } : {})}
         {...(onScanRow !== undefined ? { onScanRow } : {})}
-      />
-      <OptionsPaperDesk
-        t={t}
-        desk={desk}
-        failure={deskFailure}
-        loaded={deskLoaded}
-        suppressNotice={aggregateNoticeKey !== null}
       />
       <OptionsCycleLoop
         t={t}

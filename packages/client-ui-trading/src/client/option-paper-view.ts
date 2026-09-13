@@ -28,6 +28,12 @@ export const BOOK_KEY = {
   arbitrage: 'trade.optPaper.book.arbitrage',
 } as const satisfies Record<OptionPaperBookId, MarketLocaleKey>
 
+/**
+ * 账本渲染序（期权账户页签的卡片、成交流水 chips、汇总页签的子账户行共用）——
+ * 桥按该序列回，UI 也按该序排，缺账本时跳过而不是补桩。
+ */
+export const OPTION_BOOK_ORDER: readonly OptionPaperBookId[] = ['arbitrage', 'strategy']
+
 /** 套利结构名（`PaperPosition.template` 在套利账本是 'parity' | 'box'）。 */
 export const ARB_TEMPLATE_KEY: Readonly<Record<'parity' | 'box', MarketLocaleKey>> = {
   parity: 'trade.optPaper.template.parity',

@@ -31,7 +31,7 @@ import type { MarketLocaleKey } from './contract.ts'
 import { directionColor, fmtPrice, fmtPercent } from './format.ts'
 import { usePoll } from './usePoll.ts'
 import {
-  BOOK_KEY, OFFSET_KEY, PRICE_SOURCE_KEY, arbDirectionKey, bookReturnRatio, expiryDaysLeft,
+  BOOK_KEY, OFFSET_KEY, OPTION_BOOK_ORDER, PRICE_SOURCE_KEY, arbDirectionKey, bookReturnRatio, expiryDaysLeft,
   fillRowKey, isExpiringSoon, isSpotLeg, legUnitKey, paperReasonKey, paperReasonKind,
   paperTemplateKey, positionRowKey, strikeLabel,
 } from './option-paper-view.ts'
@@ -41,14 +41,26 @@ import own from './option-paper-books.module.css'
 /** 翻译函数形状（与 HoldingsPanel / OptionsOverview 同构；本组件不引面板模块，避免值循环）。 */
 export type OptionPaperBooksTranslate = (key: MarketLocaleKey, params?: Record<string, unknown>) => string
 
+/**
+ * 受控账本（父级已取数时传入）。存在的意义是**汇总页签与期权账户页签看同一份权益**：
+ * 资产面板的总资产要把两个期权账本算进去，若两处各自 fetch，切页签时的数字可能差一跳。
+ * 缺席 → 组件自取（独立冒烟与单测路径，行为与旧版完全一致）。
+ */
+export interface OptionPaperBooksControlled {
+  books: readonly OptionPaperBookWire[] | null
+  failure: { code: string; message: string } | null
+  /** 重置该账本成功后回写（父级持有数据时由父级更新快照）。 */
+  onChange: (books: readonly OptionPaperBookWire[]) => void
+}
+
 export interface OptionPaperBooksProps {
   t: OptionPaperBooksTranslate
+  /** 受控数据；不传则组件自取。 */
+  accounts?: OptionPaperBooksControlled | undefined
 }
 
 /** 期权纸账户轮询周期：与宿主心跳同频（30s），不更密——账本每跳最多动一次。 */
 const POLL_MS = 30_000
-
-const BOOK_ORDER: readonly OptionPaperBookId[] = ['arbitrage', 'strategy']
 
 /** 腿的买卖标签走既有交易词典（不新造一份）。 */
 const SIDE_KEY: Record<'buy' | 'sell', MarketLocaleKey> = { buy: 'trade.buy', sell: 'trade.sell' }
@@ -263,29 +275,38 @@ function FillRow({ t, fill, book, colorMode }: {
   )
 }
 
-export function OptionPaperBooks({ t }: OptionPaperBooksProps): React.JSX.Element {
-  const [books, setBooks] = useState<readonly OptionPaperBookWire[] | null>(null)
-  const [failure, setFailure] = useState<{ code: string; message: string } | null>(null)
+export function OptionPaperBooks({ t, accounts }: OptionPaperBooksProps): React.JSX.Element {
+  const [selfBooks, setSelfBooks] = useState<readonly OptionPaperBookWire[] | null>(null)
+  const [selfFailure, setSelfFailure] = useState<{ code: string; message: string } | null>(null)
   const [fillsBook, setFillsBook] = useState<OptionPaperBookId>('strategy')
   const [fills, setFills] = useState<readonly PaperFill[] | null>(null)
   const [resetFailure, setResetFailure] = useState(false)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const colorMode = useSyncExternalStore(colorModeStore.subscribe, colorModeStore.getSnapshot)
 
+  const books = accounts !== undefined ? accounts.books : selfBooks
+  const failure = accounts !== undefined ? accounts.failure : selfFailure
+  /** 账本快照的唯一写入口：受控 → 交回父级（与汇总页签共用一份），否则写本地。 */
+  const writeBooks = (next: readonly OptionPaperBookWire[]): void => {
+    if (accounts !== undefined) accounts.onChange(next)
+    else setSelfBooks(next)
+  }
+
   // 30s 轮询两账本（挂载即拉、卸载即停、页面不可见暂停由 usePoll 承担）。
-  // 失败记账但不回滚已渲染的账本：单次抖动不该把已有权益数字抹成空态；
+  // **受控时让位**（poll 传 null）：父级已在轮询同一端点，这里再拉一次就是同端点
+  // 双请求。失败记账但不回滚已渲染的账本：单次抖动不该把已有权益数字抹成空态；
   // 首次就失败（books 仍为 null）才把错误码摆到台上。
-  usePoll(() => {
+  usePoll(accounts !== undefined ? null : () => {
     void fetchOptionPaperAccounts().then((res) => {
       if (res.ok) {
-        setBooks(res.data.books)
-        setFailure(null)
+        setSelfBooks(res.data.books)
+        setSelfFailure(null)
       } else {
-        setFailure({ code: res.code, message: res.message })
+        setSelfFailure({ code: res.code, message: res.message })
       }
       setNowMs(Date.now())
     })
-  }, POLL_MS, [])
+  }, POLL_MS, [accounts !== undefined])
 
   // 流水与账户解耦轮询（切账本立即重拉；limit 与桥缺省一致）。
   usePoll(() => {
@@ -303,10 +324,10 @@ export function OptionPaperBooks({ t }: OptionPaperBooksProps): React.JSX.Elemen
         setResetFailure(true)
         return
       }
-      // 回包即该账本的新快照：就地替换，不等下一跳轮询。
-      setBooks(prev => prev === null
+      // 回包即该账本的新快照：就地替换，不等下一跳轮询（受控时交回父级）。
+      writeBooks(books === null
         ? [res.data]
-        : prev.map(item => (item.book === res.data.book ? res.data : item)))
+        : books.map(item => (item.book === res.data.book ? res.data : item)))
       setNowMs(Date.now())
       void fetchOptionPaperFills(book, OPTION_PAPER_FILLS_LIMIT).then((fillsRes) => {
         if (fillsRes.ok && fillsBook === book) setFills(fillsRes.data)
@@ -318,7 +339,7 @@ export function OptionPaperBooks({ t }: OptionPaperBooksProps): React.JSX.Elemen
     if (books === null) return null
     const byId = new Map(books.map(b => [b.book, b]))
     // 桥按 [arbitrage, strategy] 回；这里按固定顺序渲染并容忍缺账本。
-    return BOOK_ORDER.flatMap(id => {
+    return OPTION_BOOK_ORDER.flatMap(id => {
       const found = byId.get(id)
       return found === undefined ? [] : [found]
     })
@@ -355,7 +376,7 @@ export function OptionPaperBooks({ t }: OptionPaperBooksProps): React.JSX.Elemen
 
       <div className={css.sectionTitle}>{t('trade.optPaper.fills.title')}</div>
       <div className={css.chips}>
-        {BOOK_ORDER.map(id => (
+        {OPTION_BOOK_ORDER.map(id => (
           <button
             key={id}
             type="button"

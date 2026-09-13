@@ -29,7 +29,10 @@
  *   互不相干，故不受 tradeMode 影响；实现见 OptionPaperBooks.tsx。
  */
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { fetchTradeOpenOrders, fetchTradeFills, fetchTradeBalances } from './api.ts'
+import type { OptionPaperBookWire, OptionPaperDesk } from '@dshtrading/api'
+import {
+  fetchOptionPaperAccounts, fetchOptionsPaperDesk, fetchTradeOpenOrders, fetchTradeFills, fetchTradeBalances,
+} from './api.ts'
 import type { TradeRowsReason } from './api.ts'
 import { IconChevronRight, IconClose, IconPlus, IconWallet } from './icons.tsx'
 import {
@@ -44,6 +47,7 @@ import type { MarketLocaleKey } from './contract.ts'
 import { directionColor, fmtPercent, fmtPrice } from './format.ts'
 import { aggregateHoldings } from './holdings-aggregate.ts'
 import type { HoldingDetailRow, HoldingSummaryRow } from './holdings-aggregate.ts'
+import { aggregateSubAccounts } from './holdings-subaccounts.ts'
 import { convertCnyToBase, derivePositionRounds } from './position-rounds.ts'
 import type { SymbolRoundHistory } from './position-rounds.ts'
 import { paperTradingStore } from './paper-trading-store.ts'
@@ -52,7 +56,9 @@ import {
   reloadHoldingsBook, setHoldingsBaseCurrency, stagedHoldings, subscribeTradingEventsHoldings,
 } from './holdings-store.ts'
 import { tradeModeStore, writeTradeMode } from './trade-mode-store.ts'
+import { usePoll } from './usePoll.ts'
 import { OptionPaperBooks } from './OptionPaperBooks.tsx'
+import { OptionsPaperDesk } from './OptionsPaperDesk.tsx'
 import type { SendImageInput } from './fill-composer.ts'
 import css from './holdings-panel.module.css'
 
@@ -469,6 +475,42 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
     void refreshFx(baseCurrency)
   }, [baseCurrency])
 
+  /* ── 期权账本与执行台（2026-09-14 WB-18）───────────────────────────
+   * 账本取数**提到面板顶层**：持仓页签的权益条、汇总页签的总资产、期权账户页签
+   * 都要同一份权益——三处各 fetch 会让同一屏出现两个「总资产」数字。
+   * 账本随面板挂载即轮询（面板本身就是资产总览）；执行台只在期权账户页签活跃时
+   * 轮询（poll 传 null 即不跑），避免用户开面板却在后台刷桥。 */
+  const optionDeskNeeded = activeTab === 'optPaper'
+  const [optBooks, setOptBooks] = useState<readonly OptionPaperBookWire[] | null>(null)
+  const [optFailure, setOptFailure] = useState<{ code: string; message: string } | null>(null)
+  const [desk, setDesk] = useState<OptionPaperDesk | null>(null)
+  const [deskFailure, setDeskFailure] = useState<{ code: string; message: string } | null>(null)
+  const [deskLoaded, setDeskLoaded] = useState(false)
+
+  usePoll(() => {
+    void fetchOptionPaperAccounts().then((res) => {
+      if (res.ok) {
+        setOptBooks(res.data.books)
+        setOptFailure(null)
+      } else {
+        setOptFailure({ code: res.code, message: res.message })
+      }
+    })
+  }, 30_000, [])
+
+  usePoll(optionDeskNeeded ? () => {
+    void fetchOptionsPaperDesk().then((res) => {
+      if (res.ok) {
+        setDesk(res.data)
+        setDeskFailure(null)
+      } else {
+        setDesk(null)
+        setDeskFailure({ code: res.code, message: res.message })
+      }
+      setDeskLoaded(true)
+    })
+  } : null, 30_000, [optionDeskNeeded])
+
   /* ── 委托/成交/余额：paper 读本地模拟账本（paperTick 响应式）；
    *    live 四市场逐个拉取，行打市场标签，失败静默跳过（原因留作降级提示）。── */
   const [liveOrders, setLiveOrders] = useState<MarketTaggedRow<Order>[] | null>(null)
@@ -536,6 +578,16 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
   const aggregation: HoldingsAggregationView = useMemo(
     () => aggregateHoldings(taggedPositions, data.prices, data.fx ?? undefined),
     [taggedPositions, data.prices, data.fx],
+  )
+
+  /**
+   * 子账户汇总（2026-09-14）：总资产 = Σ **每个子账户**（股票三源 + 期权双账本）。
+   * 账本未取到时按空集算（总资产只反映股票侧），而不是把期权当 0 元画进合计——
+   * 前者是「还没拿到」，后者是「拿到了没有钱」。UI 用 `hasOptionAccounts` 区分。
+   */
+  const subAccounts = useMemo(
+    () => aggregateSubAccounts(aggregation, optBooks ?? [], data.fx ?? undefined),
+    [aggregation, optBooks, data.fx],
   )
 
   // 已实现盈亏（2026-09-06）：paper 撮合流水 FIFO 回合（paperTick 驱动重读）。
@@ -817,12 +869,14 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
       <div className={css.body} key={activeTab}>
         {activeTab === 'positions' && (
           <>
-            {/* 权益 hero 条：总资产常驻持仓页签顶部（复用汇总聚合结果，不新增数据面）；
-                2026-09-06 追加已实现（paper FIFO 回合合计）/浮动（盯市 uPnL 合计）总口径。 */}
+            {/* 权益 hero 条：总资产常驻持仓页签顶部；
+                2026-09-06 追加已实现（paper FIFO 回合合计）/浮动（盯市 uPnL 合计）总口径；
+                2026-09-14 总资产改与汇总页签同口径（逐子账户，含期权双账本）——
+                同一屏出现两个「总资产」却是两个数，是比数字小更糟的失真。 */}
             <div className={css.equityStrip}>
               <span className={css.equityLabel}>{t('trade.summary.totalAssets')}</span>
-              <span className={css.equityValue} title={aggregation.approximate ? t('trade.summary.approxHint') : undefined}>
-                {aggregation.approximate ? '≈ ' : ''}<span className={css.equityNum}>{fmtPrice(aggregation.totalBase)}</span>
+              <span className={css.equityValue} title={subAccounts.approximate ? t('trade.summary.approxHint') : undefined}>
+                {subAccounts.approximate ? '≈ ' : ''}<span className={css.equityNum}>{fmtPrice(subAccounts.totalBase)}</span>
                 <span className={css.equityBase}>{aggregation.base}</span>
               </span>
               {realizedBase !== undefined && (
@@ -924,20 +978,36 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
               </div>
               <span
                 className={css.totalValue}
-                title={aggregation.approximate ? t('trade.summary.approxHint') : undefined}
+                data-sub-account-total={subAccounts.totalBase}
+                title={subAccounts.approximate ? t('trade.summary.approxHint') : undefined}
               >
-                {aggregation.approximate ? '≈ ' : ''}{fmtPrice(aggregation.totalBase)} {aggregation.base}
+                {subAccounts.approximate ? '≈ ' : ''}{fmtPrice(subAccounts.totalBase)} {aggregation.base}
               </span>
-              {aggregation.byOrigin.map(sub => (
-                <div key={sub.origin} className={css.subtotalLine}>
-                  {t(ORIGIN_BADGE_KEY[sub.origin])} {fmtPrice(sub.totalBase)} {aggregation.base}
-                  {sub.unconverted.length > 0 && (
+              {/* 分账户小计（2026-09-14）：总资产 = Σ 这里每一行——股票三源 + 期权双账本。
+                  两端口径不同（股票是持仓市值，期权账本是含现金的 equity），故逐行标
+                  `data-basis` 并在含期权时给一行脚注，不假装同质。`data-amount` 供
+                  「总资产 === Σ 子账户」这条口径断言直接取数（不靠解析格式化文案）。 */}
+              {subAccounts.rows.map(row => (
+                <div
+                  key={row.id}
+                  className={css.subtotalLine}
+                  data-sub-account={row.id}
+                  data-basis={row.basis}
+                  data-amount={row.amountBase}
+                >
+                  {t(row.labelKey)} {fmtPrice(row.amountBase)} {aggregation.base}
+                  {row.unconverted.length > 0 && (
                     <span className={css.unconverted}>
-                      {' '}(+{sub.unconverted.map(u => fmtPrice(u.amount) + ' ' + u.currency).join(' + ')})
+                      {' '}(+{row.unconverted.map(u => fmtPrice(u.amount) + ' ' + u.currency).join(' + ')})
                     </span>
                   )}
                 </div>
               ))}
+              {subAccounts.hasOptionAccounts && (
+                <div className={css.subAccountNote} data-sub-account-basis-note="">
+                  {t('trade.summary.optionBasisNote')}
+                </div>
+              )}
               {aggregation.byCurrency.length > 0 && (
                 <div className={css.subtotalLine} title={t('trade.summary.byCurrency')}>
                   {aggregation.byCurrency.map(c =>
@@ -945,10 +1015,10 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
                   ).join(' · ')}
                 </div>
               )}
-              {aggregation.unconverted.length > 0 && (
+              {subAccounts.unconverted.length > 0 && (
                 <div className={css.subtotalLine} title={t('trade.summary.unconvertedHint')}>
                   <span className={css.unconverted}>
-                    {t('trade.summary.unconverted')}: {aggregation.unconverted.map(u => fmtPrice(u.amount) + ' ' + u.currency).join(' + ')}
+                    {t('trade.summary.unconverted')}: {subAccounts.unconverted.map(u => fmtPrice(u.amount) + ' ' + u.currency).join(' + ')}
                   </span>
                 </div>
               )}
@@ -1127,8 +1197,30 @@ export function HoldingsPanel({ t, onClose, fillComposer }: HoldingsPanelProps):
 
         {/* 期权虚拟账户（2026-09-13 WB-15）：双账本只读展示 + 单账本重置。
             数据面独立于股票三源（桥 /options/paper/*），因此不受 tradeMode
-            影响——paper/live 开关切的是股票面，期权账本是它自己的模拟账本。 */}
-        {activeTab === 'optPaper' && <OptionPaperBooks t={t} />}
+            影响——paper/live 开关切的是股票面，期权账本是它自己的模拟账本。
+            账本数据由面板顶层取数后受控传入（汇总页签算总资产要用同一份）。 */}
+        {activeTab === 'optPaper' && (
+          <>
+            <OptionPaperBooks
+              t={t}
+              accounts={{
+                books: optBooks,
+                failure: optFailure,
+                onChange: (next) => { setOptBooks(next) },
+              }}
+            />
+            {/* 纸账户执行台（2026-09-14 WB-18）：自期权总览中栏**迁移**至此——它回答
+                「候选→成交→打分的执行链有没有断」，与上面的账本卡互补（卡片回答
+                「账户里有多少钱」）。不传 suppressNotice：本区没有页面级空态聚合，
+                加载/失败由它自报。 */}
+            <OptionsPaperDesk
+              t={t}
+              desk={desk}
+              failure={deskFailure}
+              loaded={deskLoaded}
+            />
+          </>
+        )}
       </div>
 
       {/* 对话框层（遮罩全局；打开后面板保持原位；关闭播完退场动画再卸载） */}
