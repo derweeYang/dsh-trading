@@ -23,6 +23,7 @@ import {
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createGetIndicatorsTool } from '@dshtrading/indicators/tool'
 import type { MarketDataService } from '@dshtrading/api'
+import { parseOptionCode } from './option-code.js'
 import { aggregateNews, type AggregateNewsOptions } from './news.js'
 import { fetchCnFundamentals, renderCnFundamentals } from './fundamentals.js'
 import {
@@ -262,6 +263,13 @@ export function apply(ctx: Context, config: Config): void {
   registerOnce(createPutOptionBarRecommendationTool({
     getService: lookupOptions,
     getMarketData: lookupMarket,
+    // 2026-09-15：纸账执行失败此前两级静默吞错（put 工具 catch 空 + tryPaperOpen 总 catch
+    // 空），带 picks 桶零执行痕迹无从排查；观测日志接宿主 logger。
+    log: (message, error) => {
+      const logger = ctx.logger('dsh-trading-cn-kit')
+      if (error === undefined) logger.info('[dsh-trading-cn-kit] %s', message)
+      else logger.warn('[dsh-trading-cn-kit] %s %o', message, error)
+    },
     getChain: async (underlying) => {
       try {
         return await fetchNearestChain(lookupOptions(), underlying, Date.now())
@@ -272,10 +280,19 @@ export function apply(ctx: Context, config: Config): void {
     getMargin: async (legs) => {
       try {
         const service = lookupOptions()
-        const underlying = /^(\d{6})/.exec(legs[0]?.code ?? '')?.[1]
-        if (service === undefined || underlying === undefined) return undefined
+        // 2026-09-15 更正：曾以为腿缺 optionType/strike/expiryMonth 导致内核 BAD_REQUEST，
+        // 实测（POST :8090 /v1/strategy）——**腿必须 code 与三字段二选一（XOR）**
+        // （strategy.py:462-468），code 存在时内核自行 `parse_long_code` 解析；补上三字段
+        // 反而触发 "code XOR (optionType, strike, expiryMonth)" 硬报错，把本来能成功的
+        // 调用打成必然失败。故腿上只保留 code，解析仅用于取 underlying。
+        // 2026-09-15 二次实测：source=iquant 时 **rate 必填**（"rate is required for
+        // source=iquant"），缺 rate 同样打成必然失败 → no_quote。补 rate: 0.02（内核
+        // 错误信息里的示例值；保证金对 rate 仅一阶敏感，0.02 vs 0.03 差异远小于开仓闸）。
+        const parsed = legs.map((leg) => parseOptionCode(leg.code)).find((item) => item !== undefined)
+        if (service === undefined || parsed === undefined) return undefined
         const result = await service.getStrategy({
-          underlying,
+          underlying: parsed.underlying,
+          rate: 0.02,
           legs: legs.map((leg) => ({
             kind: 'option',
             code: leg.code,

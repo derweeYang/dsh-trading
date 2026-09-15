@@ -273,6 +273,75 @@ describe('cn_get_option_chain', () => {
     expect(recs[0]!.hostAsOf).toBe('2026-09-10T05:40:23.000Z')
   })
 
+  it('cn_put_option_bar_recommendation 漏传 forecasts 时从当日 cycles 兜底（2026-09-15 断链形状）', async () => {
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { mkdtemp, mkdir, writeFile, readFile } = await import('node:fs/promises')
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'opt-put-paper-backfill-'))
+    // 磁盘 cycles：本桶之前的最后一条 588000 forecast（candidates 含 bias）。
+    await mkdir(path.join(dir, 'cycles'), { recursive: true })
+    await writeFile(path.join(dir, 'cycles', '2026-09-10.jsonl'), `${JSON.stringify({
+      id: '588000:1',
+      underlying: '588000',
+      bucketStart: '2026-09-10T05:35:00.000Z',
+      asOf: '2026-09-10T05:35:01.000Z',
+      forecast: {
+        underlying: '588000',
+        name: '科创50',
+        exchange: 'SSE',
+        horizonMin: 5,
+        regime: 'mean_revert',
+        session: 'regular',
+        boxLow: 1.66,
+        boxHigh: 1.67,
+        candidates: [{ template: 'vertical', bias: 'down', invalidIf: 'x', reason: 'x' }],
+      },
+      calibration: 'none',
+    })}\n`, 'utf8')
+    const logged: string[] = []
+    const tool = createPutOptionBarRecommendationTool({
+      dataRoot: () => dir,
+      now: () => Date.parse('2026-09-10T05:40:23.000Z'),
+      log: (message) => { logged.push(message) },
+      getChain: async () => ({
+        underlying: '588000',
+        expiryMonth: '2609',
+        source: 'iquant',
+        spot: 1.668,
+        calls: [
+          { code: '588000C2609M01650', strike: 1.65, last: 0.08 },
+          { code: '588000C2609M01700', strike: 1.7, last: 0.0566 },
+          { code: '588000C2609M01750', strike: 1.75, last: 0.0348 },
+        ],
+        puts: [],
+      }),
+      getMargin: async () => 282,
+    })
+    // 不传 forecasts（description 只是约定；当日线上 3 个带 picks 桶全部漏传）。
+    await tool.execute({
+      recommendation: JSON.stringify({
+        bucketStart: '2026-09-10T05:40:00.000Z',
+        asOf: '2026-09-10T05:40:23.000Z',
+        session: 'regular',
+        opportunity: 'mean_reversion',
+        edge: 'x',
+        logic: 'x',
+        playbook: 'x',
+        invalidIf: 'x',
+        picks: [{ underlying: '588000', regime: 'mean_revert', template: 'vertical', cycleId: '588000:1' }],
+        noTrade: false,
+      }),
+    })
+
+    const fillsFile = path.join(dir, 'paper', 'strategy', 'fills', '2026-09-10.jsonl')
+    await vi.waitFor(async () => {
+      const text = await readFile(fillsFile, 'utf8')
+      // 兜底命中后走链补腿 → 成交，而不是 no_forecast。
+      expect(text).toContain('"reason":"signal"')
+    })
+    expect(logged.some((message) => message.includes('已从当日 cycles 兜底'))).toBe(true)
+  })
+
   it('cn_put_option_bar_recommendation 缺保证金服务时跳过 paper fill', async () => {
     const os = await import('node:os')
     const path = await import('node:path')

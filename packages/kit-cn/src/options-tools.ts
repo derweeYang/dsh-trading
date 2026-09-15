@@ -9,6 +9,7 @@ import { BOX_HORIZON_MIN, collectIntradayBox } from './intraday-box.js'
 import { tryPaperOpen } from './option-paper.js'
 import {
   appendJsonlLine,
+  backfillForecastsFromCycles,
   loadPacketForBucket,
   normalizeRecommendation,
   optionsDataRoot,
@@ -28,6 +29,8 @@ export interface OptionToolOptions {
   getMargin?: (legs: PaperFill['legs']) => Promise<number | undefined>
   /** 模拟盘手续费（元/张）；缺省 OPTION_PAPER_FEE_PER_CONTRACT。 */
   feePerContract?: number
+  /** 2026-09-15：纸账执行失败观测（此前两级静默吞错，断链不可见）。 */
+  log?: (message: string, error?: unknown) => void
 }
 
 function resolveService(options: OptionToolOptions): CnOptionsService {
@@ -622,6 +625,24 @@ export function createPutOptionBarRecommendationTool(options: OptionToolOptions 
       const heldFromPacket = packet === undefined
         ? undefined
         : Object.fromEntries(packet.rows.map((item) => [item.underlying, item.heldQty]))
+      // 2026-09-15：forecasts 是 description 约定，agent 可漏传——normalize 会直接
+      // throw "missing forecast"（工具报错、推荐整行丢失）。picks 里的缺口先从当日
+      // cycles 的 forecast 兜底（normalize 校验与 tryPaperOpen 共用补全后的 map）。
+      const pickUnderlyings = Array.isArray((parsed as { picks?: unknown }).picks)
+        ? ((parsed as { picks?: { underlying?: unknown }[] }).picks ?? [])
+          .map((pick) => pick?.underlying)
+          .filter((item): item is string => typeof item === 'string')
+        : []
+      const missingForecasts = [...new Set(pickUnderlyings.filter(
+        (underlying) => forecastByUnderlying[underlying] === undefined,
+      ))]
+      if (missingForecasts.length > 0) {
+        const backfilled = await backfillForecastsFromCycles(root, date, bucketStart, missingForecasts)
+        forecastByUnderlying = { ...forecastByUnderlying, ...backfilled }
+        if (Object.keys(backfilled).length > 0) {
+          options.log?.(`cn_put_option_bar_recommendation: forecasts 缺 ${missingForecasts.join(',')}，已从当日 cycles 兜底`)
+        }
+      }
       const row = normalizeRecommendation(
         parsed,
         forecastByUnderlying,
@@ -657,7 +678,10 @@ export function createPutOptionBarRecommendationTool(options: OptionToolOptions 
           }
         },
         feePerContract: options.feePerContract ?? OPTION_PAPER_FEE_PER_CONTRACT,
-      }).catch(() => {})
+        ...(options.log === undefined ? {} : { log: options.log }),
+      }).catch((error: unknown) => {
+        options.log?.('tryPaperOpen rejected (bucket=' + row.bucketStart + ')', error)
+      })
       return JSON.stringify({ ok: true, bucketStart: row.bucketStart, opportunity: row.opportunity })
     },
   })

@@ -318,6 +318,8 @@ export class OptionBarAgentHost {
             if (service === undefined || underlying === undefined) return undefined
             const result = await service.getStrategy({
               underlying,
+              // 2026-09-15 实测：source=iquant 时内核 rate 必填（同 kit-cn getMargin）。
+              rate: 0.02,
               legs: legs.map((leg) => ({
                 kind: 'option',
                 code: leg.code,
@@ -331,7 +333,10 @@ export class OptionBarAgentHost {
             return undefined
           }
         },
-      }).catch(() => {})
+        ...(this.options.log === undefined ? {} : { log: this.options.log }),
+      }).catch((error: unknown) => {
+        this.options.log?.('option-bar tryPaperOpen rejected', error)
+      })
     } catch (error) {
       this.options.log?.('option-bar recommendation persist failed', error)
     }

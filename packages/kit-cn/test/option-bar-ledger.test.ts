@@ -485,6 +485,60 @@ describe('shouldWriteDailyReview / foldDailyReview', () => {
     })
     expect(md).toContain('paper no_quote: 2')
   })
+
+  // 2026-09-15：hit 表只反映预测口径，当日 3 个带 picks 推荐执行痕迹为零却被掩盖。
+  it('执行覆盖：带腿推荐桶数 vs 有执行记录桶数（无记录时点名执行断链）', () => {
+    const base = {
+      session: 'regular' as const,
+      opportunity: 'mean_reversion',
+      edge: 'x',
+      logic: 'x',
+      playbook: 'x',
+      invalidIf: 'x',
+    }
+    const md = foldDailyReview({
+      date: '2026-09-15',
+      cycles: [],
+      recommendations: [
+        {
+          ...base,
+          bucketStart: '2026-09-15T02:30:00.000Z',
+          asOf: 't1',
+          picks: [{ underlying: '159919', regime: 'breakout', template: 'vertical' }],
+          noTrade: false,
+        },
+        {
+          ...base,
+          bucketStart: '2026-09-15T02:55:00.000Z',
+          asOf: 't2',
+          picks: [{ underlying: '159919', regime: 'mean_revert', template: 'vertical' }],
+          noTrade: false,
+        },
+      ],
+      fills: [
+        { bucketStart: '2026-09-15T02:55:00.000Z', reason: 'skipped', skip: 'no_forecast' },
+      ],
+    })
+    expect(md).toContain('执行覆盖: 带腿推荐 2 桶，成交 0，有执行记录 1，无执行记录 1（执行断链，查宿主日志与 tryPaperOpen 观测）')
+
+    const mdFull = foldDailyReview({
+      date: '2026-09-15',
+      cycles: [],
+      recommendations: [
+        {
+          ...base,
+          bucketStart: '2026-09-15T02:30:00.000Z',
+          asOf: 't1',
+          picks: [{ underlying: '159919', regime: 'breakout', template: 'vertical' }],
+          noTrade: false,
+        },
+      ],
+      fills: [
+        { bucketStart: '2026-09-15T02:30:00.000Z', reason: 'signal' },
+      ],
+    })
+    expect(mdFull).toContain('执行覆盖: 带腿推荐 1 桶，成交 1，有执行记录 1，无执行记录 0')
+  })
 })
 
 describe('foldPaperDeskDay / loadPaperDesk', () => {

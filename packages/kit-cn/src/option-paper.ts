@@ -158,6 +158,43 @@ export function completeVerticalLegs(
   }
 }
 
+/**
+ * 蝶式腿补全（2026-09-14）：long butterfly = 买 1 低行权价 + 卖 2 中间 + 买 1 高行权价。
+ *
+ * 为什么现在才有：此前只有 vertical 会去取链（`pick.template !== 'vertical'` 直接
+ * 判 no_quote），而蝶式候选 bias 恒为 `neutral`——`completeVerticalLegs` 见到 neutral
+ * 同样返回 no_quote。结果是**蝶式在纸账户里永远不可能成交**，09-14 三条 butterfly
+ * 推荐全部以 no_quote 收场。蝶式不依赖方向 bias，只依赖「ATM 上下各一档」，故单独构造。
+ *
+ * 与 vertical 同款纪律：任一腿拿不到可成交报价即 no_quote，绝不口算权利金。
+ */
+export function completeButterflyLegs(
+  chain: OptionChain,
+  qty: number,
+): { legs: PaperLegs; skip?: 'no_quote' } {
+  const rows = [...chain.calls].sort((left, right) => left.strike - right.strike)
+  const midIndex = nearestIndex(rows, chain.spot)
+  const low = rows[midIndex - 1]
+  const body = rows[midIndex]
+  const high = rows[midIndex + 1]
+  if (!low?.code || !body?.code || !high?.code) return { legs: [], skip: 'no_quote' }
+
+  const lowQuote = quoteFillPriceWithSource(low)
+  const bodyQuote = quoteFillPriceWithSource(body)
+  const highQuote = quoteFillPriceWithSource(high)
+  if (lowQuote === undefined || bodyQuote === undefined || highQuote === undefined) {
+    return { legs: [], skip: 'no_quote' }
+  }
+
+  return {
+    legs: [
+      { code: low.code, side: 'buy', qty, fillPrice: lowQuote.price, priceSource: lowQuote.source },
+      { code: body.code, side: 'sell', qty: qty * 2, fillPrice: bodyQuote.price, priceSource: bodyQuote.source },
+      { code: high.code, side: 'buy', qty, fillPrice: highQuote.price, priceSource: highQuote.source },
+    ],
+  }
+}
+
 /** 单腿现金流（元）：sell 正 buy 负；期权腿 ×multiplier，现货腿 qty 已是份数不再乘。 */
 export function legCashCny(leg: PaperLegs[number]): number {
   return (leg.side === 'sell' ? 1 : -1) * leg.fillPrice * leg.qty
@@ -340,6 +377,18 @@ function skipFill(
   }
 }
 
+/**
+ * 腿方向归一化：推荐侧写法不统一，实测见过 `side:'buy'|'sell'` 与
+ * `action:'buy'|'sell'|'buy_to_open'|'sell_to_open'`。取首个下划线段即可覆盖；
+ * 认不出来返回 undefined（宁可回退取链，也不猜方向）。
+ */
+function legSide(value: unknown): 'buy' | 'sell' | undefined {
+  if (value === 'buy' || value === 'sell') return value
+  if (typeof value !== 'string') return undefined
+  const head = value.split('_')[0]
+  return head === 'buy' || head === 'sell' ? head : undefined
+}
+
 function explicitLegs(legs: readonly unknown[] | undefined): PaperLegs | undefined {
   if (legs === undefined || legs.length === 0) return undefined
   const parsed = legs.map((item) => {
@@ -347,23 +396,41 @@ function explicitLegs(legs: readonly unknown[] | undefined): PaperLegs | undefin
     const row = item as {
       code?: unknown
       side?: unknown
+      action?: unknown
       last?: unknown
       fillPrice?: unknown
       premium?: unknown
+      price?: unknown
+      limitPrice?: unknown
+      bid?: unknown
+      ask?: unknown
+      quoteBid?: unknown
+      quoteAsk?: unknown
       qty?: unknown
+      ratio?: unknown
     }
-    const price = [row.last, row.fillPrice, row.premium]
+    // 2026-09-15：原实现只认 `side` + `last/fillPrice/premium`，而盘中推荐实际给的是
+    // `action` + `price` / `limitPrice` / `quoteBid`+`quoteAsk`——字段名对不上，
+    // 带腿的推荐**全部**解析失败并回退取链，取链再失败就是 no_quote。这是纸账户
+    // 有腿也开不了仓的直接原因（09-15 上午三条带 picks 推荐零开仓尝试）。
+    const side = legSide(row.side) ?? legSide(row.action)
+    if (side === undefined || typeof row.code !== 'string') return undefined
+    const explicitPrice = [row.last, row.fillPrice, row.premium, row.price, row.limitPrice]
       .find((value): value is number => typeof value === 'number' && Number.isFinite(value))
-    const qty = row.qty ?? 1
-    if (
-      typeof row.code !== 'string'
-      || (row.side !== 'buy' && row.side !== 'sell')
-      || price === undefined
-      || typeof qty !== 'number'
-      || !Number.isInteger(qty)
-      || qty <= 0
-    ) return undefined
-    return { code: row.code, side: row.side, qty, fillPrice: price, priceSource: 'pick' }
+    const bid = [row.bid, row.quoteBid]
+      .find((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    const ask = [row.ask, row.quoteAsk]
+      .find((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    // 无显式成交价时退盘口**保守侧**：买吃 ask、卖吃 bid（真实报价，不是口算），
+    // 并把来源如实标进 priceSource，避免事后把假设价当成成交价。
+    const price = explicitPrice ?? (side === 'buy' ? ask : bid)
+    if (price === undefined) return undefined
+    const priceSource: OptionPaperPriceSource = explicitPrice !== undefined
+      ? 'pick'
+      : (side === 'buy' ? 'ask' : 'bid')
+    const qty = row.qty ?? row.ratio ?? 1
+    if (typeof qty !== 'number' || !Number.isInteger(qty) || qty <= 0) return undefined
+    return { code: row.code, side, qty, fillPrice: price, priceSource }
   })
   return parsed.every((leg) => leg !== undefined) ? parsed as PaperLegs : undefined
 }
@@ -423,7 +490,9 @@ export function decidePaperOpen(input: {
 
     let unitLegs = explicitLegs(pick.legs)
     if (unitLegs === undefined) {
-      if (pick.template !== 'vertical') {
+      // 2026-09-14：蝶式此前被这一行直接判死（只有 vertical 会取链）→ 纸账户蝶式
+      // 零成交。放行蝶式，与 vertical 同走「取链 → 按模板补全腿」路径。
+      if (pick.template !== 'vertical' && pick.template !== 'butterfly') {
         lastFailure = {
           reason: 'no_quote',
           underlying: pick.underlying,
@@ -440,7 +509,9 @@ export function decidePaperOpen(input: {
         }
         continue
       }
-      const completed = completeVerticalLegs(chain, candidate.bias, 1)
+      const completed = pick.template === 'butterfly'
+        ? completeButterflyLegs(chain, 1)
+        : completeVerticalLegs(chain, candidate.bias, 1)
       if (completed.skip !== undefined) {
         lastFailure = {
           reason: completed.skip,
@@ -641,6 +712,8 @@ export async function tryPaperOpen(input: {
   getChain: (underlying: string) => Promise<OptionChain | undefined>
   getMargin: (legs: PaperFill['legs']) => Promise<number | undefined>
   feePerContract?: number
+  /** 2026-09-15：失败观测。此前总 catch 静默吞错，带 picks 桶执行痕迹为零也无从排查。 */
+  log?: (message: string, error?: unknown) => void
 }): Promise<void> {
   await withPaperStateLock(input.root, async () => {
   try {
@@ -702,14 +775,19 @@ export async function tryPaperOpen(input: {
 
       try {
         const explicit = explicitLegs(pick.legs)
-        const chain = explicit === undefined && pick.template === 'vertical'
-          ? await input.getChain(pick.underlying)
-          : undefined
-        const unitLegs = explicit ?? (
-          chain === undefined || pick.template !== 'vertical'
-            ? undefined
-            : completeVerticalLegs(chain, candidate.bias, 1).legs
-        )
+        // 2026-09-14：蝶式与 vertical 一样需要从链补腿（原先只给 vertical 取链，
+        // 蝶式的 chainFor 恒 undefined → 必然 no_quote）。
+        const needsChain = explicit === undefined
+          && (pick.template === 'vertical' || pick.template === 'butterfly')
+        const chain = needsChain ? await input.getChain(pick.underlying) : undefined
+        let unitLegs = explicit
+        if (unitLegs === undefined && chain !== undefined) {
+          if (pick.template === 'butterfly') {
+            unitLegs = completeButterflyLegs(chain, 1).legs
+          } else if (pick.template === 'vertical') {
+            unitLegs = completeVerticalLegs(chain, candidate.bias, 1).legs
+          }
+        }
         let margin: number | undefined
         if (unitLegs !== undefined) {
           try {
@@ -760,8 +838,12 @@ export async function tryPaperOpen(input: {
         fills: [...state.fills, lastSkip],
       })
     }
-  } catch {
+  } catch (error) {
     // Paper-account failures must never break recommendation persistence.
+    input.log?.(
+      `tryPaperOpen failed (bucket=${input.rec.bucketStart} picks=${input.rec.picks.length})`,
+      error,
+    )
   }
   })
 }

@@ -425,6 +425,40 @@ export function latestByKey<T>(rows: readonly T[], keyOf: (row: T) => string): T
 }
 
 /**
+ * 2026-09-15：agent 提交推荐时可漏传 forecasts，导致 forecastByUnderlying 缺该标的 →
+ * tryPaperOpen 恒判 no_forecast（当日 3 个带 picks 桶执行痕迹为零）。picks 非空而
+ * forecasts 缺口时，从当日 cycles 的 forecast 兜底：取该标的 ≤ 本桶最后一条（无则
+ * 当日最后一条）。cycles 的 forecast 是完整 OptionIntradayBoxRow（candidates 含 bias），
+ * 与 packet rows（candidates 只有模板字符串）不同，不能互相替代。
+ */
+export async function backfillForecastsFromCycles(
+  root: string,
+  date: string,
+  bucketStart: string,
+  wanted: readonly string[],
+): Promise<Record<string, OptionIntradayBoxRow>> {
+  const out: Record<string, OptionIntradayBoxRow> = {}
+  if (wanted.length === 0) return out
+  let cycles: OptionCycle[]
+  try {
+    cycles = await readJsonl<OptionCycle>(cyclesPath(root, date))
+  } catch {
+    return out
+  }
+  const bucketMs = Date.parse(bucketStart)
+  const ceiling = Number.isFinite(bucketMs) ? bucketMs : Number.POSITIVE_INFINITY
+  for (const underlying of wanted) {
+    const rows = cycles
+      .filter((cycle) => cycle.underlying === underlying)
+      .sort((a, b) => Date.parse(a.bucketStart) - Date.parse(b.bucketStart))
+    if (rows.length === 0) continue
+    const upto = rows.filter((cycle) => Date.parse(cycle.bucketStart) <= ceiling)
+    out[underlying] = (upto[upto.length - 1] ?? rows[rows.length - 1]!).forecast
+  }
+  return out
+}
+
+/**
  * 聚合 sessions 台账事件：同一 bucketStart+sessionId 的 launch/settle 按字段 last-wins 合并。
  * 容忍乱序、settle-only（launch 写失败）、launch-only（in-flight / 宿主重启）。
  */
@@ -666,11 +700,21 @@ export function foldDailyReview(input: {
   cycles: readonly OptionCycle[]
   recommendations: readonly OptionBarRecommendation[]
   /** paper fills（含 skip 行）；缺省 = 不统计执行层跳过。 */
-  fills?: readonly { reason?: unknown; skip?: unknown }[]
+  fills?: readonly { reason?: unknown; skip?: unknown; bucketStart?: unknown }[]
 }): string {
   const core = dailyLedgerCore(input)
   const overlaps = core.skipReasons.get('overlap') ?? 0
   const failed = core.skipReasons.get('launch_failed') ?? 0
+  // 2026-09-15：hit/miss 只是预测口径，会掩盖执行缺口（当日 3 个带 picks 推荐执行
+  // 痕迹为零、复盘却照常出 hit 表）。补执行覆盖：带 picks 桶 vs 有 fills 记录桶。
+  const filledBuckets = new Set<string>()
+  let filledCount = 0
+  for (const fill of input.fills ?? []) {
+    if (fill.reason === 'signal') filledCount += 1
+    if (typeof fill.bucketStart === 'string' && fill.reason !== undefined) filledBuckets.add(fill.bucketStart)
+  }
+  const pickBuckets = core.candidates.filter((row) => Array.isArray(row.picks) && row.picks.length > 0)
+  const noTrace = pickBuckets.filter((row) => !filledBuckets.has(row.bucketStart)).length
   const lines = [
     `# 复盘 · ${input.date} ETF 期权 5 分钟 K`,
     '',
@@ -694,12 +738,16 @@ export function foldDailyReview(input: {
   }
   lines.push('', '## 3. 误给腿 / 空仓', '')
   lines.push('- 见上表对照；本折叠不重算箱体。')
-  lines.push('', '## 4. 跳过', '')
+  lines.push('', '## 4. 跳过与执行覆盖', '')
   lines.push(`- overlap: ${overlaps}`)
   lines.push(`- launch_failed: ${failed}`)
   for (const [skip, count] of [...core.paperSkips.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     lines.push(`- paper ${skip}: ${count}`)
   }
+  lines.push(
+    `- 执行覆盖: 带腿推荐 ${pickBuckets.length} 桶，成交 ${filledCount}，有执行记录 ${filledBuckets.size}，无执行记录 ${noTrace}`
+    + (noTrace > 0 ? '（执行断链，查宿主日志与 tryPaperOpen 观测）' : ''),
+  )
   lines.push('', '## 5. 明日剧本', '')
   lines.push(core.scored < 10 ? '- 样本不足（有效打分 < 10），只记不改 skill。' : '- 对照 miss 集中的 regime，至多改一条选场/否决。')
   lines.push('', '## 6. 免责', '')
