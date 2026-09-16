@@ -101,6 +101,19 @@ export function SessionRail({ t, useFolded, startNewSession, toggleFold, openSes
     if (next) setHoldingsPanelOpen(false)
   }
 
+  /**
+   * 收起所有覆盖对话列的功能面板（定时任务 / 资产），让对话列重新可见。
+   *
+   * 必要性（2026-09-14）：shell-pad.css 规则 11/12 在面板激活时把对话列第 2 轨的
+   * 直接子节点全部 `display:none !important`，由 fixed 面板原位覆盖。不先收面板
+   * 就建会话/切会话，会话其实建了但用户看不见——表现为「点了没反应」。原先只有
+   * 定时任务走 toggleTasks(false)，资产面板开着时点「新会话」正好漏掉这一路。
+   */
+  const revealConversation = (): void => {
+    setTasksOpen(false)
+    setHoldingsPanelOpen(false)
+  }
+
   return (
     <div className={css.rail} data-dshtrading-rail="" role="toolbar" aria-orientation="vertical">
       <button
@@ -118,7 +131,7 @@ export function SessionRail({ t, useFolded, startNewSession, toggleFold, openSes
         className={css.button}
         aria-label={t('entry.new')}
         title={t('entry.new')}
-        onClick={() => { toggleTasks(false); startNewSession() }}
+        onClick={() => { revealConversation(); startNewSession() }}
       >
         <IconNewSession size={16} />
       </button>
@@ -152,7 +165,7 @@ export function SessionRail({ t, useFolded, startNewSession, toggleFold, openSes
       {tasksOpen && (
         <ScheduledTasksPanel
           t={t}
-          openSession={(sessionId) => { toggleTasks(false); openSession(sessionId) }}
+          openSession={(sessionId) => { revealConversation(); openSession(sessionId) }}
           close={() => { toggleTasks(false) }}
         />
       )}

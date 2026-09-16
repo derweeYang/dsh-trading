@@ -35,6 +35,7 @@ import { QuotePane } from './QuotePane.tsx'
 import { HomeHistory } from './HomeHistory.tsx'
 import { SessionRail } from './SessionRail.tsx'
 import { ChatResizeHandle } from './ChatResizeHandle.tsx'
+import { startSessionOrWarn } from './session-nav.ts'
 import { foldStore, marketFoldStore } from './fold-store.ts'
 import { deleteCustomIndicator, fetchCustomIndicators, OPEN_SETTINGS_EVENT, requestOpenSettings, subscribeTradingEvents } from './api.ts'
 import { openSettingsViaStableChannels } from './open-settings.ts'
@@ -80,8 +81,13 @@ export function apply(ctx: ClientContext): void {
   // dsh-client-ui-workspace 的 apply 注册，apply 时序不保证，过早捕获会在
   // 服务未就绪时拿到 undefined 并永久失效。官方 dsh-client-ui-sidebar 即
   // ctx.get('uiWorkspace').startSession() 同款。
+  //
+  // 2026-09-14：旧写法 `?.startSession()` 在服务缺席时**静默 no-op**——用户点
+  // 「新会话」/宿主「开始 AI 对话」后界面零变化、控制台零日志，只能判定为「点了
+  // 没反应」。改走 session-nav.ts 的纯函数：解析失败或 startSession 抛错 →
+  // 宿主内 toast（showShellToast），把静默失败变成可见反馈。
   const startNewSession = (): void => {
-    ;(ctx.get('uiWorkspace') as unknown as WorkspaceNavigation | undefined)?.startSession()
+    startSessionOrWarn((name) => ctx.get(name), showShellToast)
   }
 
   // 行情 → 会话输入框（「发给 Agent」按钮）：只把上下文 + 截图**填入 composer
