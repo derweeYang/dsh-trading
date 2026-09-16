@@ -22,6 +22,9 @@ data/options/reviews/
 data/options/packets/
 data/options/paper/
 data/options/iv-daily.jsonl
+# runtime option snapshots / per-session ledgers (same nature as cycles/ reviews/)
+data/options/overview.json
+data/options/sessions/
 
 # runtime prediction track ledger
 data/options/predictions.jsonl
