@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ETF 期权交易行为复盘 · 2026-09-14</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+    --tx:#e6e8ee; --tx2:#a2aabb; --tx3:#7b8496;
+    --up:#ef5350; --down:#26a69a; --warn:#ffb74d; --info:#64b5f6; --bad:#e24b4a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px 22px 60px;background:var(--bg);color:var(--tx);
+    font:14px/1.65 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:20px;font-weight:500;margin:0 0 4px}
+  h2{font-size:15px;font-weight:500;margin:0 0 12px;color:var(--tx)}
+  .sub{color:var(--tx3);font-size:12px;margin-bottom:22px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px}
+  .verdict{border-left:3px solid var(--bad)}
+  .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:0 0 16px}
+  .kpi div{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .kpi b{display:block;font-size:22px;font-weight:500;line-height:1.2}
+  .kpi span{color:var(--tx3);font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--tx3);font-weight:400;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  tbody tr:last-child td{border-bottom:none}
+  .up{color:var(--up)} .down{color:var(--down)} .mut{color:var(--tx3)}
+  .tag{display:inline-block;padding:1px 7px;border-radius:5px;font-size:11px;
+    background:var(--panel2);border:1px solid var(--line);color:var(--tx2)}
+  .tag.bad{color:var(--bad);border-color:#5a2a2a;background:#2a1a1a}
+  .tag.warn{color:var(--warn);border-color:#5a4526;background:#2a2216}
+  .tag.ok{color:var(--info);border-color:#26455a;background:#16222a}
+  code{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--tx2);
+    background:var(--panel2);padding:1px 5px;border-radius:4px}
+  ol,ul{margin:8px 0 0;padding-left:20px} li{margin-bottom:6px}
+  .note{color:var(--tx2);font-size:12px;margin-top:10px}
+  .funnel{margin:4px 0 2px}
+  .bar{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .bar i{display:block;height:22px;border-radius:4px;background:#185FA5}
+  .bar i.bad{background:#791F1F}
+  .bar em{font-style:normal;color:var(--tx2);font-size:12px;white-space:nowrap}
+  .bar s{text-decoration:none;width:78px;color:var(--tx3);font-size:12px;text-align:right}
+  .foot{color:var(--tx3);font-size:11px;line-height:1.7;margin-top:26px;
+    border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>ETF 期权交易行为复盘 · 2026-09-14（周一）</h1>
+  <div class="sub">
+    数据源：<code>data/options/cycles</code> · <code>recommendations</code> · <code>paper/*/fills</code> · <code>overview.json</code>；
+    asOf 2026-09-14T06:51Z（UTC）。全部数字由当日 JSONL 直读聚合，无估算。
+  </div>
+
+  <div class="card verdict">
+    <h2>核心结论</h2>
+    <ol>
+      <li><b>今天不是「没有交易」，是「有信号但没有一笔能成交」。</b>信号侧正常产出（2428 个标的桶、545 桶出候选、4 条推荐带 picks），执行侧 3 次开仓尝试全部以 <code>skip: no_quote</code> 告终，真实成交 <b>0</b>。</li>
+      <li><b>纸账户自上线以来从未有过一笔真实成交。</b>09-08 / 09-10 / 09-12 / 09-13 fills 为空，09-11 四行全 skip，今天三行全 skip。持仓 <code>[]</code>、cash 100000、realizedPnl 0 全程未动。</li>
+      <li><b>断点在「报价 / 保证金」这一环，不在策略。</b>推荐里已能拿到真实腿报价（159915 两条腿 bid/ask 齐全），但执行器仍判无报价；同时 <code>cn_get_option_strategy</code> 当日全线拒绝（报缺参），义务仓保证金无从计算。</li>
+      <li><b>由此产生的最大风险是「纸面 hit」。</b>确定性复盘给出的 hit 233 / partial 10 / miss 30 全部未经成交校验——在成交链路修好之前，任何基于这批打分的策略迭代结论都不成立。</li>
+    </ol>
+  </div>
+
+  <div class="kpi">
+    <div><b>0</b><span>真实成交</span></div>
+    <div><b>3</b><span>开仓尝试（全 no_quote）</span></div>
+    <div><b>4</b><span>带 picks 的推荐</span></div>
+    <div><b>545</b><span>有候选的桶</span></div>
+    <div><b>0</b><span>当前持仓</span></div>
+    <div><b>100%</b><span>cash 未动</span></div>
+  </div>
+
+  <div class="card">
+    <h2>一、信号 → 执行的衰减</h2>
+    <div class="funnel">
+      <div class="bar"><s>扫描桶</s><i style="width:100%"></i><em>2428（7 标的 × 5 分钟桶，含非交易时段）</em></div>
+      <div class="bar"><s>有候选桶</s><i style="width:84%"></i><em>545 · butterfly 297 / vertical 248</em></div>
+      <div class="bar"><s>推荐</s><i style="width:66%"></i><em>173 条，其中 169 条 no_edge</em></div>
+      <div class="bar"><s>带 picks</s><i style="width:38%"></i><em>4 条 · theta_rent×3 + mean_reversion×1</em></div>
+      <div class="bar"><s>开仓尝试</s><i class="bad" style="width:24%"></i><em>3 次，全部 skip: no_quote</em></div>
+      <div class="bar"><s>真实成交</s><i class="bad" style="width:12%"></i><em>0</em></div>
+    </div>
+    <div class="note">
+      桶口径说明：2428 桶中 no_trade 占 1909（closed 1757 / insufficient 98 / open15 35 / lunch 28 / close5 14），
+      真正有可交易制度的只有 519 桶。打分覆盖率：2428 桶里 1146 桶有 <code>score.verdict</code>
+      （hit 233 / partial 10 / miss 30 / skipped 873），其余为未开轮。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>二、为什么零成交：断点证据链</h2>
+    <table>
+      <thead><tr><th>层</th><th>证据</th><th>判定</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>报价可得</td>
+          <td>13:45 桶推荐带真实腿：买 <code>159915C2609M03300</code> bid 0.0743 / ask 0.0745，卖 <code>159915C2609M03400</code> bid 0.0351 / ask 0.0352（source iquant，13:48 快照）</td>
+          <td><span class="tag ok">链数据是有的</span></td>
+        </tr>
+        <tr>
+          <td>Greeks / 保证金</td>
+          <td>同条 playbook 原文：<code>cn_get_option_strategy rejects every call, reporting expiryMonth/optionType/longStrike/shortStrike missing even when all are supplied</code></td>
+          <td><span class="tag bad">全线拒绝</span></td>
+        </tr>
+        <tr>
+          <td>纸账户开仓</td>
+          <td><code>kit-cn/src/option-paper.ts:434</code> <code>chainFor()</code> 取不到链即 <code>no_quote</code>；保证金查询失败同样判 <code>no_quote</code>（<code>option-paper.test.ts:258</code>）</td>
+          <td><span class="tag bad">no_quote</span></td>
+        </tr>
+        <tr>
+          <td>蝶式（2 次）</td>
+          <td>候选 bias = <code>neutral</code> → <code>option-paper.ts:128</code> 无显式报价腿，直接 <code>no_quote</code></td>
+          <td><span class="tag warn">设计使然，但无腿可用</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="note">
+      三层叠加的结果：<b>中性蝶式天生要显式腿报价</b>，而唯一给出腿报价的 vertical 又撞上
+      <b>保证金/Greeks 服务全线报错</b>。因此「今天没交易」不是市场没机会，而是执行链路在报价与保证金之间断开了。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>三、今日四条带 picks 的推荐（逐个对照执行结果）</h2>
+    <table>
+      <thead><tr><th>时间(北京)</th><th>标的</th><th>类型</th><th>模板</th><th>箱体</th><th>失效条件</th><th>执行结果</th></tr></thead>
+      <tbody>
+        <tr><td>10:00</td><td>510050</td><td>theta_rent</td><td>butterfly</td><td>2.9594 – 2.9686（宽 0.31%）</td><td>1 分钟收盘出箱</td><td><span class="tag bad">no_quote</span></td></tr>
+        <tr><td>10:35</td><td>510050</td><td>theta_rent</td><td>butterfly</td><td>2.9700 – 2.9780</td><td>1 分钟收盘出箱</td><td><span class="tag bad">no_quote</span></td></tr>
+        <tr><td>13:25</td><td>510050</td><td>theta_rent</td><td>butterfly</td><td>2.9690 – 2.9770</td><td>1 分钟收盘出箱</td><td><span class="tag">无开仓尝试（playbook 自述本桶不开单）</span></td></tr>
+        <tr><td>13:45</td><td>159915</td><td>mean_reversion</td><td>vertical</td><td>3.2946 – 3.3073</td><td>1 分钟收盘破 Donchian 且量比 ≥1.5</td><td><span class="tag bad">no_quote（有腿报价仍失败）</span></td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      全部为 dry-run 语义、闸门关闭：<code>playbook</code> 明写「Authorized action this bucket: none」／「Gate zero, CLOSED」。
+      13:45 那条的 edge 自评也偏薄——箱体半宽约 0.0064 而行权价间距 0.10，需要现货约 +1.19% 才盈亏平衡，作者自己定性为 probe 而非 conviction trade。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>四、标的维度：制度、强弱与打分</h2>
+    <table>
+      <thead><tr><th>标的</th><th>5 日涨幅</th><th>量比</th><th>强弱分</th><th>背离</th><th>ATM IV</th><th>HV20</th><th>IV 制度</th><th>hit/partial/miss</th></tr></thead>
+      <tbody>
+        <tr><td>588000 科创50</td><td class="up">+4.96%</td><td>0.80</td><td>3.96</td><td>weak_rally</td><td>0.399</td><td>0.439</td><td>unknown</td><td>35 / 0 / 4</td></tr>
+        <tr><td>588080 科创50</td><td class="up">+4.69%</td><td>0.82</td><td>3.84</td><td>weak_rally</td><td>0.407</td><td>0.435</td><td>unknown</td><td>34 / 0 / 5</td></tr>
+        <tr><td>159922 中证500</td><td class="up">+2.90%</td><td>1.06</td><td>3.06</td><td class="mut">—</td><td>0.349</td><td>0.270</td><td>event_front</td><td>30 / 2 / 6</td></tr>
+        <tr><td>510050 上证50</td><td class="up">+1.98%</td><td>0.99</td><td>1.96</td><td>weak_rally</td><td>0.134</td><td>0.123</td><td>unknown</td><td>35 / 2 / 2</td></tr>
+        <tr><td>159919 沪深300</td><td class="up">+1.45%</td><td>0.93</td><td>1.35</td><td>weak_rally</td><td>0.351</td><td>0.160</td><td>rich</td><td>31 / 5 / 4</td></tr>
+        <tr><td>159915 创业板</td><td class="up">+1.08%</td><td>0.89</td><td>0.97</td><td>weak_rally</td><td>0.479</td><td>0.372</td><td>event_front</td><td>35 / 0 / 4</td></tr>
+        <tr><td>159901 深证100</td><td class="up">+0.81%</td><td>0.82</td><td>0.66</td><td>weak_rally</td><td>0.137</td><td>0.257</td><td>cheap</td><td>33 / 1 / 5</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      七只标的当日<b>全部收涨且全部标记 weak_rally</b>（缩量上涨）——这一天没有一只进入强趋势制度，
+      与「173 条推荐里 169 条 no_edge」互相印证：<b>不是系统没找到机会，而是这一天本就缺乏可交易结构</b>。
+      箱体制（range_hold / mean_revert）出现 519 桶，breakout 仅 20 桶（集中在 159919 / 159922 / 510050）。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>五、风险点</h2>
+    <ol>
+      <li><b>指标失真（最高优先级）：</b>hit 233 是纸面 hit。没有成交校验的胜率会误导后续参数调整——今天如果拿「hit 率 88%」去做策略迭代，等于在噪声上过拟合。</li>
+      <li><b>账户指标无意义：</b>equity 恒等于初始 100000，任何「收益率 / 回撤 / 夏普」在当前状态下都是常数，看板上的这些格子暂时不能作为决策依据。</li>
+      <li><b>失败可见但无告警：</b>前端执行台已有「无报价」列（<code>options.desk.paperskip.no_quote</code>），现象可见，但没有阈值告警——连续 N 桶 no_quote 应该主动提示，而不是等人去翻表格。</li>
+      <li><b>信号与执行两条数据链不一致：</b>推荐能拿到腿报价、执行器却判无报价，说明两者走的不是同一条取数路径。这类「同物两价」若不收敛，将来即使修好也会再次分叉。</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>六、操作建议（按依赖顺序）</h2>
+    <ol>
+      <li><b>先修执行链路，再谈策略。</b>在 <code>cn_get_option_strategy</code> 恢复前，纸账户的任何「收益」都不成立，此刻调策略参数是无效功。</li>
+      <li><b>修复后的首个交易日做单点冒烟：</b>只用 1 个标的（510050 或 159915）+ 1 个模板，验收标准明确为「出现第一笔带腿成交」，而不是「看板有数字」。</li>
+      <li><b>给复盘加「执行覆盖率」指标：</b>有 picks 的桶数 vs 有成交的桶数。今天这个数是 4 : 0，一目了然；没有这一列，缺口会被 hit 数掩盖。</li>
+      <li><b>中性蝶式的取数缺口单独处理：</b>bias=neutral 必须依赖显式腿报价，若报价源不提供，应显式降级为 no_trade 而不是记一笔 skip，避免污染打分。</li>
+      <li><b>前端加 no_quote 阈值告警</b>（连续 N 桶 → 顶部提示），把「执行链路已断」从事后翻表变成事中可见。</li>
+    </ol>
+    <div class="note">
+      后端项已登记在 <code>docs/backend-handoff-2026-09-13.md</code>（状态 pending，由 Cursor / Claude 侧执行）：
+      定位期权链与保证金取数在盘中失败的根因 → 修到出现第一笔带腿成交 → 把「信号 hit 但执行 no_quote」的脱节计入复盘口径。
+    </div>
+  </div>
+
+  <div class="foot">
+    本报告由只读聚合 <code>data/options/**</code> 当日 JSONL 生成，未使用任何估算或外部数据；置信度受限于原始记录本身
+    （其中 <code>ivRegime=unknown</code> 的标的不得声称 IV 分位）。<br>
+    技术研究用途，不构成投资建议；示例均为 dry-run 语义，未发生任何实盘下单。生成时间 2026-09-15 00:10 (UTC+8)。
+  </div>
+
+</div>
+</body>
+</html>

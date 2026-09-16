@@ -250,5 +250,43 @@ OptionPaperDeskDay { date, candidates, filled, gapBuckets,
       **口径勘误**：审计报告的「09-10 七候选」是全记录 picks 明细数（含 06:15/06:25 桶的
       重复写，共 7 条 vertical pick 行）；执行台与复盘 md 同用 last-wins 桶口径
       （`latestByKey` 去重后 4 个候选桶），4/0/4 为正确数字，非回归。
-- [ ] 2026-09-14（周一）开盘后复核：首个交易日真实信号下，fills 是否出现第一笔
-      带腿成交（执行器 9d30ca7 链预热修复的首次实战验证）
+- [x] 2026-09-14（周一）开盘后复核 → **已执行，结果：不通过**（首个交易日真实信号下
+      fills 是否出现第一笔带腿成交 = 执行器 9d30ca7 链预热修复的首次实战验证）。
+      证据（2026-09-14 23:45 复核，前端侧只读核验）：
+      - `data/options/paper/strategy/fills/2026-09-14.jsonl` 3 行**全部**
+        `reason:"skipped"` + `skip:"no_quote"`：02:00Z / 02:35Z butterfly 510050、
+        05:45Z vertical 159915 → **零带腿成交**。
+      - `data/options/paper/strategy/positions.json` 仍 `[]`；
+        `account.json` cash=100000、realizedPnl=0 未动（updatedAt 停在 09-10）。
+      - 同日信号侧有产出：cycles 2428 桶（545 桶有候选：butterfly 297 / vertical 248）、
+        recommendations 173 条（4 条带 picks：theta_rent×3 + mean_reversion×1）、
+        score.verdict = hit 233 / partial 10 / miss 30 / skipped 873。
+        → **信号侧正常、执行侧全灭**，链预热修复未通过实战验证：执行器
+        `chainFor(pick.underlying)` 仍返回 undefined（`packages/kit-cn/src/option-paper.ts:434`，
+        同类分支 :128/:132/:145/:150）。
+      - 交叉印证：09-08/09-10/09-12/09-13 fills 均为空、09-11 四行全 skip，
+        即纸账户自上线起**从未有过一笔真实成交**——不是"今天没交易"这一日现象。
+- [~] **根因已定位，kit-cn 侧已修（2026-09-15 00:30，经领航员授权由 WorkBuddy 越界实施；
+      原为「WorkBuddy 只登记不执行」的后端范围，此处例外已记录）**。根因链两条：
+      1. **保证金恒失败**：`kit-cn/src/index.ts` 的 `getMargin` 透传腿时只有
+         `code/side/qty/premium`，缺 `optionType/strike/expiryMonth`；python 内核
+         `strategy.py:110` 对 vertical 强校验 `expiryMonth/optionType/longStrike/shortStrike`
+         → BAD_REQUEST → catch 成 undefined → `decidePaperOpen` 判 no_quote。
+         → 已修：新增 `kit-cn/src/option-code.ts` 从长代码解析三字段并回填请求与每条腿。
+      2. **蝶式不可能成交**：`decidePaperOpen` 只放行 vertical 取链，且蝶式 bias 恒 neutral，
+         `completeVerticalLegs` 见 neutral 也 no_quote。
+         → 已修：新增 `completeButterflyLegs`（买 1/卖 2/买 1），放行蝶式取链
+         （`decidePaperOpen` + `tryPaperOpen` 两处）。
+      验证：kit-cn 14 文件 / 198 用例全绿（+2 文件 +10 用例，含端到端落一笔带三腿蝶式成交）；
+      build 绿；改动文件零类型错误；做过退回验证（退回后 2 条用例报红）。
+      Agent Note: `.agents/notes/implemented/bug-fix/2026-09-15-paper-open-margin-leg-params-and-butterfly-legs.md`
+- [ ] **剩余待办（状态 pending，归 Cursor/Claude）**：
+      1. `cn_get_option_strategy` 工具 schema（`kit-cn/src/options-tools.ts:214`）不暴露
+         `optionType/longStrike/shortStrike`，agent 想指定腿仍无门——补参数透传，
+         或在 description 明写「腿由 template 决定」以消除误用。
+      2. 确认 python `strategy.py` 在「传 legs 不传 template」路径下的必填字段；若仍要走
+         template 分支，需在 connector 侧同步补参。
+      3. **真实盘验收**：首个交易日确认出现第一笔带腿成交（本次无法打网关：现网宿主占
+         :3081，起第二实例会撞 `~/.dsh/.credentials.yaml.lock`）。
+      4. 复盘口径加「执行覆盖率」列（有 picks 桶数 vs 有成交桶数），否则 hit 数继续
+         掩盖执行缺口。
