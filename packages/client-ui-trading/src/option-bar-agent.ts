@@ -353,6 +353,42 @@ export function createOpportunityLane(host: OptionBarAgentHost): TraderLane {
   }
 }
 
+/** 盘中执行会话钉住的工作区标识：deepseek-harness 运行环境的目录名（title 默认 basename(path)）。 */
+const OPTION_BAR_WORKSPACE_MATCH = 'deepseek-harness'
+
+/** 工作区名册条目面（宿主实体 path 是可选鸭子字段，与模块面其余部分同策略）。 */
+export interface OptionBarWorkspaceEntry {
+  readonly id: string
+  readonly name?: string
+  readonly title?: string
+  readonly path?: string
+}
+
+/**
+ * 解析盘中执行会话的工作区 id：优先匹配 deepseek-harness（path/title/name
+ * 子串、大小写不敏感），匹配不到回退名册第一个（保持既有行为），空名册
+ * 返回 undefined。
+ *
+ * 不能直接取 list()[0]：宿主 workspaceRegistry 按最近活跃排序，名册顺序会
+ * 漂移（2026-09-15 实证：其他工作区一旦更活跃，trader 会话会被静默建到别
+ * 的工作区——沙箱/工具面/模型配置跟着变）。
+ */
+export function resolveOptionBarWorkspaceId(
+  registry: { list(): readonly OptionBarWorkspaceEntry[] } | undefined,
+  log?: (message: string) => void,
+): string | undefined {
+  const items = registry?.list() ?? []
+  const first = items[0]
+  if (first === undefined) return undefined
+  const matched = items.find((item) =>
+    (item.path ?? '').toLowerCase().includes(OPTION_BAR_WORKSPACE_MATCH)
+    || (item.title ?? '').toLowerCase().includes(OPTION_BAR_WORKSPACE_MATCH)
+    || (item.name ?? '').toLowerCase().includes(OPTION_BAR_WORKSPACE_MATCH))
+  if (matched !== undefined) return matched.id
+  log?.(`option-bar workspace "${OPTION_BAR_WORKSPACE_MATCH}" not found in registry [${items.map((item) => item.title ?? item.name ?? item.id).join(', ')}]; falling back to first workspace`)
+  return first.id
+}
+
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     await access(filePath)

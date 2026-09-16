@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { OptionBarRecommendation, OptionBarSessionEvent } from '@dshtrading/api'
 import { appendJsonlLine, cyclesPath, optionSessionsPath, readJsonl, recommendationsPath, reviewsPath } from '@dshtrading/kit-cn'
 import { SessionLaunchError, type ExecutionInspection } from '../src/tasks/runner.ts'
-import { createOpportunityLane, OptionBarAgentHost } from '../src/option-bar-agent.ts'
+import { createOpportunityLane, OptionBarAgentHost, resolveOptionBarWorkspaceId } from '../src/option-bar-agent.ts'
 
 const LUNCH = Date.parse('2026-09-08T03:25:00.000Z')
 const CLOSE5 = Date.parse('2026-09-08T06:55:00.000Z')
@@ -429,5 +429,38 @@ describe('OptionBarAgentHost', () => {
       sessionId: 's-9',
       outcome: 'failed',
     })
+  })
+})
+
+describe('resolveOptionBarWorkspaceId', () => {
+  it('名册顺序漂移时仍按 path 匹配 deepseek-harness', () => {
+    const registry = {
+      list: () => [
+        { id: 'ws-temp', title: 'temp', path: 'D:\\temp' },
+        { id: 'ws-harness', title: 'deepseek-harness', path: 'D:\\workspace\\myquant\\projects\\trading-agent_v3\\deepseek-harness' },
+      ],
+    }
+    expect(resolveOptionBarWorkspaceId(registry)).toBe('ws-harness')
+  })
+
+  it('无 path 时按 title 匹配（大小写不敏感）', () => {
+    const registry = { list: () => [{ id: 'a', title: 'temp' }, { id: 'b', title: 'DeepSeek-Harness' }] }
+    expect(resolveOptionBarWorkspaceId(registry)).toBe('b')
+  })
+
+  it('匹配不到回退名册第一个并告警', () => {
+    const logs: string[] = []
+    const registry = { list: () => [{ id: 'a', title: 'temp' }, { id: 'b', title: 'other' }] }
+    expect(resolveOptionBarWorkspaceId(registry, (message) => { logs.push(message) })).toBe('a')
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toContain('falling back to first workspace')
+  })
+
+  it('空名册或名册缺失返回 undefined 且不告警', () => {
+    const logs: string[] = []
+    const log = (message: string): void => { logs.push(message) }
+    expect(resolveOptionBarWorkspaceId(undefined, log)).toBeUndefined()
+    expect(resolveOptionBarWorkspaceId({ list: () => [] }, log)).toBeUndefined()
+    expect(logs).toHaveLength(0)
   })
 })

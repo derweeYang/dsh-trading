@@ -38,7 +38,7 @@ import { TASKS_ACTION_BYTES_LIMIT, parseTasksEnvelope } from './client/tasks-pro
 import { TradingTasksService } from './tasks/service.ts'
 import { describeOpenSettingsCapability, tryInvokeHostOpenSettings } from './shell-settings.ts'
 import { TasksRunner, type SessionCommandDispatcher, type SessionGateway } from './tasks/runner.ts'
-import { OptionBarAgentHost } from './option-bar-agent.ts'
+import { OptionBarAgentHost, resolveOptionBarWorkspaceId } from './option-bar-agent.ts'
 import { TraderDirectorHost } from './trader-director-host.ts'
 import {
   appendJsonlLine,
@@ -242,7 +242,8 @@ export function apply(ctx: Context): void {
       getCnOptions: () => host.getCnOptions?.(),
       workspaceId: () => {
         const registry = resolveHostService('workspaceRegistry') as import('./tasks/service.ts').WorkspaceDirectoryLike | undefined
-        return registry?.list()[0]?.id
+        // 钉住 deepseek-harness 工作区，不随名册活跃顺序漂移（详见 resolveOptionBarWorkspaceId 注释）。
+        return resolveOptionBarWorkspaceId(registry, (message) => { console.warn(`[dsh-trading/option-bar] ${message}`) })
       },
       log: (message, error) => { console.error(`[dsh-trading/option-bar] ${message}`, error) },
       loadFacts: async (underlyings) => {
