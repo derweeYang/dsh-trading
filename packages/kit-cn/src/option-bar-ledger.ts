@@ -164,6 +164,60 @@ export async function readArbHeartbeats(root: string, date: string): Promise<rea
     typeof row === 'object' && row !== null && (row as { kind?: unknown }).kind === 'arb_cycle')
 }
 
+/**
+ * 转债折价扫描台账行（data/options/cb/<date>.jsonl，每轮扫描一行计数 + top 命中）。
+ * top 元素为扫描层 CbDiscountRow（type-only 反向引用，运行时无环）。
+ */
+export interface CbScanLedgerRow {
+  readonly kind: 'cb_scan'
+  readonly asOf: string
+  readonly scanned: number
+  readonly priced: number
+  readonly stale: number
+  readonly hitCount: number
+  /** 命中行 top（溢价最深在前，封顶 10）。 */
+  readonly top: readonly import('./cb-discount.js').CbDiscountRow[]
+  /** 数据源不可用（市场服务缺 getCovSnapshot / 拉取失败）时的错误行。 */
+  readonly error?: string
+}
+
+export function cbScanPath(root: string, date: string): string {
+  return path.join(root, 'cb', `${date}.jsonl`)
+}
+
+/** 读一日转债扫描（坏行容忍；只收 kind=cb_scan 行）。 */
+export async function readCbScanRows(root: string, date: string): Promise<readonly CbScanLedgerRow[]> {
+  const rows = await readJsonl<unknown>(cbScanPath(root, date))
+  return rows.filter((row): row is CbScanLedgerRow =>
+    typeof row === 'object' && row !== null && (row as { kind?: unknown }).kind === 'cb_scan')
+}
+
+/** 转债台账日聚合（复盘「套利跟踪」转债行数据源）。 */
+export function foldCbScans(rows: readonly CbScanLedgerRow[]): {
+  cycles: number
+  errors: number
+  stale: number
+  hitCycles: number
+  minPremiumPct: number | undefined
+} {
+  let cycles = 0
+  let errors = 0
+  let stale = 0
+  let hitCycles = 0
+  let minPremiumPct: number | undefined
+  for (const row of rows) {
+    cycles += 1
+    if (row.error !== undefined) errors += 1
+    stale += row.stale
+    if (row.hitCount > 0) hitCycles += 1
+    const deepest = row.top[0]?.premiumPct
+    if (deepest !== undefined && (minPremiumPct === undefined || deepest < minPremiumPct)) {
+      minPremiumPct = deepest
+    }
+  }
+  return { cycles, errors, stale, hitCycles, ...(minPremiumPct === undefined ? {} : { minPremiumPct }) }
+}
+
 /** 心跳日聚合（复盘「套利跟踪」节数据源）。 */
 export function foldArbHeartbeats(rows: readonly ArbCycleHeartbeat[]): {
   cycles: number
@@ -768,6 +822,8 @@ export function foldDailyReview(input: {
   fills?: readonly { reason?: unknown; skip?: unknown; bucketStart?: unknown }[]
   /** 套利周期心跳（缺省 = 不出「套利跟踪」节，向后兼容）。 */
   arbHeartbeats?: readonly ArbCycleHeartbeat[]
+  /** 转债折价扫描台账（缺省 = 「套利跟踪」节不出转债行）。 */
+  cbScans?: readonly CbScanLedgerRow[]
 }): string {
   const core = dailyLedgerCore(input)
   const overlaps = core.skipReasons.get('overlap') ?? 0
@@ -835,6 +891,14 @@ export function foldDailyReview(input: {
       lines.push(arb.chainFailures + arb.errors > 0
         ? '- ⚠ 零机会且存在链失败/错误行——先查引擎与网关，再解释为市场无边。'
         : '- 零机会且零链失败——按市场无边处理。')
+    }
+    if (input.cbScans !== undefined) {
+      const cb = foldCbScans(input.cbScans)
+      lines.push(
+        `- 转债: 扫描 ${cb.cycles} 轮（错误 ${cb.errors}，stale ${cb.stale}），最深溢价 `
+        + (cb.minPremiumPct === undefined ? '（无可用行）' : `${cb.minPremiumPct.toFixed(2)}%`)
+        + `，命中轮 ${cb.hitCycles}`,
+      )
     }
   }
   lines.push('', `## ${input.arbHeartbeats === undefined ? 6 : 7}. 免责`, '')

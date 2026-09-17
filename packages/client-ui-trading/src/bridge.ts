@@ -56,6 +56,9 @@ import {
   PAPER_DESK_MAX_DAYS,
   OptionCycleBook,
   OPTION_ARB_CHAIN_TTL_MS,
+  appendJsonlLine,
+  CB_SCAN_INTERVAL_MS,
+  cbScanPath,
   readJsonl,
   resetPaperState,
   sessionFlag,
@@ -69,6 +72,8 @@ import {
   selectBoxTargets,
   shanghaiCalendarDate,
   shanghaiBucketStartMs,
+  scanCbDiscount,
+  shouldRunCbScan,
   tryArbPaperCycle,
   tryPaperManage,
 } from '@dshtrading/kit-cn'
@@ -711,6 +716,10 @@ export class TradingBridge {
   readonly #arbChainCache = new Map<string, { at: number; promise: Promise<OptionChain | undefined> }>()
   /** 套利周期 in-flight 闸：记 tick asOf，非 0 = 在跑；上轮超 5min 视为僵死强制放行。 */
   #arbCycleInFlightSince = 0
+  /** 转债折价扫描节流：上次运行 tick 时间（0 = 冷启动即跑）。 */
+  #cbScanLastMs = 0
+  /** 转债能力缺失日通知（active provider 无 getCovSnapshot 时每日只记一行，防洪水）。 */
+  #cbCapabilityNoticeDate: string | undefined
 
   constructor(private readonly host: BridgeHost) {}
 
@@ -1944,11 +1953,55 @@ export class TradingBridge {
         this.#arbCycleInFlightSince = 0
       })
     }
+    // 转债折价周期（300s 节流、仅 regular；失败静默不阻断 tick——台账行自带错误标记）。
+    if (shouldRunCbScan(nowMs, this.#cbScanLastMs, sessionFlag(nowMs), CB_SCAN_INTERVAL_MS)) {
+      this.#cbScanLastMs = nowMs
+      void this.#cbDiscountScan(date, nowMs)
+    }
     return {
       ok: true,
       ticked,
       asOf: new Date(nowMs).toISOString(),
       loop: this.#cycles.loop(roster.map((row) => row.underlying)),
+    }
+  }
+
+  /**
+   * 转债折价扫描落账（观察轨，data/options/cb/<date>.jsonl）：
+   * active provider 无 getCovSnapshot（如 cn 路由在 iquant）→ 每日一条能力缺失通知行；
+   * 拉取/扫描失败 → 错误行；成功 → 计数 + top 命中（封顶 10）。
+   */
+  async #cbDiscountScan(date: string, nowMs: number): Promise<void> {
+    const root = optionsDataRoot()
+    const asOf = new Date(nowMs).toISOString()
+    const base = { kind: 'cb_scan', asOf, scanned: 0, priced: 0, stale: 0, hitCount: 0, top: [] } as const
+    const market = this.host.getMarketService('cn')
+    if (market?.getCovSnapshot === undefined) {
+      if (this.#cbCapabilityNoticeDate === date) return
+      this.#cbCapabilityNoticeDate = date
+      await appendJsonlLine(cbScanPath(root, date), {
+        ...base,
+        error: 'active cn market provider has no getCovSnapshot (route cn provider to akshare to enable CB tracking)',
+      })
+      return
+    }
+    try {
+      const rows = await market.getCovSnapshot()
+      const scan = scanCbDiscount(rows)
+      await appendJsonlLine(cbScanPath(root, date), {
+        kind: 'cb_scan',
+        asOf,
+        scanned: scan.scanned,
+        priced: scan.priced,
+        stale: scan.stale,
+        hitCount: scan.hits.length,
+        top: scan.hits.slice(0, 10),
+      })
+    } catch (error) {
+      await appendJsonlLine(cbScanPath(root, date), {
+        ...base,
+        error: error instanceof Error ? error.message : String(error),
+      }).catch(() => {})
     }
   }
 

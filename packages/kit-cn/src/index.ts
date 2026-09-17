@@ -43,6 +43,7 @@ import {
   createOptionParityCheckTool,
   fetchNearestChain,
 } from './options-tools.js'
+import { createGetCbDiscountScanTool } from './cb-discount.js'
 import type { CnOptionsService } from '@dshtrading/api'
 
 export * from './fundamentals.js'
@@ -55,6 +56,7 @@ export * from './option-bar-ledger.js'
 export * from './option-paper.js'
 export * from './option-arb-paper.js'
 export * from './option-predictions.js'
+export * from './cb-discount.js'
 export * from './trader-director.js'
 
 // ── skill provider（host 面 skill 全局可见即可，本切片不改 skill 作用域） ─────────
@@ -260,6 +262,8 @@ export function apply(ctx: Context, config: Config): void {
     getService: lookupOptions,
     getMarketData: lookupMarket,
   }))
+  // 转债折价扫描（观察轨；active provider 未实现 getCovSnapshot 时工具显式降级报错）。
+  registerOnce(createGetCbDiscountScanTool({ getMarketData: lookupMarket }))
   registerOnce(createPutOptionBarRecommendationTool({
     getService: lookupOptions,
     getMarketData: lookupMarket,
