@@ -112,6 +112,58 @@ describe('OptionsRestClient.getArbitrageScan', () => {
     expect(full.verticals?.[0]?.legs).toHaveLength(2)
   })
 
+  it('includeIntrinsic=true 附带深实值贴水（仅真实盘口行）；缺省不带', async () => {
+    // 追加深实值 C K=2.65：bound ≈ 2.9 − 2.65×e^{-0.02T} ≈ 0.2517，ask 0.240 → 贴水 ≈ 0.0117 元/股。
+    const base = chainBody(true)
+    const body = {
+      ...base,
+      result: {
+        ...base.result,
+        calls: [
+          { code: '510050C2609M02650', strike: 2.65, last: 0.24, bid: 0.236, ask: 0.24 },
+          ...base.result.calls,
+        ],
+      },
+    }
+    const client = new OptionsRestClient({
+      source: 'iquant',
+      fetchImpl: stubFetch([{ match: '/v1/chain', body }]),
+    })
+    const bare = await client.getArbitrageScan({
+      underlying: '510050',
+      expiryMonth: '2609',
+      spot: 2.9,
+      thresholdPerShare: 0.0001,
+    })
+    expect(bare.intrinsic).toBeUndefined()
+    const full = await client.getArbitrageScan({
+      underlying: '510050',
+      expiryMonth: '2609',
+      spot: 2.9,
+      thresholdPerShare: 0.0001,
+      includeIntrinsic: true,
+    })
+    expect(full.intrinsic).toBeDefined()
+    const c = full.intrinsic?.find((r) => r.right === 'C')
+    expect(c?.strike).toBe(2.65)
+    expect(c?.leg).toMatchObject({ code: '510050C2609M02650', action: 'buy', strike: 2.65 })
+    expect(c?.discountPerShare).toBeCloseTo(0.0117, 3)
+    expect(c?.netPerContract).toBeGreaterThan(50)
+    // 无盘口链（last-only）不产生贴水信号（last 回退是伪影高发区）。
+    const lastOnly = new OptionsRestClient({
+      source: 'iquant',
+      fetchImpl: stubFetch([{ match: '/v1/chain', body: chainBody(false) }]),
+    })
+    const noBook = await lastOnly.getArbitrageScan({
+      underlying: '510050',
+      expiryMonth: '2609',
+      spot: 2.9,
+      thresholdPerShare: 0.0001,
+      includeIntrinsic: true,
+    })
+    expect(noBook.intrinsic).toEqual([])
+  })
+
   it('缺 expiryMonth 拒绝（不打网关）', async () => {
     const client = new OptionsRestClient({
       fetchImpl: (async () => {

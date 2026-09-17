@@ -371,7 +371,28 @@ export interface OptionVerticalSpread {
   readonly legs: readonly OptionArbitrageLeg[]
 }
 
-/** 套利扫描查询：拉链一次 → strategies 内核（平价+箱型；垂直价差可选）。 */
+/**
+ * 深实值贴水机会（镜像 strategies IntrinsicDiscount；收敛型类套利，非无风险）。
+ * 仅由真实买卖盘（bid/ask）行产生——无盘口 last 价回退不产生信号，故无 executable 字段。
+ */
+export interface OptionIntrinsicDiscount {
+  readonly underlying: string
+  readonly expiryMonth: string
+  readonly strike: number
+  readonly right: OptionRight
+  /** 欧式下界（元/股）。 */
+  readonly boundPerShare: number
+  /** 买入对手价（元/股）。 */
+  readonly askPerShare: number
+  /** 贴水 = bound − ask（元/股，> 0）。 */
+  readonly discountPerShare: number
+  /** 费后净贴水（元/张）= discount × multiplier − fee。 */
+  readonly netPerContract: number
+  readonly leg: OptionArbitrageLeg
+  readonly note: string
+}
+
+/** 套利扫描查询：拉链一次 → strategies 内核（平价+箱型；垂直价差/深实值贴水可选）。 */
 export interface OptionArbitrageScanQuery extends CnOptionsQuery {
   /** 现货价（元）。缺省用链自带 spot；再缺省则平价扫描退化（仅箱型，box 不依赖 spot）。 */
   readonly spot?: number
@@ -381,6 +402,8 @@ export interface OptionArbitrageScanQuery extends CnOptionsQuery {
   readonly feePerContract?: number
   /** 是否附带垂直价差全集（4 方向 × 行权价两两组合，量较大）；缺省 false。 */
   readonly includeVerticals?: boolean
+  /** 是否附带深实值贴水机会（仅真实盘口行；依赖 spot 与到期日）；缺省 false。 */
+  readonly includeIntrinsic?: boolean
 }
 
 export interface OptionArbitrageScanResult {
@@ -406,6 +429,8 @@ export interface OptionArbitrageScanResult {
   readonly opportunities: readonly OptionArbitrageOpportunity[]
   /** 垂直价差全集（仅 includeVerticals=true 时携带）。 */
   readonly verticals?: readonly OptionVerticalSpread[]
+  /** 深实值贴水机会，按 netPerContract 降序（仅 includeIntrinsic=true 且有真实盘口时携带）。 */
+  readonly intrinsic?: readonly OptionIntrinsicDiscount[]
   /** 技术分析信号非投资建议；executable=false 须以可成交价复核。 */
   readonly disclaimer: string
 }
