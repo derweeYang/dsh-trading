@@ -3,6 +3,8 @@
  * 收敛 / 反转 / 到期自动平仓。纯决策函数 + 一次周期编排（tryArbPaperCycle），
  * 行情与保证金依赖全部注入，不触网。审计粒度 = 成交-only（不写 skip 桩 fill：
  * 30s×14 链会洪水化 jsonl）。
+ * 2026-09-17 起同账本承载深实值贴水（intrinsic_call/intrinsic_put 模板，
+ * 纯买腿无保证金，收敛/反转/到期平仓语义复用）。
  */
 import type {
   OptionChain,
@@ -16,10 +18,14 @@ import type {
 import {
   boxSignedEdge,
   fromOptionChain,
+  intrinsicSignedEdge,
   paritySignedEdge,
   scanArbitrage,
+  scanIntrinsicDiscount,
   type ArbitrageLeg,
   type ArbitrageOpportunity,
+  type IntrinsicDiscount,
+  type OptionRight,
 } from '@dshtrading/strategies/arbitrage'
 import {
   applyClose,
@@ -41,6 +47,8 @@ import { shanghaiCalendarDate } from './option-bar-ledger.js'
 export const OPTION_ARB_MAX_POSITIONS = 6
 /** 单个套利组合的最大张数（默认规模上限）。 */
 export const OPTION_ARB_MAX_CONTRACTS_PER_POSITION = 10
+/** 深实值贴水子帽：防止高频贴水信号挤占 parity/box 的共享仓位上限。 */
+export const OPTION_ARB_MAX_INTRINSIC_POSITIONS = 3
 /** 卖空现货腿的保证金率（融券近似，简化假设）。 */
 export const OPTION_ARB_SHORT_SPOT_MARGIN_RATE = 0.5
 /** 链缓存 TTL（调用方 bridge 侧使用；引擎自身的 on-hit refresh 不走缓存）。 */
@@ -79,15 +87,26 @@ function encodeStrike(strike: number): number {
 /**
  * 套利持仓键：`arb:<kind>:<underlying>:<expiryMonth>:<K1>[-<K2>]`，strikes 升序归一，
  * **方向无关**——同 strikes 反向机会走平仓/换向路径，不叠仓。
+ * kind 含深实值贴水模板（intrinsic_call / intrinsic_put：call 与 put 是不同工具，键天然分离）。
  */
 export function arbPositionKey(input: {
-  kind: 'parity' | 'box'
+  kind: 'parity' | 'box' | 'intrinsic_call' | 'intrinsic_put'
   underlying: string
   expiryMonth: string
   strikes: readonly number[]
 }): string {
   const enc = [...input.strikes].sort((a, b) => a - b).map(encodeStrike).join('-')
   return `arb:${input.kind}:${input.underlying}:${input.expiryMonth}:${enc}`
+}
+
+/** 深实值贴水持仓模板（right → template 字符串，落 PaperPosition.template 透传）。 */
+export function intrinsicTemplateOf(right: OptionRight): 'intrinsic_call' | 'intrinsic_put' {
+  return right === 'C' ? 'intrinsic_call' : 'intrinsic_put'
+}
+
+/** 模板字符串 → 贴水腿 right；非贴水模板返回 undefined。 */
+export function rightOfIntrinsicTemplate(template: string): OptionRight | undefined {
+  return template === 'intrinsic_call' ? 'C' : template === 'intrinsic_put' ? 'P' : undefined
 }
 
 export type ArbOpenSkipReason =
@@ -224,6 +243,97 @@ export function decideArbOpen(input: ArbOpenInput): ArbOpenDecision {
   }
 }
 
+export type ArbIntrinsicOpenSkipReason =
+  | 'stale_snapshot'
+  | 'duplicate'
+  | 'no_quote'
+  | 'no_spot'
+  | 'edge_gone'
+  | 'no_cash'
+
+export interface ArbIntrinsicOpenInput {
+  /** 扫描层机会（腿价从这里重推 + 边现算复核，防 TOCTOU）。 */
+  readonly discount: IntrinsicDiscount
+  readonly chain: OptionChain
+  readonly positionKeys: ReadonlySet<string>
+  readonly cash: number
+  readonly nowMs: number
+  /** bound 依赖的现货现价（元/份）；缺省不可决策。 */
+  readonly spotPrice?: number
+  readonly maxContracts?: number
+  readonly feePerContract?: number
+}
+
+export type ArbIntrinsicOpenDecision =
+  | { kind: 'open'; fill: Omit<PaperFill, 'cashAfter'>; positionId: string }
+  | { kind: 'skip'; reason: ArbIntrinsicOpenSkipReason }
+
+/**
+ * 深实值贴水开仓决策：单买腿、无保证金、无现货腿。
+ * 边复核 = intrinsicSignedEdge（bound − ask，与扫描同口径）；≤0 → edge_gone。
+ */
+export function decideIntrinsicOpen(input: ArbIntrinsicOpenInput): ArbIntrinsicOpenDecision {
+  const discount = input.discount
+  // 1. 快照新鲜度闸：与 parity/box 同款。
+  const snapshotMs = Date.parse(input.chain.snapshotAt ?? '')
+  if (!Number.isFinite(snapshotMs) || input.nowMs - snapshotMs > OPTION_ARB_OPEN_SNAPSHOT_MAX_AGE_MS) {
+    return { kind: 'skip', reason: 'stale_snapshot' }
+  }
+  // 2. 去重键（call/put 模板分离；同键持仓 → 不叠仓）。
+  const template = intrinsicTemplateOf(discount.right)
+  const positionId = arbPositionKey({
+    kind: template,
+    underlying: discount.underlying,
+    expiryMonth: discount.expiryMonth,
+    strikes: [discount.strike],
+  })
+  if (input.positionKeys.has(positionId)) return { kind: 'skip', reason: 'duplicate' }
+
+  // 3. 腿价 strict 重推（对手卖一），并现算再入场边复核。
+  const row = [...input.chain.calls, ...input.chain.puts].find((item) => item.code === discount.leg.code)
+  const fill = row === undefined ? undefined : takerFillPrice(row, 'buy', 'strict')
+  if (fill === undefined) return { kind: 'skip', reason: 'no_quote' }
+  if (!isPositiveFinite(input.spotPrice)) return { kind: 'skip', reason: 'no_spot' }
+  const signed = intrinsicSignedEdge(arbChainOf(input.chain, input.spotPrice), discount.strike, discount.right)
+  if (signed === undefined || signed.edgePerShare <= 0) return { kind: 'skip', reason: 'edge_gone' }
+
+  // 4. 规模：纯买腿，占用 = |premium|（保证金 0）。
+  const premiumPer = -fill.price * OPTION_MULTIPLIER
+  const qty = sizeQty(input.maxContracts ?? OPTION_ARB_MAX_CONTRACTS_PER_POSITION, input.cash, premiumPer, 0)
+  if (qty === 0) return { kind: 'skip', reason: 'no_cash' }
+
+  // 5. 落账 fill（腿 qty 按张数放大）。
+  const scaledLegs: PaperLegFill[] = [{
+    code: discount.leg.code,
+    side: 'buy',
+    qty,
+    fillPrice: fill.price,
+    priceSource: fill.source,
+  }]
+  const feeCny = fillFeeCny(scaledLegs, input.feePerContract ?? OPTION_PAPER_FEE_PER_CONTRACT)
+  return {
+    kind: 'open',
+    positionId,
+    fill: {
+      id: `${positionId}:open`,
+      bucketStart: new Date(shanghaiBucketStartMs(input.nowMs)).toISOString(),
+      asOf: new Date(input.nowMs).toISOString(),
+      underlying: discount.underlying,
+      template,
+      offset: 'open',
+      qty,
+      legs: scaledLegs,
+      premiumCny: premiumCny(scaledLegs),
+      marginCny: 0,
+      reason: 'arb_open',
+      book: 'arbitrage',
+      ...(input.chain.expiryDate === undefined ? {} : { expiryDate: input.chain.expiryDate }),
+      openEdgePerShare: signed.edgePerShare,
+      ...(feeCny === 0 ? {} : { feeCny }),
+    },
+  }
+}
+
 /** 平仓优先级：到期强平 > 边反转 > 收敛（开仓边一半）；边缺/未收敛 → hold。 */
 export function decideArbClose(input: {
   position: PaperPosition
@@ -296,6 +406,11 @@ function opportunityStrikes(opportunity: ArbitrageOpportunity): readonly number[
       : undefined)
 }
 
+/** 已持有的深实值贴水仓位数（子帽计数）。 */
+function countIntrinsicPositions(positions: readonly PaperPosition[]): number {
+  return positions.filter((position) => rightOfIntrinsicTemplate(position.template) !== undefined).length
+}
+
 function positionKeyOf(opportunity: ArbitrageOpportunity): string | undefined {
   const strikes = opportunityStrikes(opportunity)
   return strikes === undefined ? undefined : arbPositionKey({
@@ -316,6 +431,13 @@ function arbChainOf(chain: OptionChain, spot: number | undefined): ReturnType<ty
   return isPositiveFinite(spot) ? { ...base, spot } : base
 }
 
+/** 残余边计算依赖桥侧现价的模板（parity 现货腿 / intrinsic 的 bound）。 */
+function needsSpotForEdge(position: PaperPosition): boolean {
+  return position.template === 'parity'
+    || position.template === 'intrinsic_call'
+    || position.template === 'intrinsic_put'
+}
+
 /** 持仓残余边（signedEdge 同口径）；链缺/要素缺 → undefined（hold）。 */
 function positionCurrentEdge(
   position: PaperPosition,
@@ -324,11 +446,10 @@ function positionCurrentEdge(
 ): number | undefined {
   if (chain === undefined
     || position.strikes === undefined
-    || position.direction === undefined
     || position.strikes.length === 0) return undefined
   const arb = arbChainOf(chain, spot)
   if (position.template === 'box') {
-    if (position.strikes.length < 2) return undefined
+    if (position.direction === undefined || position.strikes.length < 2) return undefined
     return boxSignedEdge(
       arb,
       position.strikes[0]!,
@@ -336,6 +457,12 @@ function positionCurrentEdge(
       position.direction as 'long_box' | 'short_box',
     )?.edgePerShare
   }
+  const intrinsicRight = rightOfIntrinsicTemplate(position.template)
+  if (intrinsicRight !== undefined) {
+    // 贴水持仓无 direction（right 在模板里）；无盘口 → undefined（hold 等下轮）。
+    return intrinsicSignedEdge(arb, position.strikes[0]!, intrinsicRight)?.edgePerShare
+  }
+  if (position.direction === undefined) return undefined
   return paritySignedEdge(
     arb,
     position.strikes[0]!,
@@ -378,8 +505,9 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
         const chain = position.expiryMonth === undefined
           ? undefined
           : await input.getChain(position.underlying, position.expiryMonth).catch(() => undefined)
-        // parity 残余边依赖 spot：链不带时用桥侧现价补（box 无现货腿不用）。
-        const spot = chain !== undefined && chain.spot === undefined && position.template === 'parity'
+        // 残余边依赖 spot 的持仓（parity 现货腿 / intrinsic bound）：链不带时用桥侧现价补
+        // （box 无现货腿不用）。
+        const spot = chain !== undefined && chain.spot === undefined && needsSpotForEdge(position)
           ? await input.getSpot(position.underlying).catch(() => undefined)
           : undefined
         const currentEdge = positionCurrentEdge(position, chain, spot)
@@ -445,6 +573,38 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
                 expiryMonth: month,
                 direction: still.direction,
                 ...(stillStrikes === undefined ? {} : { strikes: stillStrikes }),
+              })
+            }
+
+            // 深实值贴水（纯买腿、无保证金；子帽独立于共享上限，不挤占 parity/box）。
+            const intrinsicDiscounts = scanIntrinsicDiscount(arbChainOf(chain, spot), { feePerContract: fee })
+            for (const discount of intrinsicDiscounts) {
+              if (state.positions.length >= OPTION_ARB_MAX_POSITIONS) break scan
+              if (countIntrinsicPositions(state.positions) >= OPTION_ARB_MAX_INTRINSIC_POSITIONS) break
+              const intrinsicInput = {
+                discount,
+                chain,
+                positionKeys: new Set(state.positions.map((position) => position.id)),
+                cash: state.account.cash,
+                nowMs: input.nowMs,
+                ...(isPositiveFinite(spot) ? { spotPrice: spot } : {}),
+                feePerContract: fee,
+              } satisfies ArbIntrinsicOpenInput
+              const decided = decideIntrinsicOpen(intrinsicInput)
+              if (decided.kind !== 'open') continue
+              // on-hit refresh：同 code 同 right 仍在且边为正才落账（同款削前视）。
+              const fresh = await input.getChain(underlying, month, { refresh: true }).catch(() => undefined)
+              if (fresh === undefined) continue
+              const still = scanIntrinsicDiscount(arbChainOf(fresh, spot), { feePerContract: fee })
+                .find((item) => item.leg.code === discount.leg.code)
+              if (still === undefined) continue
+              const confirmed = decideIntrinsicOpen({ ...intrinsicInput, discount: still, chain: fresh })
+              if (confirmed.kind !== 'open') continue
+              state = applyOpen(state, {
+                ...confirmed.fill,
+                positionId: confirmed.positionId,
+                expiryMonth: month,
+                strikes: [still.strike],
               })
             }
           }
