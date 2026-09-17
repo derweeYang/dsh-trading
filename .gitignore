@@ -25,6 +25,8 @@ data/options/iv-daily.jsonl
 # runtime option snapshots / per-session ledgers (same nature as cycles/ reviews/)
 data/options/overview.json
 data/options/sessions/
+data/options/arb-heartbeat/
+data/options/cb/
 
 # runtime prediction track ledger
 data/options/predictions.jsonl

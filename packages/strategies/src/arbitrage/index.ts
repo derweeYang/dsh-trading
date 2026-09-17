@@ -9,6 +9,7 @@ export * from './prices.ts'
 export * from './parity.ts'
 export * from './box.ts'
 export * from './vertical.ts'
+export * from './intrinsic.ts'
 export * from './adapter.ts'
 
 import type { ArbitrageChain, ArbitrageOpportunity } from './types.ts'
@@ -21,7 +22,8 @@ export type ArbitrageScanOptions = ParityOptions & BoxOptions
 
 /**
  * 扫描一个期权链的全部无风险套利机会（平价 + 箱型），按 edgePerContract 降序。
- * 垂直价差为方向性策略，不在此合并，请用 scanVerticalSpreads 单独获取。
+ * 垂直价差为方向性策略、深实值贴水为收敛型类套利，均不在此合并，
+ * 请分别用 scanVerticalSpreads / scanIntrinsicDiscount 单独获取。
  */
 export function scanArbitrage(chain: ArbitrageChain, options: ArbitrageScanOptions = {}): ArbitrageOpportunity[] {
   const parity = scanParityArbitrage(chain, options)

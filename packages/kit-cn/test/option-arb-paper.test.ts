@@ -2,9 +2,9 @@
  * 套利纸面引擎单测：taker 定价、开仓决策（现货腿份数记账）、平仓四分支、
  * 现货腿端到端盈亏、周期编排（开仓 → 收敛平仓）。全部注入假件，不触网。
  */
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import path from 'node:path'
+import path, { dirname } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { OptionChain, OptionQuoteRow, PaperLegFill, PaperPosition } from '@dshtrading/api'
 import {
@@ -21,10 +21,14 @@ import {
   buildArbCloseLegs,
   decideArbClose,
   decideArbOpen,
+  decideIntrinsicOpen,
+  intrinsicTemplateOf,
+  rightOfIntrinsicTemplate,
+  OPTION_ARB_MAX_INTRINSIC_POSITIONS,
   takerFillPrice,
   tryArbPaperCycle,
 } from '../src/option-arb-paper.js'
-import { paperFillsPath } from '../src/option-bar-ledger.js'
+import { paperFillsPath, paperAccountPath, arbHeartbeatPath, readArbHeartbeats } from '../src/option-bar-ledger.js'
 
 const NOW_MS = Date.parse('2026-09-13T03:00:00.000Z')
 const NOW_ISO = '2026-09-13T03:00:00.000Z'
@@ -66,6 +70,40 @@ function parityOpportunity(over: Partial<Parameters<typeof decideArbOpen>[0]['op
     executable: true,
     ...over,
   } as const
+}
+
+/**
+ * 深实值贴水链：仅一只深实值 C K=2.65 挂真实盘口（无同 strike P → 无 parity/box 干扰）。
+ * bound ≈ 2.9 − 2.65×e^{-0.02T} ≈ 0.2514，ask 0.24 → 贴水 ≈ 0.0114 元/股。
+ */
+function intrinsicChain(over: { calls?: OptionQuoteRow[]; spot?: number | null } = {}): OptionChain {
+  return {
+    underlying: '510050',
+    expiryMonth: '2609',
+    expiryDate: '2026-09-23',
+    snapshotAt: '2026-09-13T02:59:50.000Z',
+    source: 'iquant',
+    ...(over.spot === null ? {} : { spot: over.spot ?? 2.9 }),
+    calls: over.calls ?? [row('510050C2609M02650', 2.65, { last: 0.238, bid: 0.236, ask: 0.24 })],
+    puts: [],
+  }
+}
+
+/** 扫描层贴水机会对象（decideIntrinsicOpen 输入；数字与 intrinsicChain 对齐）。 */
+function intrinsicDiscount(over: Partial<Parameters<typeof decideIntrinsicOpen>[0]['discount']> = {}) {
+  return {
+    underlying: '510050',
+    expiryMonth: '2609',
+    strike: 2.65,
+    right: 'C' as const,
+    boundPerShare: 0.2514,
+    askPerShare: 0.24,
+    discountPerShare: 0.0114,
+    netPerContract: 114,
+    leg: { code: '510050C2609M02650', right: 'C' as const, action: 'buy' as const, strike: 2.65 },
+    note: 'test',
+    ...over,
+  }
 }
 
 describe('takerFillPrice', () => {
@@ -351,6 +389,20 @@ describe('tryArbPaperCycle（周期编排：开仓 → 收敛平仓）', () => {
     const fillsText = await readFile(paperFillsPath(root, 'arbitrage', '2026-09-13'), 'utf8')
     expect(fillsText).toContain('"reason":"arb_open"')
 
+    // 心跳落账（2026-09-17 可观测性教训）：计数行与实际行为一致。
+    const heartbeats = await readArbHeartbeats(root, '2026-09-13')
+    expect(heartbeats).toHaveLength(1)
+    expect(heartbeats[0]).toMatchObject({
+      kind: 'arb_cycle',
+      session: 'regular',
+      underlyingsScanned: 1,
+      monthsScanned: 1,
+      chainFailures: 0,
+      opens: 1,
+    })
+    expect(heartbeats[0]!.error).toBeUndefined()
+    expect(heartbeats[0]!.opportunities.parity).toBeGreaterThan(0)
+
     // close5：只平不开（收敛后不再追开新仓）。
     chains[0] = convergedChain
     await tryArbPaperCycle({ ...baseInput, session: 'close5' })
@@ -381,6 +433,33 @@ describe('tryArbPaperCycle（周期编排：开仓 → 收敛平仓）', () => {
     const state = await loadPaperState(root, '2026-09-13', NOW_ISO, 'arbitrage')
     expect(state.positions).toEqual([])
     expect(state.fills).toEqual([])
+    // 无持仓 + closed → 无错误行；心跳照写（零覆盖显式可见）。
+    const heartbeats = await readArbHeartbeats(root, '2026-09-13')
+    expect(heartbeats).toHaveLength(1)
+    expect(heartbeats[0]).toMatchObject({ kind: 'arb_cycle', session: 'closed', opens: 0 })
+    expect(heartbeats[0]!.error).toBeUndefined()
+  })
+
+  it('周期中途抛错 → 错误行照落心跳（不静默）', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'opt-arb-cycle-err-'))
+    // 损坏账本文件 → loadPaperState 真抛（DI 注入点均有 .catch 降级，构不成顶层异常）。
+    await mkdir(dirname(paperAccountPath(root, 'arbitrage')), { recursive: true })
+    await writeFile(paperAccountPath(root, 'arbitrage'), '{broken json', 'utf8')
+    await tryArbPaperCycle({
+      root,
+      date: '2026-09-13',
+      nowMs: NOW_MS,
+      nowIso: NOW_ISO,
+      session: 'regular',
+      underlyings: ['510050'],
+      expiryMonthsFor: async () => ['2609'],
+      getChain: async () => parityChain(),
+      getSpot: async () => 2.9,
+      getOptionLegMarginPerContract: async () => 500,
+    })
+    const heartbeats = await readArbHeartbeats(root, '2026-09-13')
+    expect(heartbeats).toHaveLength(1)
+    expect(typeof heartbeats[0]!.error).toBe('string')
   })
 
   // 2026-09-17 生产事故回归：iquant /v1/chain 响应不带 spot，引擎扫描又不注入
@@ -424,6 +503,170 @@ describe('tryArbPaperCycle（周期编排：开仓 → 收敛平仓）', () => {
       underlyings: ['510050'],
       expiryMonthsFor: async () => ['2609'],
       getChain: async () => parityChain({ spot: null }),
+      getSpot: async () => undefined,
+      getOptionLegMarginPerContract: async () => 500,
+    })
+    const state = await loadPaperState(root, '2026-09-13', NOW_ISO, 'arbitrage')
+    expect(state.positions).toEqual([])
+    expect(state.fills).toEqual([])
+  })
+})
+
+describe('decideIntrinsicOpen（深实值贴水 happy path + skip 分支）', () => {
+  const base = {
+    discount: intrinsicDiscount(),
+    chain: intrinsicChain(),
+    positionKeys: new Set<string>(),
+    cash: 100_000,
+    nowMs: NOW_MS,
+    spotPrice: 2.9,
+    feePerContract: 1.7,
+  }
+
+  it('happy path：纯买腿无保证金，qty=10（2400 元/张 × 10 < 现金），边现算复核', () => {
+    const decided = decideIntrinsicOpen(base)
+    expect(decided.kind).toBe('open')
+    if (decided.kind !== 'open') return
+    expect(decided.positionId).toBe('arb:intrinsic_call:510050:2609:2650')
+    expect(decided.fill.qty).toBe(10)
+    expect(decided.fill.marginCny).toBe(0)
+    expect(decided.fill.premiumCny).toBeCloseTo(-0.24 * 10 * 10_000, 8)
+    expect(decided.fill.template).toBe('intrinsic_call')
+    expect(decided.fill.legs).toEqual([
+      { code: '510050C2609M02650', side: 'buy', qty: 10, fillPrice: 0.24, priceSource: 'ask' },
+    ])
+    // openEdge = bound − ask（链现算），与扫描口径一致。
+    expect(decided.fill.openEdgePerShare).toBeCloseTo(0.0114, 3)
+    expect(decided.fill.feeCny).toBeCloseTo(17, 8)
+  })
+
+  it('skip 分支：stale_snapshot / duplicate / no_quote / no_spot / edge_gone / no_cash', () => {
+    expect(decideIntrinsicOpen({ ...base, nowMs: NOW_MS + 120_000 }))
+      .toEqual({ kind: 'skip', reason: 'stale_snapshot' })
+    expect(decideIntrinsicOpen({ ...base, chain: { ...intrinsicChain(), snapshotAt: undefined } }))
+      .toEqual({ kind: 'skip', reason: 'stale_snapshot' })
+    expect(decideIntrinsicOpen({ ...base, positionKeys: new Set(['arb:intrinsic_call:510050:2609:2650']) }))
+      .toEqual({ kind: 'skip', reason: 'duplicate' })
+    expect(decideIntrinsicOpen({ ...base, chain: intrinsicChain({ calls: [] }) }))
+      .toEqual({ kind: 'skip', reason: 'no_quote' })
+    expect(decideIntrinsicOpen({ ...base, spotPrice: undefined }))
+      .toEqual({ kind: 'skip', reason: 'no_spot' })
+    // ask 抬到 bound 之上 → 再入场边 ≤ 0（边反转，非缩量交易）。
+    expect(decideIntrinsicOpen({
+      ...base,
+      chain: intrinsicChain({
+        calls: [row('510050C2609M02650', 2.65, { last: 0.259, bid: 0.258, ask: 0.26 })],
+      }),
+    })).toEqual({ kind: 'skip', reason: 'edge_gone' })
+    expect(decideIntrinsicOpen({ ...base, cash: 1_000 }))
+      .toEqual({ kind: 'skip', reason: 'no_cash' })
+  })
+
+  it('模板助手：right ↔ intrinsic_call/put 双向；P 键与 C 键分离', () => {
+    expect(intrinsicTemplateOf('C')).toBe('intrinsic_call')
+    expect(intrinsicTemplateOf('P')).toBe('intrinsic_put')
+    expect(rightOfIntrinsicTemplate('intrinsic_call')).toBe('C')
+    expect(rightOfIntrinsicTemplate('intrinsic_put')).toBe('P')
+    expect(rightOfIntrinsicTemplate('parity')).toBeUndefined()
+    expect(arbPositionKey({
+      kind: intrinsicTemplateOf('P'),
+      underlying: '510050',
+      expiryMonth: '2609',
+      strikes: [2.65],
+    })).toBe('arb:intrinsic_put:510050:2609:2650')
+  })
+})
+
+describe('tryArbPaperCycle（深实值贴水：开仓 → 收敛平仓 → 子帽）', () => {
+  it('regular 扫出深实值贴水 → intrinsic_call 落账；close5 边收敛 → arb_converge 平仓', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'opt-arb-intrinsic-'))
+    const chains: OptionChain[] = [intrinsicChain()]
+    const baseInput = {
+      root,
+      date: '2026-09-13',
+      nowMs: NOW_MS,
+      nowIso: NOW_ISO,
+      underlyings: ['510050'],
+      expiryMonthsFor: async () => ['2609'],
+      getChain: async () => chains[0],
+      getSpot: async () => 2.9,
+      getOptionLegMarginPerContract: async () => 500,
+    }
+
+    await tryArbPaperCycle({ ...baseInput, session: 'regular' })
+    let state = await loadPaperState(root, '2026-09-13', NOW_ISO, 'arbitrage')
+    expect(state.positions).toHaveLength(1)
+    expect(state.positions[0]).toMatchObject({
+      id: 'arb:intrinsic_call:510050:2609:2650',
+      template: 'intrinsic_call',
+      book: 'arbitrage',
+      expiryMonth: '2609',
+      expiryDate: '2026-09-23',
+      strikes: [2.65],
+      qty: 10,
+    })
+    // 贴水仓无 direction（right 在模板里）；openEdge 为链现算贴水。
+    expect(state.positions[0]!.direction).toBeUndefined()
+    expect(state.positions[0]!.openEdgePerShare).toBeCloseTo(0.0114, 3)
+
+    // 收敛：ask 抬到 0.247 → 再入场边 ≈ 0.0044 < openEdge/2(≈0.0057)。
+    chains[0] = intrinsicChain({
+      calls: [row('510050C2609M02650', 2.65, { last: 0.245, bid: 0.243, ask: 0.247 })],
+    })
+    await tryArbPaperCycle({ ...baseInput, session: 'close5' })
+    state = await loadPaperState(root, '2026-09-13', NOW_ISO, 'arbitrage')
+    expect(state.positions).toHaveLength(0)
+    expect(state.fills.at(-1)).toMatchObject({ reason: 'arb_converge', template: 'intrinsic_call' })
+    // 平仓：sell 10 张 @bid 0.243 = +24300；开仓 −24000；双边费 17+17。
+    expect(state.account.realizedPnl).toBeCloseTo(24_300 - 24_000 - 34, 6)
+  })
+
+  it(`深实值子帽：${OPTION_ARB_MAX_INTRINSIC_POSITIONS} 组封顶，不挤占共享上限`, async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'opt-arb-intrinsic-cap-'))
+    // 4 档深实值 C 全部低于 bound（贴水约 0.011）；三组现金占用 ≈ 4.2 万 < 10 万，
+    // 现金不先于子帽约束。
+    const strikes = [2.8, 2.75, 2.7, 2.65]
+    const chain: OptionChain = {
+      ...intrinsicChain(),
+      calls: strikes.map((strike) => {
+        const bound = 2.9 - strike * 0.999464
+        const ask = Number((bound - 0.011).toFixed(4))
+        return row(`510050C2609M0${Math.round(strike * 1000)}`, strike, { last: ask, bid: ask - 0.004, ask })
+      }),
+    }
+    await tryArbPaperCycle({
+      root,
+      date: '2026-09-13',
+      nowMs: NOW_MS,
+      nowIso: NOW_ISO,
+      session: 'regular',
+      underlyings: ['510050'],
+      expiryMonthsFor: async () => ['2609'],
+      getChain: async () => chain,
+      getSpot: async () => 2.9,
+      getOptionLegMarginPerContract: async () => 500,
+    })
+    const state = await loadPaperState(root, '2026-09-13', NOW_ISO, 'arbitrage')
+    expect(state.positions).toHaveLength(OPTION_ARB_MAX_INTRINSIC_POSITIONS)
+    expect(state.positions.every((p) => p.template === 'intrinsic_call')).toBe(true)
+  })
+
+  // 生产形态活性哨兵（2026-09-17 事故教训的 intrinsic 版）：
+  // 链不带 spot + last-only（无盘口）→ 贴水扫描必须空转不炸、不落账。
+  it('链无 spot 且无盘口（生产形态）→ 不开仓不炸', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'opt-arb-intrinsic-degraded-'))
+    await tryArbPaperCycle({
+      root,
+      date: '2026-09-13',
+      nowMs: NOW_MS,
+      nowIso: NOW_ISO,
+      session: 'regular',
+      underlyings: ['510050'],
+      expiryMonthsFor: async () => ['2609'],
+      getChain: async () => intrinsicChain({
+        spot: null,
+        calls: [row('510050C2609M02650', 2.65, { last: 0.24 })],
+      }),
       getSpot: async () => undefined,
       getOptionLegMarginPerContract: async () => 500,
     })

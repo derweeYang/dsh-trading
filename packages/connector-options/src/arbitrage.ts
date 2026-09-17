@@ -9,12 +9,18 @@ import {
   type OptionArbitrageScanQuery,
   type OptionArbitrageScanResult,
   type OptionChain,
+  type OptionIntrinsicDiscount,
   type OptionQuoteRow,
   type OptionVerticalSpread,
 } from '@dshtrading/api'
 // 深导入套利子入口：纯函数零依赖（不引 indicators/cordis），避免把宿主
 // cordis 的第二份 Context 类型拉进本包类型图（exactOptionalPropertyTypes 冲突）。
-import { fromOptionChain, scanArbitrage, scanVerticalSpreads } from '@dshtrading/strategies/arbitrage'
+import {
+  fromOptionChain,
+  scanArbitrage,
+  scanIntrinsicDiscount,
+  scanVerticalSpreads,
+} from '@dshtrading/strategies/arbitrage'
 
 /** 调用方未注入名册乘数时的兜底（当前名册全部为 10000；仅作最后防线）。 */
 export const FALLBACK_MULTIPLIER = 10000
@@ -74,6 +80,18 @@ export function scanOptionChainArbitrage(
   let verticals: readonly OptionVerticalSpread[] | undefined
   if (query.includeVerticals === true) verticals = scanVerticalSpreads(arbChain)
 
+  // 深实值贴水（收敛型类套利）：仅真实盘口行，无 spot / 无到期自然为空。
+  let intrinsic: readonly OptionIntrinsicDiscount[] | undefined
+  if (query.includeIntrinsic === true) {
+    intrinsic = scanIntrinsicDiscount(arbChain, {
+      rate,
+      threshold: thresholdPerShare,
+      feePerContract,
+      multiplier,
+      asOf,
+    })
+  }
+
   return {
     underlying: chain.underlying,
     expiryMonth: chain.expiryMonth,
@@ -86,6 +104,7 @@ export function scanOptionChainArbitrage(
     assumptions: { rate, thresholdPerShare, feePerContract, priceBasis: priceBasisOf(chain) },
     opportunities,
     ...(verticals !== undefined ? { verticals } : {}),
+    ...(intrinsic !== undefined ? { intrinsic } : {}),
     disclaimer: OPTION_ARBITRAGE_DISCLAIMER,
   }
 }

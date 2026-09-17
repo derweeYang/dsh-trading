@@ -8,6 +8,7 @@ import { Service } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import Schema from '@deepseek-ai/schemastery'
 import type {
+  CbQuoteRow,
   Disposable,
   Interval,
   Kline,
@@ -58,6 +59,10 @@ export class AkshareMarketDataService extends Service implements MarketDataServi
 
   async getSectorFundFlow(): Promise<Array<{ name: string; changePercent: number; mainNetInflow: number }>> {
     return this.client.getSectorFundFlow()
+  }
+
+  async getCovSnapshot(): Promise<readonly CbQuoteRow[]> {
+    return this.client.getCovSnapshot()
   }
 
   subscribeTicker(symbol: string, cb: (ticker: Ticker) => void, options?: { intervalMs?: number }): Disposable {
@@ -125,6 +130,18 @@ export function apply(ctx: Context, config: Config): void {
       async execute() {
         const list = await marketData.getSectorFundFlow()
         return JSON.stringify(list)
+      },
+    }))
+
+    register(defineTool({
+      name: 'cn_get_cb_quotes',
+      description:
+        '全市场可转债实时快照（东财源）：债现价/正股价/转股价/转股价值/转股溢价率，仅存续有报价行。只读量化信号，不构成投资建议。',
+      parameters: {},
+      output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
+      async execute() {
+        const rows = await marketData.getCovSnapshot()
+        return JSON.stringify({ count: rows.length, rows })
       },
     }))
   })

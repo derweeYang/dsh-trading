@@ -132,6 +132,125 @@ export function reviewsPath(root: string, date: string): string {
   return path.join(root, 'reviews', `${date}.md`)
 }
 
+/**
+ * 套利周期心跳行（data/options/arb-heartbeat/<date>.jsonl，每 30s 周期一行计数）。
+ * 2026-09-17 教训：parity 检测整链瘫痪 4 天无人知晓——审计粒度不能只有成交。
+ * 只记总数不记明细（防 jsonl 洪水）；错误行也落账（catch 路径）。
+ */
+export interface ArbCycleHeartbeat {
+  readonly kind: 'arb_cycle'
+  readonly asOf: string
+  readonly session: OptionIntradaySession
+  readonly durationMs: number
+  readonly underlyingsScanned: number
+  readonly monthsScanned: number
+  readonly chainFailures: number
+  readonly opportunities: { readonly parity: number; readonly box: number; readonly executable: number }
+  readonly intrinsicDiscounts: number
+  readonly openAttempts: number
+  readonly opens: number
+  readonly skipCounts: Readonly<Record<string, number>>
+  readonly error?: string
+}
+
+export function arbHeartbeatPath(root: string, date: string): string {
+  return path.join(root, 'arb-heartbeat', `${date}.jsonl`)
+}
+
+/** 读一日心跳（坏行容忍；只收 kind=arb_cycle 行）。 */
+export async function readArbHeartbeats(root: string, date: string): Promise<readonly ArbCycleHeartbeat[]> {
+  const rows = await readJsonl<unknown>(arbHeartbeatPath(root, date))
+  return rows.filter((row): row is ArbCycleHeartbeat =>
+    typeof row === 'object' && row !== null && (row as { kind?: unknown }).kind === 'arb_cycle')
+}
+
+/**
+ * 转债折价扫描台账行（data/options/cb/<date>.jsonl，每轮扫描一行计数 + top 命中）。
+ * top 元素为扫描层 CbDiscountRow（type-only 反向引用，运行时无环）。
+ */
+export interface CbScanLedgerRow {
+  readonly kind: 'cb_scan'
+  readonly asOf: string
+  readonly scanned: number
+  readonly priced: number
+  readonly stale: number
+  readonly hitCount: number
+  /** 命中行 top（溢价最深在前，封顶 10）。 */
+  readonly top: readonly import('./cb-discount.js').CbDiscountRow[]
+  /** 数据源不可用（市场服务缺 getCovSnapshot / 拉取失败）时的错误行。 */
+  readonly error?: string
+}
+
+export function cbScanPath(root: string, date: string): string {
+  return path.join(root, 'cb', `${date}.jsonl`)
+}
+
+/** 读一日转债扫描（坏行容忍；只收 kind=cb_scan 行）。 */
+export async function readCbScanRows(root: string, date: string): Promise<readonly CbScanLedgerRow[]> {
+  const rows = await readJsonl<unknown>(cbScanPath(root, date))
+  return rows.filter((row): row is CbScanLedgerRow =>
+    typeof row === 'object' && row !== null && (row as { kind?: unknown }).kind === 'cb_scan')
+}
+
+/** 转债台账日聚合（复盘「套利跟踪」转债行数据源）。 */
+export function foldCbScans(rows: readonly CbScanLedgerRow[]): {
+  cycles: number
+  errors: number
+  stale: number
+  hitCycles: number
+  minPremiumPct: number | undefined
+} {
+  let cycles = 0
+  let errors = 0
+  let stale = 0
+  let hitCycles = 0
+  let minPremiumPct: number | undefined
+  for (const row of rows) {
+    cycles += 1
+    if (row.error !== undefined) errors += 1
+    stale += row.stale
+    if (row.hitCount > 0) hitCycles += 1
+    const deepest = row.top[0]?.premiumPct
+    if (deepest !== undefined && (minPremiumPct === undefined || deepest < minPremiumPct)) {
+      minPremiumPct = deepest
+    }
+  }
+  return { cycles, errors, stale, hitCycles, ...(minPremiumPct === undefined ? {} : { minPremiumPct }) }
+}
+
+/** 心跳日聚合（复盘「套利跟踪」节数据源）。 */
+export function foldArbHeartbeats(rows: readonly ArbCycleHeartbeat[]): {
+  cycles: number
+  errors: number
+  chainFailures: number
+  underlyingsScanned: number
+  parity: number
+  box: number
+  executable: number
+  intrinsicDiscounts: number
+  opens: number
+  skipCounts: ReadonlyMap<string, number>
+} {
+  const skipCounts = new Map<string, number>()
+  const totals = { cycles: 0, errors: 0, chainFailures: 0, underlyingsScanned: 0, parity: 0, box: 0, executable: 0, intrinsicDiscounts: 0, opens: 0 }
+  for (const row of rows) {
+    totals.cycles += 1
+    if (row.error !== undefined) totals.errors += 1
+    totals.chainFailures += row.chainFailures
+    totals.underlyingsScanned += row.underlyingsScanned
+    totals.parity += row.opportunities.parity
+    totals.box += row.opportunities.box
+    totals.executable += row.opportunities.executable
+    totals.intrinsicDiscounts += row.intrinsicDiscounts
+    totals.opens += row.opens
+    for (const [reason, count] of Object.entries(row.skipCounts ?? {})) {
+      if (typeof count !== 'number') continue
+      skipCounts.set(reason, (skipCounts.get(reason) ?? 0) + count)
+    }
+  }
+  return { ...totals, skipCounts }
+}
+
 export function packetsPath(root: string, date: string): string {
   return path.join(root, 'packets', `${date}.jsonl`)
 }
@@ -701,6 +820,10 @@ export function foldDailyReview(input: {
   recommendations: readonly OptionBarRecommendation[]
   /** paper fills（含 skip 行）；缺省 = 不统计执行层跳过。 */
   fills?: readonly { reason?: unknown; skip?: unknown; bucketStart?: unknown }[]
+  /** 套利周期心跳（缺省 = 不出「套利跟踪」节，向后兼容）。 */
+  arbHeartbeats?: readonly ArbCycleHeartbeat[]
+  /** 转债折价扫描台账（缺省 = 「套利跟踪」节不出转债行）。 */
+  cbScans?: readonly CbScanLedgerRow[]
 }): string {
   const core = dailyLedgerCore(input)
   const overlaps = core.skipReasons.get('overlap') ?? 0
@@ -750,7 +873,35 @@ export function foldDailyReview(input: {
   )
   lines.push('', '## 5. 明日剧本', '')
   lines.push(core.scored < 10 ? '- 样本不足（有效打分 < 10），只记不改 skill。' : '- 对照 miss 集中的 regime，至多改一条选场/否决。')
-  lines.push('', '## 6. 免责', '')
+  if (input.arbHeartbeats !== undefined) {
+    const arb = foldArbHeartbeats(input.arbHeartbeats)
+    lines.push('', '## 6. 套利跟踪', '')
+    lines.push(
+      `- 心跳: ${arb.cycles} 轮（错误 ${arb.errors}），扫描 ${arb.underlyingsScanned} 标的·月次，链失败 ${arb.chainFailures}`,
+    )
+    lines.push(
+      `- 机会: parity ${arb.parity} 条（executable ${arb.executable}）· box ${arb.box} 条 · 深实值贴水 ${arb.intrinsicDiscounts} 条`,
+    )
+    lines.push(`- 纸面开仓: ${arb.opens} 笔`)
+    for (const [reason, count] of [...arb.skipCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      lines.push(`- skip ${reason}: ${count}`)
+    }
+    // 哨兵口径：零机会 + 零链失败 + 零错误 → 市场无边；零机会 + 链失败/错误高 → 引擎故障，先修再谈市场。
+    if (arb.parity + arb.box + arb.intrinsicDiscounts === 0) {
+      lines.push(arb.chainFailures + arb.errors > 0
+        ? '- ⚠ 零机会且存在链失败/错误行——先查引擎与网关，再解释为市场无边。'
+        : '- 零机会且零链失败——按市场无边处理。')
+    }
+    if (input.cbScans !== undefined) {
+      const cb = foldCbScans(input.cbScans)
+      lines.push(
+        `- 转债: 扫描 ${cb.cycles} 轮（错误 ${cb.errors}，stale ${cb.stale}），最深溢价 `
+        + (cb.minPremiumPct === undefined ? '（无可用行）' : `${cb.minPremiumPct.toFixed(2)}%`)
+        + `，命中轮 ${cb.hitCycles}`,
+      )
+    }
+  }
+  lines.push('', `## ${input.arbHeartbeats === undefined ? 6 : 7}. 免责`, '')
   lines.push('技术研究预填，不构成投资建议。')
   lines.push('')
   return lines.join('\n')

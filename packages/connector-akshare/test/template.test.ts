@@ -98,3 +98,80 @@ describe('AkshareRestClient.getSectorFundFlow', () => {
     })
   })
 })
+
+/** 东财 datacenter 信封（spikes/impl-akshare-cov/bond-cov-raw-sample.json 形态）。 */
+function covPage(pages: number, data: unknown[]) {
+  return { success: 1, result: { pages, count: 500 * pages, data } }
+}
+
+describe('AkshareRestClient.getCovSnapshot', () => {
+  it('过滤退市与无报价行，量纲原样透传（spike 取证形态）', async () => {
+    const { impl, urls } = stubFetch([
+      {
+        match: 'reportName=RPT_BOND_CB_LIST',
+        body: covPage(1, [
+          {
+            SECURITY_CODE: '123284', SECURITY_NAME_ABBR: '强达转债', TRADE_MARKET: 'CNSESZ',
+            CONVERT_STOCK_CODE: '002997', CONVERT_STOCK_PRICE: 120.1, TRANSFER_PRICE: 84.04,
+            TRANSFER_VALUE: 142.9081, CURRENT_BOND_PRICE: 207.925, TRANSFER_PREMIUM_RATIO: 45.5,
+            DELIST_DATE: null,
+          },
+          {
+            // 退市行（强赎摘牌）：DELIST_DATE 带日期 → 剔除。
+            SECURITY_CODE: '113697', SECURITY_NAME_ABBR: '应流转债', TRADE_MARKET: 'CNSESH',
+            CONVERT_STOCK_CODE: '603308', CONVERT_STOCK_PRICE: 41.5, TRANSFER_PRICE: null,
+            CURRENT_BOND_PRICE: null, DELIST_DATE: '2026-08-28 00:00:00',
+          },
+          {
+            // 存续但无报价（'-'）→ 剔除。
+            SECURITY_CODE: '127116', SECURITY_NAME_ABBR: '瑞鹄转02', TRADE_MARKET: 'CNSESZ',
+            CONVERT_STOCK_CODE: '002997', CONVERT_STOCK_PRICE: 41.5, TRANSFER_PRICE: '-',
+            CURRENT_BOND_PRICE: '-', TRANSFER_PREMIUM_RATIO: '-', DELIST_DATE: null,
+          },
+        ]),
+      },
+    ])
+    const client = new AkshareRestClient({ fetchImpl: impl })
+    const rows = await client.getCovSnapshot()
+
+    expect(rows).toEqual([{
+      bondCode: '123284',
+      bondName: '强达转债',
+      exchange: 'SZ',
+      price: 207.925,
+      stockCode: '002997',
+      stockPrice: 120.1,
+      conversionPrice: 84.04,
+      conversionValue: 142.9081,
+      premiumPct: 45.5,
+    }])
+    expect(urls).toHaveLength(1)
+    expect(urls[0]).toContain('reportName=RPT_BOND_CB_LIST')
+    expect(urls[0]).toContain('pageNumber=1')
+  })
+
+  it('多页翻完即止（pages=2 → 恰好两次请求）', async () => {
+    let calls = 0
+    const impl = (async (input: unknown) => {
+      const url = String(input)
+      calls += 1
+      const pageNumber = Number(new URL(url).searchParams.get('pageNumber'))
+      const data = pageNumber === 1
+        ? [{ SECURITY_CODE: '111001', SECURITY_NAME_ABBR: 'A', TRADE_MARKET: 'CNSESH', CONVERT_STOCK_CODE: '600001', CONVERT_STOCK_PRICE: 10, TRANSFER_PRICE: 10, CURRENT_BOND_PRICE: 100, DELIST_DATE: null }]
+        : [{ SECURITY_CODE: '111002', SECURITY_NAME_ABBR: 'B', TRADE_MARKET: 'CNSESZ', CONVERT_STOCK_CODE: '000002', CONVERT_STOCK_PRICE: 20, TRANSFER_PRICE: 20, CURRENT_BOND_PRICE: 110, DELIST_DATE: null }]
+      return jsonResponse(covPage(2, data))
+    }) as typeof fetch
+    const client = new AkshareRestClient({ fetchImpl: impl })
+    const rows = await client.getCovSnapshot()
+    expect(calls).toBe(2)
+    expect(rows.map((r) => r.bondCode)).toEqual(['111001', '111002'])
+  })
+
+  it('HTTP 错误映射 TRADING_UPSTREAM_ERROR', async () => {
+    const { impl } = stubFetch([
+      { match: 'reportName=RPT_BOND_CB_LIST', body: { message: 'bad' }, status: 502 },
+    ])
+    const client = new AkshareRestClient({ fetchImpl: impl })
+    await expect(client.getCovSnapshot()).rejects.toMatchObject({ code: 'TRADING_UPSTREAM_ERROR' })
+  })
+})

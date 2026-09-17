@@ -16,6 +16,7 @@ import {
   foldDailyReview,
   foldOptionBarSessions,
   foldPaperDeskDay,
+  type ArbCycleHeartbeat,
   latestByKey,
   latestPacketForBucket,
   atmIvPercentile,
@@ -538,6 +539,59 @@ describe('shouldWriteDailyReview / foldDailyReview', () => {
       ],
     })
     expect(mdFull).toContain('执行覆盖: 带腿推荐 1 桶，成交 1，有执行记录 1，无执行记录 0')
+  })
+
+  it('套利跟踪节：心跳聚合 + 零机会哨兵；缺省不出节（向后兼容）', () => {
+    const hb = (over: {
+      chainFailures?: number
+      opportunities?: { parity: number; box: number; executable: number }
+      intrinsicDiscounts?: number
+    } = {}): ArbCycleHeartbeat => ({
+      kind: 'arb_cycle',
+      asOf: 't',
+      session: 'regular',
+      durationMs: 10,
+      underlyingsScanned: 8,
+      monthsScanned: 14,
+      chainFailures: 0,
+      opportunities: { parity: 3, box: 2, executable: 1 },
+      intrinsicDiscounts: 1,
+      openAttempts: 2,
+      opens: 1,
+      skipCounts: { stale_snapshot: 1 },
+      ...over,
+    })
+    const md = foldDailyReview({
+      date: '2026-09-17',
+      cycles: [],
+      recommendations: [],
+      arbHeartbeats: [hb(), hb()],
+      cbScans: [
+        { kind: 'cb_scan', asOf: 't1', scanned: 1000, priced: 311, stale: 2, hitCount: 1, top: [{ bondCode: 'A', premiumPct: -1.2 } as never] },
+        { kind: 'cb_scan', asOf: 't2', scanned: 1000, priced: 311, stale: 1, hitCount: 0, top: [] },
+      ],
+    })
+    expect(md).toContain('## 6. 套利跟踪')
+    expect(md).toContain('心跳: 2 轮（错误 0），扫描 16 标的·月次，链失败 0')
+    expect(md).toContain('机会: parity 6 条（executable 2）· box 4 条 · 深实值贴水 2 条')
+    expect(md).toContain('纸面开仓: 2 笔')
+    expect(md).toContain('- skip stale_snapshot: 2')
+    expect(md).toContain('- 转债: 扫描 2 轮（错误 0，stale 3），最深溢价 -1.20%，命中轮 1')
+    expect(md).toContain('## 7. 免责')
+
+    // 零机会 + 链失败 → 哨兵警告（先查引擎再谈市场无边）。
+    const broken = foldDailyReview({
+      date: '2026-09-17',
+      cycles: [],
+      recommendations: [],
+      arbHeartbeats: [hb({ chainFailures: 5, opportunities: { parity: 0, box: 0, executable: 0 }, intrinsicDiscounts: 0 })],
+    })
+    expect(broken).toContain('⚠ 零机会且存在链失败/错误行')
+
+    // 缺省不出节，免责仍为第 6 节（既有消费者零感知）。
+    const legacy = foldDailyReview({ date: '2026-09-17', cycles: [], recommendations: [] })
+    expect(legacy).not.toContain('套利跟踪')
+    expect(legacy).toContain('## 6. 免责')
   })
 })
 
