@@ -34,15 +34,16 @@ function row(code: string, strike: number, over: Partial<OptionQuoteRow> = {}): 
 }
 
 /** executable 平价机会链：K=2.85 唯一行权价（杜绝 box 组合），spot=2.9，
- * C/P 挂真实盘口使 buy_synthetic_sell_spot 可执行边 ≈ 0.02 元/股。 */
-function parityChain(over: { calls?: OptionQuoteRow[]; puts?: OptionQuoteRow[]; spot?: number } = {}): OptionChain {
+ * C/P 挂真实盘口使 buy_synthetic_sell_spot 可执行边 ≈ 0.02 元/股。
+ * spot: null 构造"链不带 spot"形态（iquant /v1/chain 真实响应无该键）。 */
+function parityChain(over: { calls?: OptionQuoteRow[]; puts?: OptionQuoteRow[]; spot?: number | null } = {}): OptionChain {
   return {
     underlying: '510050',
     expiryMonth: '2609',
     expiryDate: '2026-09-23',
     snapshotAt: '2026-09-13T02:59:50.000Z',
     source: 'iquant',
-    spot: 2.9,
+    ...(over.spot === null ? {} : { spot: over.spot ?? 2.9 }),
     calls: over.calls ?? [row('510050C2609M02850', 2.85, { last: 0.049, bid: 0.048, ask: 0.05 })],
     puts: over.puts ?? [row('510050P2609M02850', 2.85, { last: 0.0194, bid: 0.0184, ask: 0.0204 })],
   }
@@ -376,6 +377,55 @@ describe('tryArbPaperCycle（周期编排：开仓 → 收敛平仓）', () => {
       getChain: async () => { throw new Error('chain down') },
       getSpot: async () => { throw new Error('spot down') },
       getOptionLegMarginPerContract: async () => { throw new Error('margin down') },
+    })
+    const state = await loadPaperState(root, '2026-09-13', NOW_ISO, 'arbitrage')
+    expect(state.positions).toEqual([])
+    expect(state.fills).toEqual([])
+  })
+
+  // 2026-09-17 生产事故回归：iquant /v1/chain 响应不带 spot，引擎扫描又不注入
+  // → parityMatrix 恒空，平价检测整链瘫痪（当日 0 信号）。fixture 此前内嵌
+  // spot: 2.9 掩盖了该形态。
+  it('链不带 spot（iquant 形态）→ getSpot 现价补入，parity 开仓照常落账', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'opt-arb-cycle-nospot-'))
+    await tryArbPaperCycle({
+      root,
+      date: '2026-09-13',
+      nowMs: NOW_MS,
+      nowIso: NOW_ISO,
+      session: 'regular',
+      underlyings: ['510050'],
+      expiryMonthsFor: async () => ['2609'],
+      getChain: async () => parityChain({ spot: null }),
+      getSpot: async () => 2.9,
+      getOptionLegMarginPerContract: async () => 500,
+      spotSymbolFor: (u) => `${u}.SH`,
+    })
+    const state = await loadPaperState(root, '2026-09-13', NOW_ISO, 'arbitrage')
+    expect(state.positions).toHaveLength(1)
+    expect(state.positions[0]).toMatchObject({
+      id: 'arb:parity:510050:2609:2850',
+      template: 'parity',
+      direction: 'buy_synthetic_sell_spot',
+    })
+    // 现货腿成交价与检测同源（getSpot 2.9），不是 0/undefined 混入。
+    const spotLeg = state.fills[0]!.legs.find((leg) => leg.asset === 'spot')
+    expect(spotLeg).toMatchObject({ fillPrice: 2.9, priceSource: 'spot' })
+  })
+
+  it('链不带 spot 且 getSpot 也拿不到 → 不开仓不炸（parity 优雅降级）', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'opt-arb-cycle-nospot-down-'))
+    await tryArbPaperCycle({
+      root,
+      date: '2026-09-13',
+      nowMs: NOW_MS,
+      nowIso: NOW_ISO,
+      session: 'regular',
+      underlyings: ['510050'],
+      expiryMonthsFor: async () => ['2609'],
+      getChain: async () => parityChain({ spot: null }),
+      getSpot: async () => undefined,
+      getOptionLegMarginPerContract: async () => 500,
     })
     const state = await loadPaperState(root, '2026-09-13', NOW_ISO, 'arbitrage')
     expect(state.positions).toEqual([])

@@ -306,13 +306,27 @@ function positionKeyOf(opportunity: ArbitrageOpportunity): string | undefined {
   })
 }
 
+/**
+ * 扫描链组装：桥侧现价优先、缺省回落链自带 spot（iquant /v1/chain 不带该键——
+ * 2026-09-17 诊断：无 spot 时 parityMatrix 恒空，平价检测整链瘫痪）。口径同
+ * T 板 scanOptionChainArbitrage 的 query.spot ?? chain.spot。
+ */
+function arbChainOf(chain: OptionChain, spot: number | undefined): ReturnType<typeof fromOptionChain> {
+  const base = fromOptionChain(chain)
+  return isPositiveFinite(spot) ? { ...base, spot } : base
+}
+
 /** 持仓残余边（signedEdge 同口径）；链缺/要素缺 → undefined（hold）。 */
-function positionCurrentEdge(position: PaperPosition, chain: OptionChain | undefined): number | undefined {
+function positionCurrentEdge(
+  position: PaperPosition,
+  chain: OptionChain | undefined,
+  spot?: number,
+): number | undefined {
   if (chain === undefined
     || position.strikes === undefined
     || position.direction === undefined
     || position.strikes.length === 0) return undefined
-  const arb = fromOptionChain(chain)
+  const arb = arbChainOf(chain, spot)
   if (position.template === 'box') {
     if (position.strikes.length < 2) return undefined
     return boxSignedEdge(
@@ -364,7 +378,11 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
         const chain = position.expiryMonth === undefined
           ? undefined
           : await input.getChain(position.underlying, position.expiryMonth).catch(() => undefined)
-        const currentEdge = positionCurrentEdge(position, chain)
+        // parity 残余边依赖 spot：链不带时用桥侧现价补（box 无现货腿不用）。
+        const spot = chain !== undefined && chain.spot === undefined && position.template === 'parity'
+          ? await input.getSpot(position.underlying).catch(() => undefined)
+          : undefined
+        const currentEdge = positionCurrentEdge(position, chain, spot)
         const reason = decideArbClose({
           position,
           ...(currentEdge === undefined ? {} : { currentEdgePerShare: currentEdge }),
@@ -381,11 +399,14 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
         scan: for (const underlying of input.underlyings) {
           if (state.positions.length >= OPTION_ARB_MAX_POSITIONS) break scan
           const months = await input.expiryMonthsFor(underlying).catch(() => [])
+          // 标的级现价取一次：扫描 / 双确认 / 现货腿成交同源（30s 周期内一致），
+          // 拿不到则 parity 不可用（box 不依赖 spot，仍扫）。
+          const spot = await input.getSpot(underlying).catch(() => undefined)
           for (const month of months) {
             if (state.positions.length >= OPTION_ARB_MAX_POSITIONS) break scan
             const chain = await input.getChain(underlying, month).catch(() => undefined)
             if (chain === undefined) continue
-            const opportunities = scanArbitrage(fromOptionChain(chain), { feePerContract: fee })
+            const opportunities = scanArbitrage(arbChainOf(chain, spot), { feePerContract: fee })
             for (const opportunity of opportunities) {
               if (state.positions.length >= OPTION_ARB_MAX_POSITIONS) break scan
               const key = positionKeyOf(opportunity)
@@ -394,9 +415,6 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
               const marginPer = await input
                 .getOptionLegMarginPerContract(underlying, opportunity.legs)
                 .catch(() => undefined)
-              const spotPrice = opportunity.kind === 'parity'
-                ? await input.getSpot(underlying).catch(() => undefined)
-                : undefined
               const spotSymbol = input.spotSymbolFor?.(underlying)
               const openInput = {
                 opportunity,
@@ -404,7 +422,7 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
                 positionKeys: new Set(state.positions.map((position) => position.id)),
                 cash: state.account.cash,
                 nowMs: input.nowMs,
-                ...(spotPrice === undefined ? {} : { spotPrice }),
+                ...(opportunity.kind === 'parity' && isPositiveFinite(spot) ? { spotPrice: spot } : {}),
                 ...(spotSymbol === undefined ? {} : { spotSymbol }),
                 ...(marginPer === undefined ? {} : { optionMarginPerContract: marginPer }),
                 feePerContract: fee,
@@ -415,7 +433,7 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
               // （削缓存前视偏差；边已反转/消失则本轮放弃）。
               const fresh = await input.getChain(underlying, month, { refresh: true }).catch(() => undefined)
               if (fresh === undefined) continue
-              const still = scanArbitrage(fromOptionChain(fresh), { feePerContract: fee })
+              const still = scanArbitrage(arbChainOf(fresh, spot), { feePerContract: fee })
                 .find((item) => positionKeyOf(item) === key && item.direction === opportunity.direction)
               if (still === undefined) continue
               const confirmed = decideArbOpen({ ...openInput, opportunity: still, chain: fresh })
