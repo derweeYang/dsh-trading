@@ -1673,6 +1673,30 @@ export interface Disposable {
 }
 
 /**
+ * 可转债快照一行（东财 RPT_BOND_CB_LIST 复刻，2026-09-17 spike 取证）。
+ * 仅存续（未退市）且有报价的转债；快照列（转股价值/溢价率）可能滞后，
+ * 消费方应重算核对——量纲：转股价值 = 100/转股价 × 正股价，溢价率为百分数。
+ */
+export interface CbQuoteRow {
+  /** 转债代码（6 位数字）。 */
+  readonly bondCode: string
+  readonly bondName: string
+  readonly exchange: 'SH' | 'SZ'
+  /** 债现价（元，面值 100 口径）。 */
+  readonly price: number
+  /** 正股代码（6 位）。 */
+  readonly stockCode: string
+  /** 正股现价（元）。 */
+  readonly stockPrice: number
+  /** 转股价（元）。 */
+  readonly conversionPrice: number
+  /** 转股价值快照列（元）；扫描层重算后偏差过大应剔除该行（陈旧列防伪影）。 */
+  readonly conversionValue?: number
+  /** 转股溢价率快照列（百分数，45.5 = 45.5%）。 */
+  readonly premiumPct?: number
+}
+
+/**
  * 行情服务契约：由市场连接器实现，注册到按市场命名空间的 ctx 键（如 ctx.tradingCnMarketData）。
  * 符号词汇（2026-08-31 规范，docs/symbol-vocabulary.md）：入参接受市场规范形与连接器原生形，
  * 输出 `symbol` 一律市场规范形——消费方（GUI/Agent/工作流）与数据源方言解耦。
@@ -1706,6 +1730,11 @@ export interface MarketDataService {
    * 可选方法：无公共逐笔端点的数据源（腾讯沪深行情行）不实现。
    */
   getRecentTrades?(symbol: string, limit?: number): Promise<TradeTick[]>
+  /**
+   * 可转债全市场快照（CN 专属，2026-09-17）：仅存续且有报价的行。
+   * 可选方法：无可转债公开端点的市场/数据源不实现（消费方降级为「未提供」）。
+   */
+  getCovSnapshot?(): Promise<readonly CbQuoteRow[]>
 }
 
 /**

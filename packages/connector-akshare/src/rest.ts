@@ -4,6 +4,7 @@
  */
 
 import type {
+  CbQuoteRow,
   Interval,
   Kline,
   Ticker,
@@ -22,6 +23,12 @@ export class TradingServiceError extends Error {
 }
 
 export const INTERVAL_VOCABULARY = ['1m', '5m', '15m', '30m', '1h', '1d', '1w', '1M'] as const
+
+/** datacenter 行数值：'-'（无报价）/ null / 非有限数 → undefined。 */
+function covNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  return value
+}
 
 export function toEastmoneySecid(symbol: string): { secid: string; canonical: string } {
   const clean = symbol.trim().toUpperCase()
@@ -123,6 +130,72 @@ export class AkshareRestClient {
       changePercent: typeof item.f3 === 'number' ? item.f3 / 100 : 0,
       mainNetInflow: item.f62,
     }))
+  }
+
+  /**
+   * 可转债全市场快照（复刻 akshare bond_zh_cov 的东财 datacenter 端点，
+   * 2026-09-17 spike 取证：spikes/impl-akshare-cov/）。分页拉全量后仅保留
+   * 存续（DELIST_DATE 空）且 债现价/正股价/转股价 三要素齐全的行；
+   * '-'（无报价）与 null 一律视为缺省。
+   */
+  async getCovSnapshot(): Promise<CbQuoteRow[]> {
+    const base = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
+    const quoteColumns = [
+      'f2~01~CONVERT_STOCK_CODE~CONVERT_STOCK_PRICE',
+      'f235~10~SECURITY_CODE~TRANSFER_PRICE',
+      'f236~10~SECURITY_CODE~TRANSFER_VALUE',
+      'f2~10~SECURITY_CODE~CURRENT_BOND_PRICE',
+      'f237~10~SECURITY_CODE~TRANSFER_PREMIUM_RATIO',
+    ].join(',')
+    const rows: Array<Record<string, unknown>> = []
+    const maxPages = 5
+    for (let page = 1; page <= maxPages; page++) {
+      const params = new URLSearchParams({
+        sortColumns: 'PUBLIC_START_DATE',
+        sortTypes: '-1',
+        pageSize: '500',
+        pageNumber: String(page),
+        reportName: 'RPT_BOND_CB_LIST',
+        columns: 'ALL',
+        quoteColumns,
+        source: 'WEB',
+        client: 'WEB',
+      })
+      const res = await this.requestJson<{ result?: { pages?: number; data?: Array<Record<string, unknown>> } }>(
+        `${base}?${params}`,
+      )
+      const data = res.result?.data ?? []
+      rows.push(...data)
+      const pages = res.result?.pages ?? 1
+      if (page >= pages || data.length === 0) break
+    }
+
+    const out: CbQuoteRow[] = []
+    for (const row of rows) {
+      if (row.DELIST_DATE != null) continue // 退市（强赎/到期摘牌）行无实时语义
+      const price = covNumber(row.CURRENT_BOND_PRICE)
+      const stockPrice = covNumber(row.CONVERT_STOCK_PRICE)
+      const conversionPrice = covNumber(row.TRANSFER_PRICE)
+      const bondCode = typeof row.SECURITY_CODE === 'string' ? row.SECURITY_CODE : undefined
+      const bondName = typeof row.SECURITY_NAME_ABBR === 'string' ? row.SECURITY_NAME_ABBR : undefined
+      const stockCode = typeof row.CONVERT_STOCK_CODE === 'string' ? row.CONVERT_STOCK_CODE : undefined
+      if (price === undefined || stockPrice === undefined || conversionPrice === undefined
+        || bondCode === undefined || bondName === undefined || stockCode === undefined) continue
+      const conversionValue = covNumber(row.TRANSFER_VALUE)
+      const premiumPct = covNumber(row.TRANSFER_PREMIUM_RATIO)
+      out.push({
+        bondCode,
+        bondName,
+        exchange: row.TRADE_MARKET === 'CNSESH' ? 'SH' : 'SZ',
+        price,
+        stockCode,
+        stockPrice,
+        conversionPrice,
+        ...(conversionValue === undefined ? {} : { conversionValue }),
+        ...(premiumPct === undefined ? {} : { premiumPct }),
+      })
+    }
+    return out
   }
 }
 
