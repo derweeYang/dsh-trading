@@ -18,6 +18,7 @@ import {
   packetsPath,
   paperFillsPath,
   fetchNearestChain,
+  readArbHeartbeats,
   recommendationsPath,
   reviewsPath,
   sessionAt,
@@ -181,7 +182,9 @@ export class OptionBarAgentHost {
     if (!shouldWriteDailyReview({ session, exists, hasClosedBuckets })) return
     const recommendations = await readJsonl<OptionBarRecommendation>(recommendationsPath(root, date))
     const fills = await readJsonl<{ reason?: unknown; skip?: unknown }>(paperFillsPath(root, 'strategy', date))
-    const md = foldDailyReview({ date, cycles, recommendations, fills })
+    // 套利心跳（缺文件 = 当日无周期，仍出节以显式呈现零覆盖）。
+    const arbHeartbeats = await readArbHeartbeats(root, date)
+    const md = foldDailyReview({ date, cycles, recommendations, fills, arbHeartbeats })
     await mkdir(path.dirname(reviewFile), { recursive: true })
     await writeFile(reviewFile, md, 'utf8')
   }

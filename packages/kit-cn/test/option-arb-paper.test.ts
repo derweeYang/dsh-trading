@@ -2,9 +2,9 @@
  * 套利纸面引擎单测：taker 定价、开仓决策（现货腿份数记账）、平仓四分支、
  * 现货腿端到端盈亏、周期编排（开仓 → 收敛平仓）。全部注入假件，不触网。
  */
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import path from 'node:path'
+import path, { dirname } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { OptionChain, OptionQuoteRow, PaperLegFill, PaperPosition } from '@dshtrading/api'
 import {
@@ -28,7 +28,7 @@ import {
   takerFillPrice,
   tryArbPaperCycle,
 } from '../src/option-arb-paper.js'
-import { paperFillsPath } from '../src/option-bar-ledger.js'
+import { paperFillsPath, paperAccountPath, arbHeartbeatPath, readArbHeartbeats } from '../src/option-bar-ledger.js'
 
 const NOW_MS = Date.parse('2026-09-13T03:00:00.000Z')
 const NOW_ISO = '2026-09-13T03:00:00.000Z'
@@ -389,6 +389,20 @@ describe('tryArbPaperCycle（周期编排：开仓 → 收敛平仓）', () => {
     const fillsText = await readFile(paperFillsPath(root, 'arbitrage', '2026-09-13'), 'utf8')
     expect(fillsText).toContain('"reason":"arb_open"')
 
+    // 心跳落账（2026-09-17 可观测性教训）：计数行与实际行为一致。
+    const heartbeats = await readArbHeartbeats(root, '2026-09-13')
+    expect(heartbeats).toHaveLength(1)
+    expect(heartbeats[0]).toMatchObject({
+      kind: 'arb_cycle',
+      session: 'regular',
+      underlyingsScanned: 1,
+      monthsScanned: 1,
+      chainFailures: 0,
+      opens: 1,
+    })
+    expect(heartbeats[0]!.error).toBeUndefined()
+    expect(heartbeats[0]!.opportunities.parity).toBeGreaterThan(0)
+
     // close5：只平不开（收敛后不再追开新仓）。
     chains[0] = convergedChain
     await tryArbPaperCycle({ ...baseInput, session: 'close5' })
@@ -419,6 +433,33 @@ describe('tryArbPaperCycle（周期编排：开仓 → 收敛平仓）', () => {
     const state = await loadPaperState(root, '2026-09-13', NOW_ISO, 'arbitrage')
     expect(state.positions).toEqual([])
     expect(state.fills).toEqual([])
+    // 无持仓 + closed → 无错误行；心跳照写（零覆盖显式可见）。
+    const heartbeats = await readArbHeartbeats(root, '2026-09-13')
+    expect(heartbeats).toHaveLength(1)
+    expect(heartbeats[0]).toMatchObject({ kind: 'arb_cycle', session: 'closed', opens: 0 })
+    expect(heartbeats[0]!.error).toBeUndefined()
+  })
+
+  it('周期中途抛错 → 错误行照落心跳（不静默）', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'opt-arb-cycle-err-'))
+    // 损坏账本文件 → loadPaperState 真抛（DI 注入点均有 .catch 降级，构不成顶层异常）。
+    await mkdir(dirname(paperAccountPath(root, 'arbitrage')), { recursive: true })
+    await writeFile(paperAccountPath(root, 'arbitrage'), '{broken json', 'utf8')
+    await tryArbPaperCycle({
+      root,
+      date: '2026-09-13',
+      nowMs: NOW_MS,
+      nowIso: NOW_ISO,
+      session: 'regular',
+      underlyings: ['510050'],
+      expiryMonthsFor: async () => ['2609'],
+      getChain: async () => parityChain(),
+      getSpot: async () => 2.9,
+      getOptionLegMarginPerContract: async () => 500,
+    })
+    const heartbeats = await readArbHeartbeats(root, '2026-09-13')
+    expect(heartbeats).toHaveLength(1)
+    expect(typeof heartbeats[0]!.error).toBe('string')
   })
 
   // 2026-09-17 生产事故回归：iquant /v1/chain 响应不带 spot，引擎扫描又不注入

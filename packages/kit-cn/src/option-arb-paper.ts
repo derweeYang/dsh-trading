@@ -41,7 +41,12 @@ import {
   withPaperStateLock,
 } from './option-paper.js'
 import { shanghaiBucketStartMs } from './option-cycles.js'
-import { shanghaiCalendarDate } from './option-bar-ledger.js'
+import {
+  appendJsonlLine,
+  arbHeartbeatPath,
+  shanghaiCalendarDate,
+  type ArbCycleHeartbeat,
+} from './option-bar-ledger.js'
 
 /** 套利账本同时持有的最大组合数（风控上限，含跨标的）。 */
 export const OPTION_ARB_MAX_POSITIONS = 6
@@ -494,6 +499,39 @@ async function arbCloseLegs(
  */
 export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void> {
   await withPaperStateLock(input.root, async () => {
+    const startedMs = Date.now()
+    const hb = {
+      underlyingsScanned: 0,
+      monthsScanned: 0,
+      chainFailures: 0,
+      parity: 0,
+      box: 0,
+      executable: 0,
+      intrinsic: 0,
+      openAttempts: 0,
+      opens: 0,
+      skipCounts: {} as Record<string, number>,
+    }
+    const noteSkip = (reason: string): void => {
+      hb.skipCounts[reason] = (hb.skipCounts[reason] ?? 0) + 1
+    }
+    const writeHeartbeat = async (error?: string): Promise<void> => {
+      await appendJsonlLine(arbHeartbeatPath(input.root, input.date), {
+        kind: 'arb_cycle',
+        asOf: input.nowIso,
+        session: input.session,
+        durationMs: Date.now() - startedMs,
+        underlyingsScanned: hb.underlyingsScanned,
+        monthsScanned: hb.monthsScanned,
+        chainFailures: hb.chainFailures,
+        opportunities: { parity: hb.parity, box: hb.box, executable: hb.executable },
+        intrinsicDiscounts: hb.intrinsic,
+        openAttempts: hb.openAttempts,
+        opens: hb.opens,
+        skipCounts: hb.skipCounts,
+        ...(error === undefined ? {} : { error }),
+      } satisfies ArbCycleHeartbeat)
+    }
     try {
       await ensurePaperBooksLayout(input.root)
       let state = await loadPaperState(input.root, input.date, input.nowIso, 'arbitrage')
@@ -505,6 +543,7 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
         const chain = position.expiryMonth === undefined
           ? undefined
           : await input.getChain(position.underlying, position.expiryMonth).catch(() => undefined)
+        if (position.expiryMonth !== undefined && chain === undefined) hb.chainFailures += 1
         // 残余边依赖 spot 的持仓（parity 现货腿 / intrinsic bound）：链不带时用桥侧现价补
         // （box 无现货腿不用）。
         const spot = chain !== undefined && chain.spot === undefined && needsSpotForEdge(position)
@@ -526,6 +565,7 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
       if (input.session === 'regular') {
         scan: for (const underlying of input.underlyings) {
           if (state.positions.length >= OPTION_ARB_MAX_POSITIONS) break scan
+          hb.underlyingsScanned += 1
           const months = await input.expiryMonthsFor(underlying).catch(() => [])
           // 标的级现价取一次：扫描 / 双确认 / 现货腿成交同源（30s 周期内一致），
           // 拿不到则 parity 不可用（box 不依赖 spot，仍扫）。
@@ -533,8 +573,15 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
           for (const month of months) {
             if (state.positions.length >= OPTION_ARB_MAX_POSITIONS) break scan
             const chain = await input.getChain(underlying, month).catch(() => undefined)
-            if (chain === undefined) continue
+            if (chain === undefined) {
+              hb.chainFailures += 1
+              continue
+            }
+            hb.monthsScanned += 1
             const opportunities = scanArbitrage(arbChainOf(chain, spot), { feePerContract: fee })
+            hb.parity += opportunities.filter((item) => item.kind === 'parity').length
+            hb.box += opportunities.filter((item) => item.kind === 'box').length
+            hb.executable += opportunities.filter((item) => item.executable).length
             for (const opportunity of opportunities) {
               if (state.positions.length >= OPTION_ARB_MAX_POSITIONS) break scan
               const key = positionKeyOf(opportunity)
@@ -555,8 +602,12 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
                 ...(marginPer === undefined ? {} : { optionMarginPerContract: marginPer }),
                 feePerContract: fee,
               } satisfies ArbOpenInput
+              hb.openAttempts += 1
               const decided = decideArbOpen(openInput)
-              if (decided.kind !== 'open') continue
+              if (decided.kind !== 'open') {
+                noteSkip(decided.reason)
+                continue
+              }
               // on-hit refresh：绕缓存强制新拉链重扫——仍 executable 且同向才落账
               // （削缓存前视偏差；边已反转/消失则本轮放弃）。
               const fresh = await input.getChain(underlying, month, { refresh: true }).catch(() => undefined)
@@ -565,7 +616,10 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
                 .find((item) => positionKeyOf(item) === key && item.direction === opportunity.direction)
               if (still === undefined) continue
               const confirmed = decideArbOpen({ ...openInput, opportunity: still, chain: fresh })
-              if (confirmed.kind !== 'open') continue
+              if (confirmed.kind !== 'open') {
+                noteSkip(confirmed.reason)
+                continue
+              }
               const stillStrikes = opportunityStrikes(still)
               state = applyOpen(state, {
                 ...confirmed.fill,
@@ -574,10 +628,12 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
                 direction: still.direction,
                 ...(stillStrikes === undefined ? {} : { strikes: stillStrikes }),
               })
+              hb.opens += 1
             }
 
             // 深实值贴水（纯买腿、无保证金；子帽独立于共享上限，不挤占 parity/box）。
             const intrinsicDiscounts = scanIntrinsicDiscount(arbChainOf(chain, spot), { feePerContract: fee })
+            hb.intrinsic += intrinsicDiscounts.length
             for (const discount of intrinsicDiscounts) {
               if (state.positions.length >= OPTION_ARB_MAX_POSITIONS) break scan
               if (countIntrinsicPositions(state.positions) >= OPTION_ARB_MAX_INTRINSIC_POSITIONS) break
@@ -590,8 +646,12 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
                 ...(isPositiveFinite(spot) ? { spotPrice: spot } : {}),
                 feePerContract: fee,
               } satisfies ArbIntrinsicOpenInput
+              hb.openAttempts += 1
               const decided = decideIntrinsicOpen(intrinsicInput)
-              if (decided.kind !== 'open') continue
+              if (decided.kind !== 'open') {
+                noteSkip(decided.reason)
+                continue
+              }
               // on-hit refresh：同 code 同 right 仍在且边为正才落账（同款削前视）。
               const fresh = await input.getChain(underlying, month, { refresh: true }).catch(() => undefined)
               if (fresh === undefined) continue
@@ -599,21 +659,31 @@ export async function tryArbPaperCycle(input: ArbPaperCycleInput): Promise<void>
                 .find((item) => item.leg.code === discount.leg.code)
               if (still === undefined) continue
               const confirmed = decideIntrinsicOpen({ ...intrinsicInput, discount: still, chain: fresh })
-              if (confirmed.kind !== 'open') continue
+              if (confirmed.kind !== 'open') {
+                noteSkip(confirmed.reason)
+                continue
+              }
               state = applyOpen(state, {
                 ...confirmed.fill,
                 positionId: confirmed.positionId,
                 expiryMonth: month,
                 strikes: [still.strike],
               })
+              hb.opens += 1
             }
           }
         }
       }
 
       await savePaperState(input.root, input.date, state, 'arbitrage')
-    } catch {
-      // 套利纸账失败绝不阻断 cycle ticks。
+      await writeHeartbeat()
+    } catch (err) {
+      // 套利纸账失败绝不阻断 cycle ticks；错误行照落心跳（可观测性优先）。
+      try {
+        await writeHeartbeat(err instanceof Error ? err.message : String(err))
+      } catch {
+        // 心跳写失败不放大。
+      }
     }
   })
 }
